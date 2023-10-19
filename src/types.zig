@@ -114,11 +114,15 @@ pub const Types = struct {
 	};
 
 	pub const String = struct {
+		// https://www.postgresql.org/message-id/CAMovtNoHFod2jMAKQjjxv209PCTJx5Kc66anwWvX0mEiaXwgmA%40mail.gmail.com
+		// says using the text format for text-like things is faster. There was
+		// some other threads that discussed solutions, but it isn't clear if it was
+	// ever fixed.
 		const oid = [_]u8{0, 0, 0, 25};
-		const pg_send_format = &binary_format;
+		const pg_send_format = &text_format;
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, type_pos: usize) !void {
-			buf.writeAt(&binary_format, type_pos);
+			buf.writeAt(&text_format, type_pos);
 
 			const space_needed = 4 + value.len;
 			try buf.ensureUnusedCapacity(space_needed);
@@ -134,11 +138,22 @@ pub const Types = struct {
 		}
 	};
 
-	// exists just to create an oidEncoding mapping, otherwise, we treat it as a
-	// string
+
 	pub const Bytea = struct {
 		const oid = [_]u8{0, 0, 0, 17};
 		const pg_send_format = &binary_format;
+
+		fn encode(value: []const u8, buf: *buffer.Buffer, type_pos: usize) !void {
+			buf.writeAt(&binary_format, type_pos);
+
+			const space_needed = 4 + value.len;
+			try buf.ensureUnusedCapacity(space_needed);
+			var view = buf.view(buf.len());
+			_ = try buf.skip(space_needed);
+
+			view.writeIntBig(i32, @intCast(value.len));
+			view.write(value);
+		}
 	};
 
 	// Return the encoding we want PG to use for a particular OID
@@ -219,8 +234,7 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, ty
 					if (value > 2147483647 or value < -2147483648) return error.ComptimeIntWouldBeTruncated;
 					return Types.Int32.encode(@intCast(value), buf, type_pos);
 				},
-				20 => return Types.Int64.encode(@intCast(value), buf, type_pos),
-				else => return error.InvalidTypeForParam,
+				else => return Types.Int64.encode(@intCast(value), buf, type_pos),
 			}
 		},
 		.Int => |int| {
@@ -253,8 +267,7 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, ty
 		.ComptimeFloat => {
 			switch (oid) {
 				700 => return Types.Float32.encode(@floatCast(value), buf, type_pos),
-				701 => return Types.Float64.encode(@floatCast(value), buf, type_pos),
-				else => return error.InvalidTypeForParam,
+				else => return Types.Float64.encode(@floatCast(value), buf, type_pos),
 			}
 		},
 		.Float => |float| switch (float.bits) {
@@ -267,14 +280,20 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, ty
 			switch (ptr.size) {
 				.One => return bindValue(ptr.child, oid, value, buf, type_pos),
 				.Slice => switch (ptr.child) {
-					u8 => return Types.String.encode(value, buf, type_pos),
+					u8 => switch (oid) {
+						17 => return Types.Bytea.encode(value, buf, type_pos),
+						else => return Types.String.encode(value, buf, type_pos),
+					},
 					else => compileHaltBindError(T),
 				},
 				else => compileHaltBindError(T),
 			}
 		},
 		.Array => |arr| switch (arr.child) {
-			u8 => return Types.String.encode(value[0..], buf, type_pos),
+			u8 => switch (oid) {
+				17 => return Types.Bytea.encode(value[0..], buf, type_pos),
+				else => return Types.String.encode(value[0..], buf, type_pos),
+			},
 			else => compileHaltBindError(T),
 		},
 		.Optional => |opt| {
