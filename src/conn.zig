@@ -1,5 +1,6 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const SASL = @import("sasl.zig").SASL;
 const Buffer = @import("buffer").Buffer;
 
 const proto = lib.proto;
@@ -7,7 +8,6 @@ const types = lib.types;
 const Reader = lib.Reader;
 const Result = lib.Result;
 const Timeout = lib.Timeout;
-const QueryState = lib.QueryState;
 
 const os = std.os;
 const Stream = std.net.Stream;
@@ -49,13 +49,13 @@ pub const Conn = struct {
 	_allocator: Allocator,
 
 	// Holds information describing the query that we're executing. If the query
-	// returns more columns than an appropriately sized QueryState is created as
+	// returns more columns than an appropriately sized ResultState is created as
 	// needed.
-	_query_state: QueryState,
+	_result_state: Result.State,
 
 	// Holds informaiton describing the parameters that PG is expecting. If the
 	// query has more parameters, than an appropriately sized one is created.
-	// This is separate from _query_state because:
+	// This is separate from _result_state because:
 	//   (a) they are populated separately
 	//   (b) have distinct lifetimes
 	//   (c) they likely have different lengths;
@@ -75,8 +75,8 @@ pub const Conn = struct {
 		const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
 		errdefer reader.deinit();
 
-		const query_state = try QueryState.init(allocator, opts.state_size);
-		errdefer query_state.deinit(allocator);
+		const result_state = try Result.State.init(allocator, opts.state_size);
+		errdefer result_state.deinit(allocator);
 
 		const param_oids = try allocator.alloc(i32, opts.state_size);
 		errdefer param_oids.deinit(allocator);
@@ -89,7 +89,7 @@ pub const Conn = struct {
 			._err_data = null,
 			._allocator = allocator,
 			._param_oids = param_oids,
-			._query_state = query_state,
+			._result_state = result_state,
 		};
 	}
 
@@ -101,7 +101,7 @@ pub const Conn = struct {
 		self._buf.deinit();
 		self._reader.deinit();
 		allocator.free(self._param_oids);
-		self._query_state.deinit(allocator);
+		self._result_state.deinit(allocator);
 
 		// try to send a Terminate to the DB
 		self.stream.writeAll(&.{'X', 0, 0, 0, 4}) catch {};
@@ -177,7 +177,7 @@ pub const Conn = struct {
 
 		var dyn_state = false;
 		var number_of_columns: u16 = 0;
-		var state = self._query_state;
+		var state = self._result_state;
 		const allocator = self._allocator;
 
 		// if we end up creating a dynamic state, we need to clean it up
@@ -293,10 +293,10 @@ pub const Conn = struct {
 						}
 						number_of_columns = std.mem.readIntBig(u16, data[0..2]);
 						if (number_of_columns > state.result_oids.len) {
-							// we have more columns than our self._query_state can handle, we
-							// need to create a new QueryState specifically for this
+							// we have more columns than our self._result_state can handle, we
+							// need to create a new Result.State specifically for this
 							dyn_state = true;
-							state = try QueryState.init(allocator, number_of_columns);
+							state = try Result.State.init(allocator, number_of_columns);
 						}
 						try state.from(number_of_columns, data);
 					},
@@ -426,7 +426,7 @@ pub const Conn = struct {
 		}
 		var buf = &self._buf;
 
-		var sasl = try lib.SASL.init(self._allocator);
+		var sasl = try SASL.init(self._allocator);
 		defer sasl.deinit(self._allocator);
 
 		{

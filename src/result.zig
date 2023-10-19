@@ -4,7 +4,6 @@ const lib = @import("lib.zig");
 const types = lib.types;
 const proto = lib.proto;
 const Reader = lib.Reader;
-const QueryState = lib.QueryState;
 const Allocator = std.mem.Allocator;
 
 pub const Result = struct {
@@ -13,7 +12,7 @@ pub const Result = struct {
 
 	// when true, then _state was dynamically allocated and we're responsible for it
 	_dyn_state: bool,
-	_state: QueryState,
+	_state: State,
 
 	// the underlying data for err
 	_err_data: ?[]const u8 = null,
@@ -116,10 +115,88 @@ pub const Result = struct {
 		self.err = proto.Error.parse(owned);
 		return error.PG;
 	}
+
+	// For every query, we need to store the type of each column (so we know
+	// how to parse the data). Optionally, we might need the name of each column.
+	// The connection has a default Result.STate for a max # of columns, and we'll use
+	// that whenever we can. Otherwise, we'll create this dynamically.
+	pub const State = struct {
+		// The name for each returned column, we only populate this if we're told
+		// to (since it requires us to dupe the data)
+		names: [][]const u8,
+
+		// This is different than the above. The above are set once per query
+		// from the RowDescription response of our Describe message. This is set for
+		// each DataRow message we receive. It maps a column position with the encoded
+		// value.
+		values: []Value,
+
+		// The OID for each returned column
+		result_oids: []i32,
+
+		pub const Value = struct {
+			is_null: bool,
+			data: []const u8,
+		};
+
+		pub fn init(allocator: Allocator, size: usize) !State{
+			const names = try allocator.alloc([]u8, size);
+			errdefer allocator.free(names);
+
+			const values = try allocator.alloc(Value, size);
+			errdefer allocator.free(values);
+
+			const result_oids = try allocator.alloc(i32, size);
+			errdefer allocator.free(result_oids);
+
+			return .{
+				.names = names,
+				.values = values,
+				.result_oids = result_oids,
+			};
+		}
+
+		// Populates the State from the RowDescription payload
+		// We already read the number_of_columns from data, so we pass it in here
+		// We also already know that number_of_columns fits within our arrays
+		pub fn from(self: *State, number_of_columns: u16, data: []const u8) !void {
+			// skip the column count, which we already know as number_of_columns
+			var pos: usize = 2;
+
+			for (0..number_of_columns) |i| {
+				// skip the name, for now
+				pos = std.mem.indexOfScalarPos(u8, data, pos, 0) orelse return error.InvalidDataRow;
+
+				if (data.len < (pos + 19)) {
+					return error.InvalidDataRow;
+				}
+
+				// skip the name null terminator (1)
+				// skip the table object_id this table belongs to (4)
+				// skip the attribute number of this table column (2)
+				pos += 7;
+
+				{
+					const end = pos + 4;
+					self.result_oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
+					pos = end;
+				}
+
+				// skip date type size (2), type modifier (4) format code (2)
+				pos += 8;
+			}
+		}
+
+		pub fn deinit(self: State, allocator: Allocator) void {
+			allocator.free(self.names);
+			allocator.free(self.values);
+			allocator.free(self.result_oids);
+		}
+	};
 };
 
 pub const Row = struct {
-	values: []QueryState.Value,
+	values: []Result.State.Value,
 
 	pub fn get(self: *const Row, comptime T: type, col: usize) ScalarReturnType(T) {
 		const value = self.values[col];
