@@ -80,7 +80,6 @@ pub const Result = struct {
 
 				return .{
 					.values = values,
-					.oids = state.result_oids,
 				};
 			},
 			'C' => return null, // CommandComplete
@@ -120,79 +119,158 @@ pub const Result = struct {
 };
 
 pub const Row = struct {
-	oids: []i32,
 	values: []QueryState.Value,
 
-	pub fn getInt16(self: *const Row, col: usize) i16 {
-		return types.Int16.decode(self.values[col].data);
-	}
-
-	pub fn getNullInt16(self: *const Row, col: usize) ?i16 {
+	pub fn get(self: *const Row, comptime T: type, col: usize) ScalarReturnType(T) {
 		const value = self.values[col];
-		if (value.is_null) return null;
-		return types.Int16.decode(value.data);
+		const TT = switch (@typeInfo(T)) {
+			.Optional => |opt| blk: {
+				if (value.is_null) return null;
+				break :blk opt.child;
+			},
+			else => T,
+		};
+
+		const data = value.data;
+		switch (TT) {
+			i16 => return types.Int16.decode(data),
+			i32 => return types.Int32.decode(data),
+			i64 => return types.Int64.decode(data),
+			f32 => return types.Float32.decode(data),
+			f64 => return types.Float64.decode(data),
+			bool => return types.Bool.decode(data),
+			[]u8, []const u8 => return types.String.decode(data),
+			else => compileHaltGetError(T),
+		}
 	}
 
-	pub fn getInt32(self: *const Row, col: usize) i32 {
-		return types.Int32.decode(self.values[col].data);
+	fn ScalarReturnType(comptime T: type) type {
+		return switch (T) {
+			[]u8 => []const u8,
+			?[]u8 => ?[]const u8,
+			else => T,
+		};
 	}
 
-	pub fn getNullInt32(self: *const Row, col: usize) ?i32 {
+	pub fn getIterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
 		const value = self.values[col];
-		if (value.is_null) return null;
-		return types.Int32.decode(value.data);
+		const TT = switch (@typeInfo(T)) {
+			.Optional => |opt| blk: {
+				if (value.is_null) return null;
+				break :blk opt.child;
+			},
+			else => T,
+		};
+
+		const decoder = switch (TT) {
+			i16 => types.Int16.decode,
+			i32 => types.Int32.decode,
+			i64 => types.Int64.decode,
+			f32 => types.Float32.decode,
+			f64 => types.Float64.decode,
+			else => compileHaltGetError(TT),
+		};
+
+		const data = value.data;
+
+		if (data.len == 12) {
+			// we have an empty
+			return .{
+				.len = 0,
+				._pos = 0,
+				._data = &[_]u8{},
+				._decoder = decoder,
+			};
+		}
+
+		// minimum size for 1 empty array
+		std.debug.assert(data.len >= 20);
+		const dimensions = std.mem.readIntBig(i32, data[0..4]);
+		std.debug.assert(dimensions == 1);
+
+		const has_nulls = std.mem.readIntBig(i32, data[4..8][0..4]);
+		std.debug.assert(has_nulls == 0);
+
+		// const oid = std.mem.readIntBig(i32, data[8..12][0..4]);
+		const len = std.mem.readIntBig(i32, data[12..16][0..4]);
+		// const lower_bound = std.mem.readIntBig(i32, data[16..20][0..4]);
+
+
+
+		return .{
+			.len = @intCast(len),
+			._pos = 0,
+			._data = data[20..],
+			._decoder = decoder,
+		};
 	}
 
-	pub fn getInt64(self: *const Row, col: usize) i64 {
-		return types.Int64.decode(self.values[col].data);
-	}
-
-	pub fn getNullInt64(self: *const Row, col: usize) ?i64 {
-		const value = self.values[col];
-		if (value.is_null) return null;
-		return types.Int64.decode(value.data);
-	}
-
-	pub fn getFloat32(self: *const Row, col: usize) f32 {
-		return types.Float32.decode(self.values[col].data);
-	}
-
-	pub fn getNullFloat32(self: *const Row, col: usize) ?f32 {
-		const value = self.values[col];
-		if (value.is_null) return null;
-		return types.Float32.decode(value.data);
-	}
-
-	pub fn getFloat64(self: *const Row, col: usize) f64 {
-		return types.Float64.decode(self.values[col].data);
-	}
-
-	pub fn getNullFloat64(self: *const Row, col: usize) ?f64 {
-		const value = self.values[col];
-		if (value.is_null) return null;
-		return types.Float64.decode(value.data);
-	}
-
-	pub fn getBool(self: *const Row, col: usize) bool {
-		return types.Bool.decode(self.values[col].data);
-	}
-
-	pub fn getNullBool(self: *const Row, col: usize) ?bool {
-		const value = self.values[col];
-		if (value.is_null) return null;
-		return types.Bool.decode(value.data);
-	}
-
-	pub fn getString(self: *const Row, col: usize) []const u8 {
-		return types.String.decode(self.values[col].data);
-	}
-
-	pub fn getNullString(self: *const Row, col: usize) ?[]const u8 {
-		const value = self.values[col];
-		if (value.is_null) return null;
-		return types.String.decode(value.data);
+	fn IteratorReturnType(comptime T: type) type {
+		return switch (T) {
+			[]u8 => Iterator([]const u8),
+			?[]u8 => ?Iterator([]const u8),
+			else => {
+				if (std.meta.activeTag(@typeInfo(T)) == .Optional) {
+					return ?Iterator(T);
+				}
+				return Iterator(T);
+			}
+		};
 	}
 };
+
+pub fn Iterator(comptime T: type) type {
+	return struct {
+		len: usize,
+		_pos: usize,
+		_data: []const u8,
+		_decoder: *const fn(data: []const u8) T,
+
+		const Self = @This();
+
+		pub fn next(self: *Self) ?T {
+			const pos = self._pos;
+			const data = self._data;
+			if (pos == data.len) {
+				return null;
+			}
+
+			// TODO: for fixed length types, we don't need to decode the length
+			const len_end = pos + 4;
+			const len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
+
+			const data_end = len_end + @as(usize, @intCast(len));
+			std.debug.assert(data.len >= data_end);
+
+			self._pos = data_end;
+			return self._decoder(data[len_end..data_end]);
+		}
+
+		pub fn alloc(self: Self, allocator: Allocator) ![]T {
+			var arr = try allocator.alloc(T, self.len);
+			self.fill(arr);
+			return arr;
+		}
+
+		pub fn fill(self: Self, arr: []T) void {
+			const data = self._data;
+			const decoder = self._decoder;
+
+			var pos: usize = 0;
+			for (0..self.len) |i| {
+				// TODO: for fixed length types, we don't need to decode the length
+				const len_end = pos + 4;
+				const len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
+				pos = len_end + @as(usize, @intCast(len));
+				arr[i] = decoder(data[len_end..pos]);
+			}
+		}
+	};
+}
+
+fn compileHaltGetError(comptime T: type) noreturn {
+	@compileError("cannot get value of type " ++ @typeName(T));
+}
 
 const t = lib.testing;
 test "Result: ints" {
@@ -205,13 +283,13 @@ test "Result: ints" {
 		var result = try c.query(sql, .{@as(i16, 32767), @as(i32, 2147483647), @as(i64, 9223372036854775807)});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(32767, row.getInt16(0));
-		try t.expectEqual(2147483647, row.getInt32(1));
-		try t.expectEqual(9223372036854775807, row.getInt64(2));
+		try t.expectEqual(32767, row.get(i16, 0));
+		try t.expectEqual(2147483647, row.get(i32, 1));
+		try t.expectEqual(9223372036854775807, row.get(i64, 2));
 
-		try t.expectEqual(32767, row.getNullInt16(0));
-		try t.expectEqual(2147483647, row.getNullInt32(1));
-		try t.expectEqual(9223372036854775807, row.getNullInt64(2));
+		try t.expectEqual(32767, row.get(?i16, 0));
+		try t.expectEqual(2147483647, row.get(?i32, 1));
+		try t.expectEqual(9223372036854775807, row.get(?i64, 2));
 
 		try t.expectEqual(null, result.next());
 	}
@@ -221,9 +299,9 @@ test "Result: ints" {
 		var result = try c.query(sql, .{@as(i16, -32768), @as(i32, -2147483648), @as(i64, -9223372036854775808)});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(-32768, row.getInt16(0));
-		try t.expectEqual(-2147483648, row.getInt32(1));
-		try t.expectEqual(-9223372036854775808, row.getInt64(2));
+		try t.expectEqual(-32768, row.get(i16, 0));
+		try t.expectEqual(-2147483648, row.get(i32, 1));
+		try t.expectEqual(-9223372036854775808, row.get(i64, 2));
 		try result.drain();
 	}
 
@@ -233,9 +311,9 @@ test "Result: ints" {
 		defer result.deinit();
 		defer result.drain() catch unreachable;
 		const row = (try result.next()).?;
-		try t.expectEqual(null, row.getNullInt16(0));
-		try t.expectEqual(null, row.getNullInt32(1));
-		try t.expectEqual(null, row.getNullInt64(2));
+		try t.expectEqual(null, row.get(?i16, 0));
+		try t.expectEqual(null, row.get(?i32, 1));
+		try t.expectEqual(null, row.get(?i64, 2));
 
 	}
 
@@ -244,13 +322,13 @@ test "Result: ints" {
 		var result = try c.query(sql, .{@as(u16, 32767), @as(u32, 2147483647), @as(u64, 9223372036854775807)});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(32767, row.getInt16(0));
-		try t.expectEqual(2147483647, row.getInt32(1));
-		try t.expectEqual(9223372036854775807, row.getInt64(2));
+		try t.expectEqual(32767, row.get(i16, 0));
+		try t.expectEqual(2147483647, row.get(i32, 1));
+		try t.expectEqual(9223372036854775807, row.get(i64, 2));
 
-		try t.expectEqual(32767, row.getNullInt16(0));
-		try t.expectEqual(2147483647, row.getNullInt32(1));
-		try t.expectEqual(9223372036854775807, row.getNullInt64(2));
+		try t.expectEqual(32767, row.get(?i16, 0));
+		try t.expectEqual(2147483647, row.get(?i32, 1));
+		try t.expectEqual(9223372036854775807, row.get(?i64, 2));
 		try result.drain();
 	}
 
@@ -274,11 +352,11 @@ test "Result: floats" {
 		var result = try c.query(sql, .{@as(f32, 1.23456), @as(f64, 1093.229183)});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(1.23456, row.getFloat32(0));
-		try t.expectEqual(1093.229183, row.getFloat64(1));
+		try t.expectEqual(1.23456, row.get(f32, 0));
+		try t.expectEqual(1093.229183, row.get(f64, 1));
 
-		try t.expectEqual(1.23456, row.getNullFloat32(0));
-		try t.expectEqual(1093.229183, row.getNullFloat64(1));
+		try t.expectEqual(1.23456, row.get(?f32, 0));
+		try t.expectEqual(1093.229183, row.get(?f64, 1));
 
 		try t.expectEqual(null, result.next());
 	}
@@ -288,8 +366,8 @@ test "Result: floats" {
 		var result = try c.query(sql, .{@as(f32, -392.31), @as(f64, -99991.99992)});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(-392.31, row.getFloat32(0));
-		try t.expectEqual(-99991.99992, row.getFloat64(1));
+		try t.expectEqual(-392.31, row.get(f32, 0));
+		try t.expectEqual(-99991.99992, row.get(f64, 1));
 		try t.expectEqual(null, result.next());
 	}
 
@@ -298,8 +376,8 @@ test "Result: floats" {
 		var result = try c.query(sql, .{null, null});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(null, row.getNullFloat32(0));
-		try t.expectEqual(null, row.getNullFloat64(1));
+		try t.expectEqual(null, row.get(?f32, 0));
+		try t.expectEqual(null, row.get(?f64, 1));
 		try t.expectEqual(null, result.next());
 	}
 }
@@ -315,8 +393,8 @@ test "Result: bool" {
 		defer result.deinit();
 		defer result.drain() catch unreachable;
 		const row = (try result.next()).?;
-		try t.expectEqual(true, row.getBool(0));
-		try t.expectEqual(true, row.getNullBool(0));
+		try t.expectEqual(true, row.get(bool, 0));
+		try t.expectEqual(true, row.get(?bool, 0));
 		try t.expectEqual(null, result.next());
 	}
 
@@ -326,8 +404,8 @@ test "Result: bool" {
 		defer result.deinit();
 		defer result.drain() catch unreachable;
 		const row = (try result.next()).?;
-		try t.expectEqual(false, row.getBool(0));
-		try t.expectEqual(false, row.getNullBool(0));
+		try t.expectEqual(false, row.get(bool, 0));
+		try t.expectEqual(false, row.get(?bool, 0));
 		try t.expectEqual(null, result.next());
 	}
 
@@ -337,7 +415,7 @@ test "Result: bool" {
 		defer result.deinit();
 		defer result.drain() catch unreachable;
 		const row = (try result.next()).?;
-		try t.expectEqual(null, row.getNullBool(0));
+		try t.expectEqual(null, row.get(?bool, 0));
 		try t.expectEqual(null, result.next());
 	}
 }
@@ -352,10 +430,10 @@ test "Result: test and bytea" {
 		var result = try c.query(sql, .{"", ""});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectString("", row.getString(0));
-		try t.expectString("", row.getNullString(0).?);
-		try t.expectString("", row.getString(1));
-		try t.expectString("", row.getNullString(1).?);
+		try t.expectString("", row.get([]u8, 0));
+		try t.expectString("", row.get(?[]u8, 0).?);
+		try t.expectString("", row.get([]u8, 1));
+		try t.expectString("", row.get(?[]u8, 1).?);
 		try result.drain();
 	}
 
@@ -364,10 +442,10 @@ test "Result: test and bytea" {
 		var result = try c.query(sql, .{"it's over 9000!!!", "i will Not fear"});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectString("it's over 9000!!!", row.getString(0));
-		try t.expectString("it's over 9000!!!", row.getNullString(0).?);
-		try t.expectString("i will Not fear", row.getString(1));
-		try t.expectString("i will Not fear", row.getNullString(1).?);
+		try t.expectString("it's over 9000!!!", row.get([]u8, 0));
+		try t.expectString("it's over 9000!!!", row.get(?[]const u8, 0).?);
+		try t.expectString("i will Not fear", row.get([]const u8, 1));
+		try t.expectString("i will Not fear", row.get(?[]u8, 1).?);
 		try result.drain();
 	}
 
@@ -376,10 +454,10 @@ test "Result: test and bytea" {
 		var result = try c.query(sql, .{[_]u8{'a', 'c', 'b'}, [_]u8{'z', 'z', '3'}});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectString("acb", row.getString(0));
-		try t.expectString("acb", row.getNullString(0).?);
-		try t.expectString("zz3", row.getString(1));
-		try t.expectString("zz3", row.getNullString(1).?);
+		try t.expectString("acb", row.get([]const u8, 0));
+		try t.expectString("acb", row.get(?[]u8, 0).?);
+		try t.expectString("zz3", row.get([]const u8, 1));
+		try t.expectString("zz3", row.get(?[]u8, 1).?);
 		try result.drain();
 	}
 
@@ -395,10 +473,10 @@ test "Result: test and bytea" {
 		var result = try c.query(sql, .{s1, s2});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectString("Leto", row.getString(0));
-		try t.expectString("Leto", row.getNullString(0).?);
-		try t.expectString("Ghanima", row.getString(1));
-		try t.expectString("Ghanima", row.getNullString(1).?);
+		try t.expectString("Leto", row.get([]u8, 0));
+		try t.expectString("Leto", row.get(?[]u8, 0).?);
+		try t.expectString("Ghanima", row.get([]u8, 1));
+		try t.expectString("Ghanima", row.get(?[]u8, 1).?);
 		try result.drain();
 	}
 
@@ -407,8 +485,8 @@ test "Result: test and bytea" {
 		var result = try c.query(sql, .{null, null});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(null, row.getNullString(0));
-		try t.expectEqual(null, row.getNullString(1));
+		try t.expectEqual(null, row.get(?[]u8, 0));
+		try t.expectEqual(null, row.get(?[]u8, 1));
 		try result.drain();
 	}
 }
@@ -423,10 +501,94 @@ test "Result: optional" {
 		var result = try c.query(sql, .{@as(?i32, 321), @as(?i32, null)});
 		defer result.deinit();
 		const row = (try result.next()).?;
-		try t.expectEqual(321, row.getInt32(0));
+		try t.expectEqual(321, row.get(i32, 0));
 
-		try t.expectEqual(321, row.getNullInt32(0));
-		try t.expectEqual(null, row.getNullInt32(1));
+		try t.expectEqual(321, row.get(?i32, 0));
+		try t.expectEqual(null, row.get(?i32, 1));
 		try t.expectEqual(null, result.next());
 	}
 }
+
+test "Result: iterator" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		// empty
+		var result = try c.query("select $1::int[]", .{[_]i32{}});
+		defer result.deinit();
+		var row = (try result.next()).?;
+
+		var iterator = row.getIterator(i32, 0);
+		try t.expectEqual(0, iterator.len);
+
+		try t.expectEqual(null, iterator.next());
+		try t.expectEqual(null, iterator.next());
+
+		const a = try iterator.alloc(t.allocator);
+		try t.expectEqual(0, a.len);
+		try result.drain();
+	}
+
+	{
+		// one
+		var result = try c.query("select $1::int[]", .{[_]i32{9}});
+		defer result.deinit();
+		var row = (try result.next()).?;
+
+		var iterator = row.getIterator(i32, 0);
+		try t.expectEqual(1, iterator.len);
+
+		try t.expectEqual(9, iterator.next());
+		try t.expectEqual(null, iterator.next());
+
+		const arr = try iterator.alloc(t.allocator);
+		defer t.allocator.free(arr);
+		try t.expectEqual(1, arr.len);
+		try t.expectSlice(i32, &.{9}, arr);
+		try result.drain();
+	}
+
+	{
+		// fill
+		var result = try c.query("select $1::int[]", .{[_]i32{0, -19}});
+		defer result.deinit();
+		var row = (try result.next()).?;
+
+		var iterator = row.getIterator(i32, 0);
+		try t.expectEqual(2, iterator.len);
+
+		try t.expectEqual(0, iterator.next());
+		try t.expectEqual(-19, iterator.next());
+		try t.expectEqual(null, iterator.next());
+
+		var arr: [2]i32 = undefined;
+		iterator.fill(&arr);
+		try t.expectSlice(i32, &.{0, -19}, &arr);
+		try result.drain();
+	}
+}
+
+test "Result: []int" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select $1::smallint[], $2::int[], $3::bigint[]";
+
+	var result = try c.query(sql, .{[_]i16{-303, 9449, 2}, [_]i32{-3003, 49493229, 0}, [_]i64{944949338498392, -2}});
+	defer result.deinit();
+
+	var row = (try result.next()).?;
+
+	const v1 = try row.getIterator(i16, 0).alloc(t.allocator);
+	defer t.allocator.free(v1);
+	try t.expectSlice(i16, &.{-303, 9449, 2}, v1);
+
+	const v2 = try row.getIterator(i32, 1).alloc(t.allocator);
+	defer t.allocator.free(v2);
+	try t.expectSlice(i32, &.{-3003, 49493229, 0}, v2);
+
+	const v3 = try row.getIterator(i64, 2).alloc(t.allocator);
+	defer t.allocator.free(v3);
+	try t.expectSlice(i64, &.{944949338498392, -2}, v3);
+}
+

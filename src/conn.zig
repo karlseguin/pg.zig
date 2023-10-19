@@ -676,15 +676,15 @@ test "PG: type support" {
 	defer result.deinit();
 
 	const row = (try result.next()) orelse unreachable;
-	try t.expectEqual(1, row.getInt32(0));
-	try t.expectEqual(382, row.getInt16(1));
-	try t.expectEqual(-96534, row.getInt32(2));
-	try t.expectEqual(8983919283, row.getInt64(3));
-	try t.expectEqual(1.2345, row.getFloat32(4));
-	try t.expectEqual(-48832.3233231, row.getFloat64(5));
-	try t.expectEqual(true, row.getBool(6));
-	try t.expectString("a text column", row.getString(7));
-	try t.expectSlice(u8, &.{0, 0, 2, 255, 255, 255}, row.getString(8));
+	try t.expectEqual(1, row.get(i32, 0));
+	try t.expectEqual(382, row.get(i16, 1));
+	try t.expectEqual(-96534, row.get(i32, 2));
+	try t.expectEqual(8983919283, row.get(i64, 3));
+	try t.expectEqual(1.2345, row.get(f32, 4));
+	try t.expectEqual(-48832.3233231, row.get(f64, 5));
+	try t.expectEqual(true, row.get(bool, 6));
+	try t.expectString("a text column", row.get([]u8, 7));
+	try t.expectSlice(u8, &.{0, 0, 2, 255, 255, 255}, row.get([]const u8, 8));
 	try t.expectEqual(null, try result.next());
 }
 
@@ -717,13 +717,13 @@ test "PG: null support" {
 	defer result.deinit();
 
 	const row = (try result.next()) orelse unreachable;
-	try t.expectEqual(null, row.getNullInt16(1));
-	try t.expectEqual(null, row.getNullInt32(2));
-	try t.expectEqual(null, row.getNullInt64(3));
-	try t.expectEqual(null, row.getNullFloat32(4));
-	try t.expectEqual(null, row.getNullFloat64(5));
-	try t.expectEqual(null, row.getNullBool(6));
-	try t.expectEqual(null, row.getNullString(7));
-	try t.expectEqual(null, row.getNullString(8));
+	try t.expectEqual(null, row.get(?i16, 1));
+	try t.expectEqual(null, row.get(?i32, 2));
+	try t.expectEqual(null, row.get(?i64, 3));
+	try t.expectEqual(null, row.get(?f32, 4));
+	try t.expectEqual(null, row.get(?f64, 5));
+	try t.expectEqual(null, row.get(?bool, 6));
+	try t.expectEqual(null, row.get(?[]u8, 7));
+	try t.expectEqual(null, row.get(?[]const u8, 8));
 	try t.expectEqual(null, try result.next());
 }
