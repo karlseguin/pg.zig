@@ -398,23 +398,20 @@ pub const Conn = struct {
 		// actually have a response.
 		var response: bool = false;
 		var affected: ?i64 = null;
-		var err: ?anyerror = null;
 		while (true) {
 			const msg = try self.read();
 			switch (msg.type) {
 				'T' => {
-					// This is an invalid use by the caller. We'll try to get things back
-					// in a correct state.
-					err = error.InvalidUseExecForSelect;
+					affected = 0;
+					response = true;
 				},
-				'D' => {}, // DataRow, error, but should already have been registered by a previous 'T'
+				'D' => affected = (affected orelse 0) + 1,
 				'C' => {
 					response = true;
 					const cc = try proto.CommandComplete.parse(msg.data);
 					affected = cc.rowsAffected();
 				},
 				'Z' => { // ready for query
-					if (err) |e| return e;
 					if (response) return affected;
 					// else, must have come from before, keep going
 				},
@@ -633,7 +630,9 @@ test "Conn: exec with values rowsAffected" {
 test "Conn: exec query that returns rows" {
 	var c = t.connect(.{});
 	defer c.deinit();
-	try t.expectError(error.InvalidUseExecForSelect, c.exec("select * from simple_table", .{}));
+	_ = try c.exec("insert into simple_table values ('exec_sel_1'), ('exec_sel_2')", .{});
+	try t.expectEqual(0, c.exec("select * from simple_table where value = 'none'", .{}));
+	try t.expectEqual(2, c.exec("select * from simple_table where value like $1", .{"exec_sel_%"}));
 }
 
 test "Conn: parse error" {
