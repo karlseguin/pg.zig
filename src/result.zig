@@ -246,6 +246,7 @@ pub const Row = struct {
 			f32 => types.Float32.decode,
 			f64 => types.Float64.decode,
 			bool => types.Bool.decode,
+			[]u8, []const u8 => types.Bytea.decode,
 			else => compileHaltGetError(TT),
 		};
 
@@ -300,7 +301,14 @@ pub fn Iterator(comptime T: type) type {
 		len: usize,
 		_pos: usize,
 		_data: []const u8,
-		_decoder: *const fn(data: []const u8) T,
+		_decoder: *const fn(data: []const u8) ItemType(),
+
+		fn ItemType() type {
+			return switch (@typeInfo(T)) {
+				.Optional => |opt| opt.child,
+				else => T,
+			};
+		}
 
 		const Self = @This();
 
@@ -645,7 +653,7 @@ test "Result: iterator" {
 	}
 }
 
-test "Result: []int" {
+test "Result: int[]" {
 	var c = t.connect(.{});
 	defer c.deinit();
 	const sql = "select $1::smallint[], $2::int[], $3::bigint[]";
@@ -668,7 +676,7 @@ test "Result: []int" {
 	try t.expectSlice(i64, &.{944949338498392, -2}, v3);
 }
 
-test "Result: []float" {
+test "Result: float[]" {
 	var c = t.connect(.{});
 	defer c.deinit();
 	const sql = "select $1::float4[], $2::float8[]";
@@ -687,7 +695,7 @@ test "Result: []float" {
 	try t.expectSlice(f64, &.{-888585.123322, 0.001}, v2);
 }
 
-test "Result: []bool" {
+test "Result: bool[]" {
 	var c = t.connect(.{});
 	defer c.deinit();
 	const sql = "select $1::bool[]";
@@ -701,3 +709,29 @@ test "Result: []bool" {
 	defer t.allocator.free(v1);
 	try t.expectSlice(bool, &.{true, false, false}, v1);
 }
+
+test "Result: text[] & bytea[]" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select $1::text[], $2::bytea[]";
+
+	var arr1 = [_]u8{0, 1, 2};
+	var arr2 = [_]u8{255};
+	var result = try c.query(sql, .{[_][]const u8{"over", "9000"}, [_][]u8{&arr1, &arr2}});
+	defer result.deinit();
+
+	var row = (try result.next()).?;
+
+	const v1 = try row.getIterator([]u8, 0).alloc(t.allocator);
+	defer t.allocator.free(v1);
+	try t.expectString("over", v1[0]);
+	try t.expectString("9000", v1[1]);
+	try t.expectEqual(2, v1.len);
+
+	const v2 = try row.getIterator([]const u8, 1).alloc(t.allocator);
+	defer t.allocator.free(v2);
+	try t.expectString(&arr1, v2[0]);
+	try t.expectString(&arr2, v2[1]);
+	try t.expectEqual(2, v2.len);
+}
+

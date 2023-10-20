@@ -101,45 +101,45 @@ pub const Pool = struct {
 };
 
 const t = lib.testing;
-// test "Pool" {
-// 	var pool = try Pool.init(t.allocator, .{
-// 		.size = 2,
-// 		.startup = .{
-// 			.database = "postgres",
-// 			.username = "postgres",
-// 			.password = "root_pw",
-// 		},
-// 	});
-// 	defer pool.deinit();
+test "Pool" {
+	var pool = try Pool.init(t.allocator, .{
+		.size = 2,
+		.startup = .{
+			.database = "postgres",
+			.username = "postgres",
+			.password = "root_pw",
+		},
+	});
+	defer pool.deinit();
 
-// 	{
-// 		const c1 = try pool.acquire();
-// 		defer pool.release(c1);
-// 		_ = try c1.exec(
-// 			\\ drop table if exists pool_test;
-// 			\\ create table pool_test (id int not null)
-// 		, .{});
-// 	}
+	{
+		const c1 = try pool.acquire();
+		defer pool.release(c1);
+		_ = try c1.exec(
+			\\ drop table if exists pool_test;
+			\\ create table pool_test (id int not null)
+		, .{});
+	}
 
-// 	const t1 = try std.Thread.spawn(.{}, testPool, .{&pool});
-// 	const t2 = try std.Thread.spawn(.{}, testPool, .{&pool});
-// 	const t3 = try std.Thread.spawn(.{}, testPool, .{&pool});
+	const t1 = try std.Thread.spawn(.{}, testPool, .{&pool});
+	const t2 = try std.Thread.spawn(.{}, testPool, .{&pool});
+	const t3 = try std.Thread.spawn(.{}, testPool, .{&pool});
 
-// 	t1.join(); t2.join(); t3.join();
+	t1.join(); t2.join(); t3.join();
 
-// 	{
-// 		const c1 = try pool.acquire();
-// 		defer pool.release(c1);
+	{
+		const c1 = try pool.acquire();
+		defer pool.release(c1);
 
-// 		const affected = try c1.exec("delete from pool_test", .{});
-// 		try t.expectEqual(6000, affected.?);
-// 	}
-// }
+		const affected = try c1.exec("delete from pool_test", .{});
+		try t.expectEqual(6000, affected.?);
+	}
+}
 
-// fn testPool(p: *Pool) void {
-// 	for (0..2000) |i| {
-// 		const conn = p.acquire() catch unreachable;
-// 		_ = conn.exec("insert into pool_test (id) values ($1)", .{i}) catch unreachable;
-// 		p.release(conn);
-// 	}
-// }
+fn testPool(p: *Pool) void {
+	for (0..2000) |i| {
+		const conn = p.acquire() catch unreachable;
+		_ = conn.exec("insert into pool_test (id) values ($1)", .{i}) catch unreachable;
+		p.release(conn);
+	}
+}

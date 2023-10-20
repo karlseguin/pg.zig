@@ -157,6 +157,10 @@ pub const Types = struct {
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
+
+		pub fn decode(data: []const u8) []const u8 {
+			return data;
+		}
 	};
 
 	pub const Int16Array = struct {
@@ -277,6 +281,26 @@ pub const Types = struct {
 		}
 	};
 
+	pub const ByteaArray = struct {
+		const oid = [_]u8{0, 0, 3, 233};
+		const pg_send_format = &binary_format;
+
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Bytea.oid, oid_pos);
+			return writeByteArray(values, buf);
+		}
+	};
+
+	pub const StringArray = struct {
+		const oid = [_]u8{0, 0, 3, 241};
+		const pg_send_format = &binary_format;
+
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&String.oid, oid_pos);
+			return writeByteArray(values, buf);
+		}
+	};
+
 	// Return the encoding we want PG to use for a particular OID
 	fn oidEncoding(oid: i32) *const [2]u8 {
 		inline for (@typeInfo(@This()).Struct.decls) |decl| {
@@ -297,6 +321,20 @@ pub const Types = struct {
 			view.write(&value_len);
 			view.writeIntBig(T, value);
 		}
+	}
+
+	fn writeByteArray(values: []const []const u8, buf: *buffer.Buffer) !void {
+			// each value has a 4 byte length prefix
+			var len = values.len * 4;
+			for (values) |value| {
+				len += value.len;
+			}
+
+			var view = try reserveView(buf, len);
+			for (values) |value| {
+				view.writeIntBig(i32, @intCast(value.len));
+				view.write(value);
+			}
 	}
 
 	fn reserveView(buf: *buffer.Buffer, space: usize) !buffer.View {
@@ -408,9 +446,12 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 		.Pointer => |ptr| {
 			switch (ptr.size) {
 				.Slice => return bindSlice(ptr.child, oid, value, buf, format_pos),
-				.One => {
-					const E = std.meta.Elem(ptr.child);
-					return bindSlice(E, oid, @as([]const E, value), buf, format_pos);
+				.One => switch (@typeInfo(ptr.child)) {
+					.Array => {
+						const E = std.meta.Elem(ptr.child);
+						return bindSlice(E, oid, @as([]const E, value), buf, format_pos);
+					},
+					else => compileHaltBindError(T),
 				},
 				else => compileHaltBindError(T),
 			}
@@ -440,7 +481,6 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	// We have an array. All arrays have the same header. We'll write this into
 	// buf now. It's possible we don't support the array type, so this can still
 	// fail.
-
 
 	// arrays are always binary encoded (for now...)
 
@@ -486,7 +526,27 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 			else => compileHaltBindError(SliceT),
 		},
 		.Bool => try Types.BoolArray.encode(value, buf, oid_pos),
-		else => compileHaltBindError(SliceT),
+		.Pointer => |ptr| switch (ptr.size) {
+			.Slice => switch (ptr.child) {
+				u8 => switch (oid) {
+					1001 => try Types.ByteaArray.encode(value, buf, oid_pos),
+					else => try Types.StringArray.encode(value, buf, oid_pos),
+				},
+				else => compileHaltBindError(SliceT),
+			},
+			else => compileHaltBindError(SliceT),
+		},
+		.Array => |arr| switch (arr.child) {
+			u8 => switch (oid) {
+				1001 => try Types.ByteaArray.encode(&value, buf, oid_pos),
+				else => try Types.StringArray.encode(&value, buf, oid_pos),
+			},
+			else => compileHaltBindError(SliceT),
+		},
+		else => |x| {
+			@compileLog(x);
+			compileHaltBindError(SliceT);
+		},
 	}
 
 	var param_len: [4]u8 = undefined;
