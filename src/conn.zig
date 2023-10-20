@@ -13,24 +13,6 @@ const os = std.os;
 const Stream = std.net.Stream;
 const Allocator = std.mem.Allocator;
 
-pub const ConnectOpts = struct {
-	host: ?[]const u8 = null,
-	port: ?u16 = null,
-	write_buffer: ?u16 = null,
-	read_buffer: ?u16 = null,
-	state_size: u16 = 32,
-};
-
-pub const StartupOpts = struct {
-	username: []const u8 = "postgres",
-	password: ?[]const u8 = null,
-	database: ?[]const u8 = null,
-	timeout: u32 = 10_000,
-};
-
-pub const QueryOpts = struct {
-};
-
 pub const Conn = struct {
 	stream: Stream,
 
@@ -60,6 +42,24 @@ pub const Conn = struct {
 	//   (b) have distinct lifetimes
 	//   (c) they likely have different lengths;
 	_param_oids: []i32,
+
+	pub const ConnectOpts = struct {
+		host: ?[]const u8 = null,
+		port: ?u16 = null,
+		write_buffer: ?u16 = null,
+		read_buffer: ?u16 = null,
+		state_size: u16 = 32,
+	};
+
+	pub const StartupOpts = struct {
+		username: []const u8 = "postgres",
+		password: ?[]const u8 = null,
+		database: ?[]const u8 = null,
+		timeout: u32 = 10_000,
+	};
+
+	pub const QueryOpts = struct {
+	};
 
 	pub fn open(allocator: Allocator, opts: ConnectOpts) !Conn {
 		const host = opts.host orelse "127.0.0.1";
@@ -113,7 +113,7 @@ pub const Conn = struct {
 
 		const timeout = Timeout.init(opts.timeout, self.stream);
 		try timeout.forSendAndRecv();
-		errdefer _ = timeout.clear() catch {};
+		defer _ = timeout.clear() catch {};
 
 		{
 			// write our startup message

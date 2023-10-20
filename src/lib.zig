@@ -1,8 +1,6 @@
 // Exposed within this library
 const std = @import("std");
 
-pub const is_test = @import("builtin").is_test;
-
 const reader = @import("reader.zig");
 pub const types = @import("types.zig");
 pub const proto = @import("proto.zig");
