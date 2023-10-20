@@ -411,11 +411,11 @@ test "Result: ints" {
 
 	{
 		// u16 outside of limit
-		try t.expectError(error.UnsignedIntWouldBeTruncated, c.query(sql, .{@as(u16, 32768), @as(u32, 0), @as(u64, 0)}));
+		try t.expectError(error.IntWontFit, c.query(sql, .{@as(u16, 32768), @as(u32, 0), @as(u64, 0)}));
 		// u32 outside of limit
-		try t.expectError(error.UnsignedIntWouldBeTruncated, c.query(sql, .{@as(u16, 0), @as(u32, 2147483648), @as(u64, 0)}));
+		try t.expectError(error.IntWontFit, c.query(sql, .{@as(u16, 0), @as(u32, 2147483648), @as(u64, 0)}));
 		// u64 outside of limit
-		try t.expectError(error.UnsignedIntWouldBeTruncated, c.query(sql, .{@as(u16, 0), @as(u32, 0), @as(u64, 9223372036854775808)}));
+		try t.expectError(error.IntWontFit, c.query(sql, .{@as(u16, 0), @as(u32, 0), @as(u64, 9223372036854775808)}));
 	}
 }
 

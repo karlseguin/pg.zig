@@ -320,31 +320,30 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 		.ComptimeInt => {
 			switch (oid) {
 				21 => {
-					if (value > 32767 or value < -32768) return error.ComptimeIntWouldBeTruncated;
+					if (value > 32767 or value < -32768) return error.IntWontFit;
 					return Types.Int16.encode(@intCast(value), buf, format_pos);
 				},
 				23 => {
-					if (value > 2147483647 or value < -2147483648) return error.ComptimeIntWouldBeTruncated;
+					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
 				else => return Types.Int64.encode(@intCast(value), buf, format_pos),
 			}
 		},
-		.Int => |int| {
-			if (int.signedness == .signed) {
-				switch (int.bits) {
-					16 => return Types.Int16.encode(value, buf, format_pos),
-					32 => return Types.Int32.encode(value, buf, format_pos),
-					64 => return Types.Int64.encode(value, buf, format_pos),
-					else => compileHaltBindError(T),
-				}
-			} else {
-				switch (int.bits) {
-					16 => return Types.Int16.encodeUnsigned(value, buf, format_pos),
-					32 => return Types.Int32.encodeUnsigned(value, buf, format_pos),
-					64 => return Types.Int64.encodeUnsigned(value, buf, format_pos),
-					else => compileHaltBindError(T),
-				}
+		.Int => {
+			switch (oid) {
+				21 => {
+					if (value > 32767 or value < -32768) return error.IntWontFit;
+					return Types.Int16.encode(@intCast(value), buf, format_pos);
+				},
+				23 => {
+					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
+					return Types.Int32.encode(@intCast(value), buf, format_pos);
+				},
+				else => {
+					if (value > 9223372036854775807 or value < -9223372036854775808) return error.IntWontFit;
+					return Types.Int64.encode(@intCast(value), buf, format_pos);
+				},
 			}
 		},
 		.ComptimeFloat => {

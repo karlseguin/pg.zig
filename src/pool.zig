@@ -140,7 +140,7 @@ test "Pool" {
 fn testPool(p: *Pool) void {
 	for (0..2000) |i| {
 		const conn = p.acquire() catch unreachable;
-		_ = conn.exec("insert into pool_test (id) values ($1)", .{@as(i32, @intCast(i))}) catch unreachable;
+		_ = conn.exec("insert into pool_test (id) values ($1)", .{i}) catch unreachable;
 		p.release(conn);
 	}
 }
