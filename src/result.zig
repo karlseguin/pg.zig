@@ -245,6 +245,7 @@ pub const Row = struct {
 			i64 => types.Int64.decode,
 			f32 => types.Float32.decode,
 			f64 => types.Float64.decode,
+			bool => types.Bool.decode,
 			else => compileHaltGetError(TT),
 		};
 
@@ -271,8 +272,6 @@ pub const Row = struct {
 		// const oid = std.mem.readIntBig(i32, data[8..12][0..4]);
 		const len = std.mem.readIntBig(i32, data[12..16][0..4]);
 		// const lower_bound = std.mem.readIntBig(i32, data[16..20][0..4]);
-
-
 
 		return .{
 			.len = @intCast(len),
@@ -669,3 +668,36 @@ test "Result: []int" {
 	try t.expectSlice(i64, &.{944949338498392, -2}, v3);
 }
 
+test "Result: []float" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select $1::float4[], $2::float8[]";
+
+	var result = try c.query(sql, .{[_]f32{1.1, 0, -384.2}, [_]f64{-888585.123322, 0.001}});
+	defer result.deinit();
+
+	var row = (try result.next()).?;
+
+	const v1 = try row.getIterator(f32, 0).alloc(t.allocator);
+	defer t.allocator.free(v1);
+	try t.expectSlice(f32, &.{1.1, 0, -384.2}, v1);
+
+	const v2 = try row.getIterator(f64, 1).alloc(t.allocator);
+	defer t.allocator.free(v2);
+	try t.expectSlice(f64, &.{-888585.123322, 0.001}, v2);
+}
+
+test "Result: []bool" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select $1::bool[]";
+
+	var result = try c.query(sql, .{[_]bool{true, false, false}});
+	defer result.deinit();
+
+	var row = (try result.next()).?;
+
+	const v1 = try row.getIterator(bool, 0).alloc(t.allocator);
+	defer t.allocator.free(v1);
+	try t.expectSlice(bool, &.{true, false, false}, v1);
+}

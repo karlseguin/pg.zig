@@ -53,7 +53,13 @@ pub fn setup() !void {
 		\\   col_float8 float8,
 		\\   col_bool bool,
 		\\   col_text text,
-		\\   col_bytea bytea
+		\\   col_bytea bytea,
+		\\   col_int2_arr smallint[],
+		\\   col_int4_arr integer[],
+		\\   col_int8_arr bigint[],
+		\\   col_float4_arr float4[],
+		\\   col_float8_arr float[],
+		\\   col_bool_arr bool[]
 		\\ );
 	, .{});
 }

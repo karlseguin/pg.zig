@@ -654,16 +654,22 @@ test "PG: type support" {
 		\\ insert into all_types (
 		\\   id,
 		\\   col_int2, col_int4, col_int8, col_float4, col_float8,
-		\\   col_bool, col_text, col_bytea
+		\\   col_bool, col_text, col_bytea,
+		\\   col_int2_arr, col_int4_arr, col_int8_arr,
+		\\   col_float4_arr, col_float8_arr, col_bool_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3, $4, $5, $6,
-		\\   $7, $8, $9
+		\\   $7, $8, $9,
+		\\   $10, $11, $12,
+		\\   $13, $14, $15
 		\\ )
 		, .{
 			1,
 			@as(i16, 382), @as(i32, -96534), @as(i64, 8983919283), @as(f32, 1.2345), @as(f64, -48832.3233231),
-			true, "a text column", [_]u8{0, 0, 2, 255, 255, 255}
+			true, "a text column", [_]u8{0, 0, 2, 255, 255, 255},
+			[_]i16{-9000, 9001}, [_]i32{-4929123}, [_]i64{8888848483,0,-1},
+			[_]f32{4.492, -0.000021}, [_]f64{393.291133, 3.1144}, [_]bool{false, true},
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -675,6 +681,12 @@ test "PG: type support" {
 	var result = try c.query("select * from all_types where id = $1", .{1});
 	defer result.deinit();
 
+	// used for our arrays
+	var arena = std.heap.ArenaAllocator.init(t.allocator);
+	defer arena.deinit();
+
+	const aa = arena.allocator();
+
 	const row = (try result.next()) orelse unreachable;
 	try t.expectEqual(1, row.get(i32, 0));
 	try t.expectEqual(382, row.get(i16, 1));
@@ -685,6 +697,15 @@ test "PG: type support" {
 	try t.expectEqual(true, row.get(bool, 6));
 	try t.expectString("a text column", row.get([]u8, 7));
 	try t.expectSlice(u8, &.{0, 0, 2, 255, 255, 255}, row.get([]const u8, 8));
+
+	try t.expectSlice(i16, &.{-9000, 9001}, try row.getIterator(i16, 9).alloc(aa));
+	try t.expectSlice(i32, &.{-4929123}, try row.getIterator(i32, 10).alloc(aa));
+	try t.expectSlice(i64, &.{8888848483,0,-1}, try row.getIterator(i64, 11).alloc(aa));
+	try t.expectSlice(f32, &.{4.492, -0.000021}, try row.getIterator(f32, 12).alloc(aa));
+	try t.expectSlice(f64, &.{393.291133, 3.1144}, try row.getIterator(f64, 13).alloc(aa));
+	try t.expectSlice(bool, &.{false, true}, try row.getIterator(bool, 14).alloc(aa));
+
+
 	try t.expectEqual(null, try result.next());
 }
 

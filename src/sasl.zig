@@ -173,7 +173,6 @@ pub const ServerResponse = struct {
 const t = @import("lib.zig").testing;
 
 test "SASL: init" {
-
 	const sasl1 = try SASL.init(t.allocator);
 	defer sasl1.deinit(t.allocator);
 	try t.expectString("n,,n=,r=", sasl1.client_first_message[0..8]);
@@ -186,13 +185,21 @@ test "SASL: init" {
 	defer sasl3.deinit(t.allocator);
 	try t.expectString("n,,n=,r=", sasl3.client_first_message[0..8]);
 
-	// The nonce should be random. It's unlikely that if we generate 3, we'd get
+	// The nonce should be random. It's unlikely that if we generate 5, we'd get
 	// the same value at a given byte.
 	const nonce1 = sasl1.client_first_message[8..];
 	const nonce2 = sasl2.client_first_message[8..];
 	const nonce3 = sasl3.client_first_message[8..];
+	const nonce4 = sasl3.client_first_message[8..];
 	for (0..18) |i| {
-		try t.expectEqual(true, nonce1[i] != nonce2[i] or nonce2[i] != nonce3[i] or nonce1[i] != nonce3[i]);
+		try t.expectEqual(true,
+			nonce1[i] != nonce2[i] or
+			nonce2[i] != nonce3[i] or
+			nonce1[i] != nonce3[i] or
+			nonce3[i] != nonce4[i] or
+			nonce1[i] != nonce4[i] or
+			nonce2[i] != nonce4[i]
+		);
 	}
 }
 

@@ -7,7 +7,6 @@ const binary_format = [_]u8{0, 1};
 // These are nested inside the the Types structure so that we can generate an
 // oid => encoding maping. See the oidEncoding function.
 pub const Types = struct {
-
 	pub const Int16 = struct {
 		const oid = [_]u8{0, 0, 0, 21};
 		const pg_send_format = &binary_format;
@@ -138,12 +137,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(&text_format, format_pos);
-
-			const space_needed = 4 + value.len;
-			try buf.ensureUnusedCapacity(space_needed);
-			var view = buf.view(buf.len());
-			_ = try buf.skip(space_needed);
-
+			var view = try reserveView(buf, 4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -159,12 +153,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(&binary_format, format_pos);
-
-			const space_needed = 4 + value.len;
-			try buf.ensureUnusedCapacity(space_needed);
-			var view = buf.view(buf.len());
-			_ = try buf.skip(space_needed);
-
+			var view = try reserveView(buf, 4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -234,6 +223,60 @@ pub const Types = struct {
 		}
 	};
 
+	pub const Float32Array = struct {
+		const oid = [_]u8{0, 0, 3, 253};
+		const pg_send_format = &binary_format;
+
+		fn encode(values: []const f32, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Float32.oid, oid_pos);
+
+			// every value takes 8 bytes, 4 for the length, 4 for the value
+			var view = try reserveView(buf, 8 * values.len);
+			for (values) |value| {
+				view.write(&.{0, 0, 0, 4}); //length
+				const t: *i32 = @constCast(@ptrCast(&value));
+				view.writeIntBig(i32, t.*);
+			}
+		}
+	};
+
+	pub const Float64Array = struct {
+		const oid = [_]u8{0, 0, 3, 254};
+		const pg_send_format = &binary_format;
+
+		fn encode(values: []const f64, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Float64.oid, oid_pos);
+
+			// every value takes 12 bytes, 4 for the length, 8 for the value
+			var view = try reserveView(buf, 12 * values.len);
+			for (values) |value| {
+				view.write(&.{0, 0, 0, 8}); //length
+				const t: *i64 = @constCast(@ptrCast(&value));
+				view.writeIntBig(i64, t.*);
+			}
+		}
+	};
+
+	pub const BoolArray = struct {
+		const oid = [_]u8{0, 0, 3, 232};
+		const pg_send_format = &binary_format;
+
+		fn encode(values: []const bool, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Bool.oid, oid_pos);
+
+			// every value takes 5 bytes, 4 for the length, 1 for the value
+			var view = try reserveView(buf, 5 * values.len);
+			for (values) |value| {
+				// each value is prefixed with a 4 byte length
+				if (value) {
+					view.write(&.{0, 0, 0, 1, 1});
+				} else {
+					view.write(&.{0, 0, 0, 1, 0});
+				}
+			}
+		}
+	};
+
 	// Return the encoding we want PG to use for a particular OID
 	fn oidEncoding(oid: i32) *const [2]u8 {
 		inline for (@typeInfo(@This()).Struct.decls) |decl| {
@@ -246,10 +289,7 @@ pub const Types = struct {
 	}
 
 	fn writeIntArray(comptime T: type, size: usize, values: []const T, buf: *buffer.Buffer) !void {
-		const space_needed = (4 * values.len) + (values.len * size);
-		try buf.ensureUnusedCapacity(space_needed);
-		var view = buf.view(buf.len());
-		_ = try buf.skip(space_needed);
+		var view = try reserveView(buf, (size + 4) * values.len);
 
 		var value_len: [4]u8 = undefined;
 		std.mem.writeIntBig(i32, &value_len, @intCast(size));
@@ -257,6 +297,13 @@ pub const Types = struct {
 			view.write(&value_len);
 			view.writeIntBig(T, value);
 		}
+	}
+
+	fn reserveView(buf: *buffer.Buffer, space: usize) !buffer.View {
+		try buf.ensureUnusedCapacity(space);
+		var view = buf.view(buf.len());
+		_ = try buf.skip(space);
+		return view;
 	}
 };
 
@@ -433,6 +480,12 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 				}
 			}
 		},
+		.Float => |float| switch (float.bits) {
+			32 => try Types.Float32Array.encode(value, buf, oid_pos),
+			64 => try Types.Float64Array.encode(value, buf, oid_pos),
+			else => compileHaltBindError(SliceT),
+		},
+		.Bool => try Types.BoolArray.encode(value, buf, oid_pos),
 		else => compileHaltBindError(SliceT),
 	}
 
