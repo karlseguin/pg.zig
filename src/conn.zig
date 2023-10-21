@@ -22,6 +22,10 @@ pub const Conn = struct {
 	// The underlying data for err
 	_err_data: ?[]const u8,
 
+	// The current transation state, this is whatever the last ReadyForQuery
+	// message told us
+	_state: u8,
+
 	// A buffer used for writing to PG. This can grow dynamically as needed.
 	_buf: Buffer,
 
@@ -90,6 +94,7 @@ pub const Conn = struct {
 			._buf = buf,
 			._reader = reader,
 			._err_data = null,
+			._state = 'I', // idle
 			._allocator = allocator,
 			._param_oids = param_oids,
 			._result_state = result_state,
@@ -129,6 +134,7 @@ pub const Conn = struct {
 			try self.stream.writeAll(buf.string());
 		}
 
+		var expect_response = true;
 		{
 			// read the server's response
 			const res = try self.read();
@@ -137,14 +143,14 @@ pub const Conn = struct {
 			}
 
 			switch (try proto.AuthenticationRequest.parse(res.data)) {
-				.ok => return,
+				.ok => expect_response = false,
 				.sasl => |sasl| try self.authSASL(opts, sasl),
 				.md5 => |salt| try self.authMD5Password(opts, salt),
 				.password => try self.authPassword(opts.password orelse ""),
 			}
 		}
 
-		{
+		if (expect_response) {
 			// if we're here, it's because we sent more data to the server (e.g. a password)
 			// and we're now waiting for a reply, server should send a final auth ok message
 			const res = try self.read();
@@ -159,7 +165,7 @@ pub const Conn = struct {
 		while (true) {
 			const msg = try self.read();
 			switch (msg.type) {
-				'Z' => return,  // ready for query
+				'Z' => return,
 				'K' => {}, // TODO: BackendKeyData
 				'S' => {}, // TODO: ParameterStatus,
 				else => return error.UnexpectedDBMessage,
@@ -252,12 +258,10 @@ pub const Conn = struct {
 			}
 
 			// First message we expect back is a ParseComplete, which has no data.
-			parse_complete: while (true) {
+			{
 				const msg = try self.read();
-				switch (msg.type) {
-					'Z' => {}, // ready for query, from some previous state
-					'1' => break :parse_complete, // 1 ==> ParseComplete
-					else => return error.UnexpectedDBMessage,
+				if (msg.type != '1') {
+					return error.UnexpectedDBMessage;
 				}
 			}
 
@@ -269,7 +273,6 @@ pub const Conn = struct {
 				}
 
 				const data = msg.data;
-				std.debug.assert(values.len == std.mem.readIntBig(i16, data[0..2]));
 				var pos: usize = 2;
 				for (0..param_oids.len) |i| {
 					const end = pos + 4;
@@ -304,6 +307,11 @@ pub const Conn = struct {
 					},
 					else => return error.UnexpectedDBMessage,
 				}
+			}
+
+			{
+				// finally, we expect a ReadyForQuery response to our Sync
+				try self.readyForQuery();
 			}
 		}
 
@@ -352,21 +360,23 @@ pub const Conn = struct {
 
 			try self.stream.writeAll(buf.string());
 
-			bind_complete: while (true) {
+			{
 				const msg = try self.read();
-				switch (msg.type) {
-					'Z' => {}, // ReadyForquery
-					'2' => break :bind_complete, // BindComplete
-					else => return error.UnexpectedDBMessage,
+				if (msg.type != '2') {
+					// expecting a BindComplete
+					return error.UnexpectedDBMessage;
 				}
 			}
 		}
 
+		// no longer idle, we're now in a query
+		self._state = 'Q';
+
 		return .{
+			._conn = self,
 			._state = state,
 			._allocator = allocator,
 			._dyn_state = dyn_state,
-			._reader = &self._reader,
 			.number_of_columns = number_of_columns,
 			.column_names = if (opts.column_names) state.names[0..number_of_columns] else &[_][]const u8{},
 		};
@@ -387,6 +397,8 @@ pub const Conn = struct {
 		if (values.len == 0) {
 			const simple_query = proto.Query{.sql = sql};
 			try simple_query.write(buf);
+			// no longer idle, we're now in a query
+			self._state = 'Q';
 			try self.stream.writeAll(buf.string());
 		} else {
 			// TODO: there's some optimization opportunities here, since we know
@@ -402,25 +414,17 @@ pub const Conn = struct {
 
 		// affected can be null, so we need a separate boolean to track if we
 		// actually have a response.
-		var response: bool = false;
 		var affected: ?i64 = null;
 		while (true) {
 			const msg = try self.read();
 			switch (msg.type) {
-				'T' => {
-					affected = 0;
-					response = true;
-				},
-				'D' => affected = (affected orelse 0) + 1,
 				'C' => {
-					response = true;
 					const cc = try proto.CommandComplete.parse(msg.data);
 					affected = cc.rowsAffected();
 				},
-				'Z' => { // ready for query
-					if (response) return affected;
-					// else, must have come from before, keep going
-				},
+				'Z' => return affected,
+				'T' => affected = 0,
+				'D' => affected = (affected orelse 0) + 1,
  				else => return error.UnexpectedDBMessage,
 			}
 		}
@@ -508,19 +512,24 @@ pub const Conn = struct {
 		try self.stream.writeAll(buf.string());
 	}
 
-	fn read(self: *Conn) !lib.Message {
+	// Should not be called directly
+	pub fn read(self: *Conn) !lib.Message {
 		var reader = &self._reader;
 		while (true) {
 			const msg = try reader.next();
 			switch (msg.type) {
+				'Z' => {
+					self._state = msg.data[0];
+					return msg;
+				},
 				'N' => {}, // TODO: NoticeResponse
-				'E' => return self.pgError(msg.data),
+				'E' => return self.setErr(msg.data),
 				else => return msg,
 			}
 		}
 	}
 
-	fn pgError(self: *Conn, data: []const u8) error{PG, OutOfMemory} {
+	fn setErr(self: *Conn, data: []const u8) error{PG, OutOfMemory} {
 		const allocator = self._allocator;
 
 		// The proto.Error that we're about to create is going to reference data.
@@ -537,6 +546,14 @@ pub const Conn = struct {
 		self._err_data = owned;
 		self.err = proto.Error.parse(owned);
 		return error.PG;
+	}
+
+	// should not be called directly
+	pub fn readyForQuery(self: *Conn) !void {
+		const msg = try self.read();
+		if (msg.type != 'Z') {
+			return error.UnexpectedDBMessage;
+		}
 	}
 };
 

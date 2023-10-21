@@ -3,25 +3,21 @@ const lib = @import("lib.zig");
 
 const types = lib.types;
 const proto = lib.proto;
-const Reader = lib.Reader;
+const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
 pub const Result = struct {
-	err: ?proto.Error = null,
 	number_of_columns: usize,
 
 	// will be empty unless the query was executed with the column_names = true option
 	column_names: [][]const u8,
 
-	_reader: *Reader,
+	_conn: *Conn,
 	_allocator: Allocator,
 
 	// when true, then _state was dynamically allocated and we're responsible for it
 	_dyn_state: bool,
 	_state: State,
-
-	// the underlying data for err
-	_err_data: ?[]const u8 = null,
 
 	pub fn deinit(self: Result) void {
 		const allocator = self._allocator;
@@ -29,14 +25,10 @@ pub const Result = struct {
 			self._state.deinit(allocator);
 		}
 
-		if (self._err_data) |err_data| {
-			allocator.free(err_data);
-		}
-
 		for (self.column_names) |name| {
 			allocator.free(name);
 		}
-		self._reader.endFlow();
+		self._conn._reader.endFlow();
 	}
 
 	// Caller should typically call next() until null is returned.
@@ -45,19 +37,24 @@ pub const Result = struct {
 	// I don't want to do this implictly in deinit because it can fail
 	// and returning an error union in deinit is a pain for the caller.
 	pub fn drain(self: *Result) !void {
+		var conn = self._conn;
+		if (conn._state == 'I') {
+			return;
+		}
+
 		while (true) {
-			const msg = try self.read();
+			const msg = try conn.read();
 			switch (msg.type) {
 				'C' => {}, // CommandComplete
 				'D' => {}, // DataRow
-				'Z' => return, // ready for query
+				'Z' => return,
 				else => return error.UnexpectedDBMessage,
 			}
 		}
 	}
 
 	pub fn next(self: *Result) !?Row {
-		const msg = try self.read();
+		const msg = try self._conn.read();
 		switch (msg.type) {
 			'D' => {
 				const data = msg.data;
@@ -90,39 +87,12 @@ pub const Result = struct {
 					.values = values,
 				};
 			},
-			'C' => return null, // CommandComplete
+			'C' => {
+				try self._conn.readyForQuery();
+				return null;
+			},
 			else => return error.UnexpectedDBMessage,
 		}
-	}
-
-	fn read(self: *Result) !lib.Message {
-		var reader = self._reader;
-		while (true) {
-			const msg = try reader.next();
-			switch (msg.type) {
-				'E' => return self.pgError(msg.data),
-				else => return msg,
-			}
-		}
-	}
-
-	fn pgError(self: *Result, data: []const u8) error{PG, OutOfMemory} {
-		const allocator = self._allocator;
-
-		// The proto.Error that we're about to create is going to reference data.
-		// But data is owned by our Reader and its lifetime doesn't necessarily match
-		// what we want here. So we're going to dupe it and make the result own
-		// the data so it can tie its lifecycle to the error.
-
-		// That means clearing out any previous duped error data we had
-		if (self._err_data) |err_data| {
-			allocator.free(err_data);
-		}
-
-		const owned = try allocator.dupe(u8, data);
-		self._err_data = owned;
-		self.err = proto.Error.parse(owned);
-		return error.PG;
 	}
 
 	// For every query, we need to store the type of each column (so we know
@@ -744,4 +714,3 @@ test "Result: text[] & bytea[]" {
 	try t.expectString(&arr2, v2[1]);
 	try t.expectEqual(2, v2.len);
 }
-

@@ -21,13 +21,13 @@ pub fn build(b: *std.Build) !void {
 		.dependencies = &.{ .{.name = "buffer", .module = modules.get("buffer").? }},
 	});
 
-
 	{
 		// test step
 		const lib_test = b.addTest(.{
 			.root_source_file = .{ .path = "src/pg.zig" },
 			.target = target,
 			.optimize = optimize,
+			// .filter = "ints",
 		});
 		addLibs(lib_test, modules);
 
