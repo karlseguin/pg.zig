@@ -61,6 +61,7 @@ pub const Conn = struct {
 	pub const QueryOpts = struct {
 		timeout: ?u32 = 30_000,
 		column_names: bool = false,
+		allocator: ?Allocator = null,
 	};
 
 	pub fn open(allocator: Allocator, opts: ConnectOpts) !Conn {
@@ -113,9 +114,8 @@ pub const Conn = struct {
 	pub fn startup(self: *Conn, opts: StartupOpts) !void {
 		var buf = &self._buf;
 
-		const timeout = Timeout.init(opts.timeout, self.stream);
-		try timeout.forSendAndRecv();
-		defer _ = Timeout.clear(self.stream) catch {};
+		try self._reader.startFlow(opts.timeout);
+		defer self._reader.endFlow();
 
 		{
 			// write our startup message
@@ -164,9 +164,6 @@ pub const Conn = struct {
 				'S' => {}, // TODO: ParameterStatus,
 				else => return error.UnexpectedDBMessage,
 			}
-			if (timeout.expired()) {
-				return error.Timeout;
-			}
 		}
 	}
 
@@ -178,7 +175,7 @@ pub const Conn = struct {
 		var dyn_state = false;
 		var number_of_columns: u16 = 0;
 		var state = self._result_state;
-		const allocator = self._allocator;
+		const allocator = opts.allocator orelse self._allocator;
 
 		// if we end up creating a dynamic state, we need to clean it up
 		errdefer if (dyn_state) state.deinit(allocator);
@@ -200,12 +197,9 @@ pub const Conn = struct {
 				allocator.free(param_oids);
 			}
 		}
-
-		if (opts.timeout) |ms| {
-			const timeout = Timeout.init(ms, self.stream);
-			try timeout.forSendAndRecv();
-		}
-		defer if (opts.timeout != null) Timeout.clear(self.stream) catch {};
+		try self._reader.startFlow(opts.timeout);
+		// in normal cases, endFlow will be called in result.deinit()
+		errdefer self._reader.endFlow();
 
 		// Step 1: Parse, Describe, Sync
 		{
@@ -386,6 +380,9 @@ pub const Conn = struct {
 	pub fn execOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !?i64 {
 		var buf = &self._buf;
 		buf.reset();
+
+		try self._reader.startFlow(opts.timeout);
+		defer self._reader.endFlow();
 
 		if (values.len == 0) {
 			const simple_query = proto.Query{.sql = sql};

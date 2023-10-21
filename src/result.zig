@@ -36,6 +36,7 @@ pub const Result = struct {
 		for (self.column_names) |name| {
 			allocator.free(name);
 		}
+		self._reader.endFlow();
 	}
 
 	// Caller should typically call next() until null is returned.

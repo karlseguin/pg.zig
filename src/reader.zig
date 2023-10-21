@@ -1,11 +1,15 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const builtin = @import("builtin");
 
+const os = std.os;
 const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
 // to everyone else, this is our reader
 pub const Reader = ReaderT(std.net.Stream);
+
+const zero_timeval = std.mem.toBytes(os.timeval{.tv_sec = 0, .tv_usec = 0});
 
 // generic just for testing within this file
 fn ReaderT(comptime T: type) type {
@@ -48,22 +52,65 @@ fn ReaderT(comptime T: type) type {
 			allocator.free(self.static);
 		}
 
+		// Between a call to startFlow and endFlow, the reader can re-use any
+		// dynamic buffer it creates. The idea beind this is that if reading 1 row
+		// requires more than static.len other rows within the same result might
+		// as well.
+		pub fn startFlow(self: *Self, timeout_ms: ?u32) !void {
+			var timeval = zero_timeval;
+			if (timeout_ms) |ms| {
+				timeval = std.mem.toBytes(os.timeval{
+					.tv_sec = @intCast(@divTrunc(ms, 1000)),
+					.tv_usec = @intCast(@mod(ms, 1000) * 1000),
+				});
+			}
+			if (!builtin.is_test) {
+				return os.setsockopt(self.stream.handle, os.SOL.SOCKET, os.SO.RCVTIMEO, &timeval);
+			}
+		}
+
+		pub fn endFlow(self: *Self) void {
+			if (self.static.ptr == self.buf.ptr) {
+				// we never created a dynamic buffer
+				return;
+			}
+
+			// Normally, when an "flow" ends, we expect our read buffer to be empty.
+			// This is true because data from PG is normally only sent in response
+			// to a request. If we've ended our "flow", then we should have read
+			// everything from PG. But PG can occasionally send data on its own.
+			// So it's possible that we over-read and now our dynamic buffer has
+			// data unrelated to this flow.
+
+			const pos = self.pos;
+			const start = self.start;
+			const extra = pos - start;
+
+			if (extra > self.static.len) {
+				// This is unusually. Not only did we overread, but we've overread so
+				// much that we can't use our static buffer. We'll keep using our dynamic
+				// buffer until the next endFlow (or deinit).
+				return;
+			}
+
+			if (extra > 0) {
+				// we have extra data, but it fits in our static buffer, let's move it
+				@memcpy(self.static[0..extra], self.buf[start..pos]);
+			}
+
+			// now we can free the dynamic buffer
+			self.allocator.free(self.buf);
+
+			self.pos = extra;
+			self.start = 0;
+			self.buf = self.static;
+		}
+
 		pub fn next(self: *Self) !Message {
 			return self.buffered(self.pos) orelse self.read();
 		}
 
 		fn read(self: *Self) !Message {
-			if (self.static.ptr != self.buf.ptr) {
-				// Our previous read used a dynamic buffer. When we use a dynamic buffer
-				// we're reading exactly 1 message, so we know we haven't overread into
-				// the next message. We can free the dynamic buffer, and reuse the whole
-				// of our static buffer
-				self.allocator.free(self.buf);
-				self.pos = 0;
-				self.start = 0;
-				self.buf = self.static;
-			}
-
 			const stream = self.stream;
 			// const spare = buf.len - pos; // how much space we have left in our buffer
 
@@ -89,15 +136,38 @@ fn ReaderT(comptime T: type) type {
 						message_length = std.mem.readIntBig(u32, buf[start+1..start+5][0..4]) + 1;
 
 						if (message_length > buf.len) {
-							// our static buffer is too small
-							const dyn = try self.allocator.alloc(u8, message_length);
-							@memcpy(dyn[0..current_length], buf[start..pos]);
+							// our buffer is too small
+							// If we're using a dynamic buffer already, we'll try to resive it
+							// If that fails, or if we're using our static buffer, we need
+							// to allocate a new buffer
+
+							var new_buf: []u8 = undefined;
+							const allocator = self.allocator;
+							const is_static = buf.ptr == self.static.ptr;
+
+							if (is_static or !allocator.resize(buf, message_length)) {
+								// Either we were using our static buffer or resizing failed
+								new_buf = try allocator.alloc(u8, message_length);
+								@memcpy(new_buf[0..current_length], buf[start..pos]);
+
+								if (!is_static) {
+									// free the old dynamic buffer
+									allocator.free(buf);
+								}
+							} else {
+								// we were using a dynamic buffer and succcessfully resized it
+								new_buf = buf.ptr[0..message_length];
+								if (start > 0) {
+									std.mem.copyForwards(u8, new_buf[0..current_length], buf[start..pos]);
+								}
+							}
+
 							self.start = 0;
 							pos = current_length;
-							buf = dyn;
-							self.buf = dyn;
+							buf = new_buf;
+							self.buf = new_buf;
 						} else if (message_length > buf.len - start)  {
-							// our static buffer is big enough, but not from where we're currently starting
+							// our buffer is big enough, but not from where we're currently starting
 							std.mem.copyForwards(u8, buf[0..current_length], buf[start..pos]);
 							pos = current_length;
 							self.start = 0;
@@ -330,6 +400,8 @@ test "Reader: fuzz" {
 
 		var buf: []const u8 = messages[0..];
 		while (buf.len > 0) {
+			try reader.startFlow(null);
+			defer reader.endFlow();
 			const l = random.uintAtMost(usize, buf.len - 1) + 1;
 			s.add(buf[0..l]);
 			buf = buf[l..];
@@ -435,4 +507,104 @@ test "Reader: dynamic" {
 		try t.expectEqual(198, msg3.type);
 		try t.expectSlice(u8, &.{1}, msg3.data);
 	}
+}
+
+test "Reader: start/endFlow basic" {
+	const R = ReaderT(*t.Stream);
+	var s = t.Stream.init();
+	defer s.deinit();
+
+	// 1st message is bigge than static
+	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
+
+	// 2nd message is bigger than first
+	s.add(&[_]u8{2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6});
+
+	// 3rd message is smaller than 2nd (should re-use previous buffer)
+	s.add(&[_]u8{3, 0, 0, 0, 9, 1, 2, 3, 4, 5});
+
+	var reader = R.init(t.allocator, 5, s) catch unreachable;
+	defer reader.deinit();
+
+	try reader.startFlow(null);
+	const msg1 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
+
+	const msg2 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6}, msg2.data);
+
+	const msg3 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
+	reader.endFlow();
+}
+
+test "Reader: start/endFlow overread into static" {
+	const R = ReaderT(*t.Stream);
+	var s = t.Stream.init();
+	defer s.deinit();
+
+	// 1st message is bigge than static
+	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
+
+	// 2nd message is bigger than first
+	s.add(&[_]u8{2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6});
+
+	// 3rd message is smaller than 2nd (should re-use previous buffer)
+	s.add(&[_]u8{3, 0, 0, 0, 9, 1, 2, 3, 4, 5});
+
+	// 4th message is overread and fits in static
+	s.add(&[_]u8{3, 0, 0, 0, 5, 255});
+
+	var reader = R.init(t.allocator, 7, s) catch unreachable;
+	defer reader.deinit();
+
+	try reader.startFlow(null);
+	const msg1 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
+
+	const msg2 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6}, msg2.data);
+
+	const msg3 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
+	reader.endFlow();
+
+	const msg4 = try reader.next();
+	try t.expectSlice(u8, &.{255}, msg4.data);
+}
+
+
+test "Reader: start/endFlow large overread" {
+	const R = ReaderT(*t.Stream);
+	var s = t.Stream.init();
+	defer s.deinit();
+
+	// 1st message is bigge than static
+	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
+
+	// 2nd message is bigger than first
+	s.add(&[_]u8{2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6});
+
+	// 3rd message is smaller than 2nd (should re-use previous buffer)
+	s.add(&[_]u8{3, 0, 0, 0, 9, 1, 2, 3, 4, 5});
+
+	// 4th message is overread and does not fit into static
+	s.add(&[_]u8{3, 0, 0, 0, 11, 255, 250, 245, 240, 235, 230, 225});
+
+	var reader = R.init(t.allocator, 7, s) catch unreachable;
+	defer reader.deinit();
+
+	try reader.startFlow(null);
+	const msg1 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
+
+	const msg2 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6}, msg2.data);
+
+	const msg3 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
+	reader.endFlow();
+
+	const msg4 = try reader.next();
+	try t.expectSlice(u8, &.{255, 250, 245, 240, 235, 230, 225}, msg4.data);
 }
