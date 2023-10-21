@@ -59,6 +59,8 @@ pub const Conn = struct {
 	};
 
 	pub const QueryOpts = struct {
+		timeout: ?u32 = 30_000,
+		column_names: bool = false,
 	};
 
 	pub fn open(allocator: Allocator, opts: ConnectOpts) !Conn {
@@ -113,7 +115,7 @@ pub const Conn = struct {
 
 		const timeout = Timeout.init(opts.timeout, self.stream);
 		try timeout.forSendAndRecv();
-		defer _ = timeout.clear() catch {};
+		defer _ = Timeout.clear(self.stream) catch {};
 
 		{
 			// write our startup message
@@ -173,8 +175,6 @@ pub const Conn = struct {
 	}
 
 	pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !Result {
-		_ = opts;
-
 		var dyn_state = false;
 		var number_of_columns: u16 = 0;
 		var state = self._result_state;
@@ -200,6 +200,12 @@ pub const Conn = struct {
 				allocator.free(param_oids);
 			}
 		}
+
+		if (opts.timeout) |ms| {
+			const timeout = Timeout.init(ms, self.stream);
+			try timeout.forSendAndRecv();
+		}
+		defer if (opts.timeout != null) Timeout.clear(self.stream) catch {};
 
 		// Step 1: Parse, Describe, Sync
 		{
@@ -262,7 +268,7 @@ pub const Conn = struct {
 			}
 
 			{
-				// we expect a ParameterDescription message, which we won't use
+				// we expect a ParameterDescription message
 				const msg = try self.read();
 				if (msg.type != 't') {
 					return error.UnexpectedDBMessage;
@@ -291,6 +297,7 @@ pub const Conn = struct {
 						if (data.len < 2) {
 							return error.UnexpectedDBMessage;
 						}
+
 						number_of_columns = std.mem.readIntBig(u16, data[0..2]);
 						if (number_of_columns > state.result_oids.len) {
 							// we have more columns than our self._result_state can handle, we
@@ -298,7 +305,8 @@ pub const Conn = struct {
 							dyn_state = true;
 							state = try Result.State.init(allocator, number_of_columns);
 						}
-						try state.from(number_of_columns, data);
+						const a: ?Allocator = if (opts.column_names) allocator else null;
+						try state.from(number_of_columns, data, a);
 					},
 					else => return error.UnexpectedDBMessage,
 				}
@@ -366,6 +374,7 @@ pub const Conn = struct {
 			._dyn_state = dyn_state,
 			._reader = &self._reader,
 			.number_of_columns = number_of_columns,
+			.column_names = if (opts.column_names) state.names[0..number_of_columns] else &[_][]const u8{},
 		};
 	}
 
@@ -722,7 +731,6 @@ test "PG: type support" {
 	try t.expectSlice(u8, &bytea1, bytea_arr[0]);
 	try t.expectSlice(u8, &bytea2, bytea_arr[1]);
 
-
 	try t.expectEqual(null, try result.next());
 }
 
@@ -782,4 +790,23 @@ test "PG: null support" {
 	try t.expectEqual(null, row.getIterator(?[]const u8, 16));
 
 	try t.expectEqual(null, try result.next());
+}
+
+test "PG: query column names" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	{
+		var result = try c.query("select 1 as id, 'leto' as name", .{});
+		try t.expectEqual(0, result.column_names.len);
+		try result.drain();
+		result.deinit();
+	}
+
+	{
+		var result = try c.queryOpts("select 1 as id, 'leto' as name", .{}, .{.column_names = true});
+		defer result.deinit();
+		try t.expectEqual(2, result.column_names.len);
+		try t.expectString("id", result.column_names[0]);
+		try t.expectString("name", result.column_names[1]);
+	}
 }

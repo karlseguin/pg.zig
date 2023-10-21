@@ -24,7 +24,7 @@ pub const Timeout = struct {
 
 	const zero = std.mem.toBytes(os.timeval{.tv_sec = 0, .tv_usec = 0});
 
-	pub fn init(ms: i64, stream: anytype) Timeout {
+	pub fn init(ms: i64, stream: std.net.Stream) Timeout {
 		return .{
 			.handle = stream.handle,
 			.deadline = std.time.milliTimestamp() + ms,
@@ -35,6 +35,11 @@ pub const Timeout = struct {
 		};
 	}
 
+	pub fn clear(stream: std.net.Stream) !void {
+		try Timeout.recv(stream.handle, &zero);
+		return Timeout.send(stream.handle, &zero);
+	}
+
 	pub fn expired(self: *const Timeout) bool {
 		return std.time.milliTimestamp() > self.deadline;
 	}
@@ -42,11 +47,6 @@ pub const Timeout = struct {
 	pub fn forSendAndRecv(self: *const Timeout) !void {
 		try Timeout.recv(self.handle, &self.timeval);
 		return Timeout.send(self.handle, &self.timeval);
-	}
-
-	pub fn clear(self: *const Timeout) !void {
-		try Timeout.recv(self.handle, &zero);
-		return Timeout.send(self.handle, &zero);
 	}
 
 	pub fn forRecv(self: *const Timeout) !void {

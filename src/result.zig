@@ -7,6 +7,12 @@ const Reader = lib.Reader;
 const Allocator = std.mem.Allocator;
 
 pub const Result = struct {
+	err: ?proto.Error = null,
+	number_of_columns: usize,
+
+	// will be empty unless the query was executed with the column_names = true option
+	column_names: [][]const u8,
+
 	_reader: *Reader,
 	_allocator: Allocator,
 
@@ -16,8 +22,6 @@ pub const Result = struct {
 
 	// the underlying data for err
 	_err_data: ?[]const u8 = null,
-	err: ?proto.Error = null,
-	number_of_columns: usize,
 
 	pub fn deinit(self: Result) void {
 		const allocator = self._allocator;
@@ -27,6 +31,10 @@ pub const Result = struct {
 
 		if (self._err_data) |err_data| {
 			allocator.free(err_data);
+		}
+
+		for (self.column_names) |name| {
+			allocator.free(name);
 		}
 	}
 
@@ -159,22 +167,23 @@ pub const Result = struct {
 		// Populates the State from the RowDescription payload
 		// We already read the number_of_columns from data, so we pass it in here
 		// We also already know that number_of_columns fits within our arrays
-		pub fn from(self: *State, number_of_columns: u16, data: []const u8) !void {
+		pub fn from(self: *State, number_of_columns: u16, data: []const u8, allocator: ?Allocator) !void {
 			// skip the column count, which we already know as number_of_columns
 			var pos: usize = 2;
 
 			for (0..number_of_columns) |i| {
-				// skip the name, for now
-				pos = std.mem.indexOfScalarPos(u8, data, pos, 0) orelse return error.InvalidDataRow;
-
-				if (data.len < (pos + 19)) {
+				const end_pos = std.mem.indexOfScalarPos(u8, data, pos, 0) orelse return error.InvalidDataRow;
+				if (data.len < (end_pos + 19)) {
 					return error.InvalidDataRow;
+				}
+				if (allocator) |a| {
+					self.names[i] = try a.dupe(u8, data[pos..end_pos]);
 				}
 
 				// skip the name null terminator (1)
 				// skip the table object_id this table belongs to (4)
 				// skip the attribute number of this table column (2)
-				pos += 7;
+				pos = end_pos + 7;
 
 				{
 					const end = pos + 4;
