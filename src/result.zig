@@ -201,7 +201,7 @@ pub const Row = struct {
 				break :blk opt.child;
 			},
 			else => blk: {
-				std.debug.assert(value.is_null == false);
+				lib.assert(value.is_null == false);
 				break :blk T;
 			},
 		};
@@ -262,12 +262,12 @@ pub const Row = struct {
 		}
 
 		// minimum size for 1 empty array
-		std.debug.assert(data.len >= 20);
+		lib.assert(data.len >= 20);
 		const dimensions = std.mem.readIntBig(i32, data[0..4]);
-		std.debug.assert(dimensions == 1);
+		lib.assert(dimensions == 1);
 
 		const has_nulls = std.mem.readIntBig(i32, data[4..8][0..4]);
-		std.debug.assert(has_nulls == 0);
+		lib.assert(has_nulls == 0);
 
 		// const oid = std.mem.readIntBig(i32, data[8..12][0..4]);
 		const len = std.mem.readIntBig(i32, data[12..16][0..4]);
@@ -325,7 +325,7 @@ fn Iterator(comptime T: type) type {
 			const len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
 
 			const data_end = len_end + @as(usize, @intCast(len));
-			std.debug.assert(data.len >= data_end);
+			lib.assert(data.len >= data_end);
 
 			self._pos = data_end;
 			return self._decoder(data[len_end..data_end], self._oid);

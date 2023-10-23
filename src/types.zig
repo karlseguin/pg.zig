@@ -38,7 +38,7 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) i16 {
-			std.debug.assert(data.len == 2 and data_oid == Int16.oid.decimal);
+			lib.assert(data.len == 2 and data_oid == Int16.oid.decimal);
 			return std.mem.readIntBig(i16, data[0..2]);
 		}
 	};
@@ -59,7 +59,7 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) i32 {
-			std.debug.assert(data.len == 4 and data_oid == Int32.oid.decimal);
+			lib.assert(data.len == 4 and data_oid == Int32.oid.decimal);
 			return std.mem.readIntBig(i32, data[0..4]);
 		}
 	};
@@ -83,7 +83,7 @@ pub const Types = struct {
 			switch (data_oid) {
 				Timestamp.oid.decimal => return Timestamp.decode(data, data_oid),
 				else => {
-					std.debug.assert(data.len == 8 and data_oid == Int64.oid.decimal);
+					lib.assert(data.len == 8 and data_oid == Int64.oid.decimal);
 					return std.mem.readIntBig(i64, data[0..8]);
 				},
 			}
@@ -102,7 +102,7 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) i64 {
-			std.debug.assert(data.len == 8 and data_oid == Timestamp.oid.decimal);
+			lib.assert(data.len == 8 and data_oid == Timestamp.oid.decimal);
 			return std.mem.readIntBig(i64, data[0..8]) + us_from_epoch_to_y2k;
 		}
 	};
@@ -119,7 +119,7 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) f32 {
-			std.debug.assert(data.len == 4 and data_oid == Float32.oid.decimal);
+			lib.assert(data.len == 4 and data_oid == Float32.oid.decimal);
 			const n = std.mem.readIntBig(i32, data[0..4]);
 			const tmp: *f32 = @constCast(@ptrCast(&n));
 			return tmp.*;
@@ -143,7 +143,7 @@ pub const Types = struct {
 			switch (data_oid) {
 				Numeric.oid.decimal => return Numeric.decode(data, data_oid),
 				else => {
-					std.debug.assert(data.len == 8 and data_oid == Float64.oid.decimal);
+					lib.assert(data.len == 8 and data_oid == Float64.oid.decimal);
 					const n = std.mem.readIntBig(i64, data[0..8]);
 					const tmp: *f64 = @constCast(@ptrCast(&n));
 					return tmp.*;
@@ -171,7 +171,7 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) f64 {
-			std.debug.assert(data_oid == Numeric.oid.decimal);
+			lib.assert(data_oid == Numeric.oid.decimal);
 			return std.fmt.parseFloat(f64, data) catch 0;
 		}
 	};
@@ -187,7 +187,7 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) bool {
-			std.debug.assert(data.len == 1 and data_oid == Bool.oid.decimal);
+			lib.assert(data.len == 1 and data_oid == Bool.oid.decimal);
 			return data[0] == 1;
 		}
 	};
@@ -246,7 +246,7 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) []const u8 {
-			std.debug.assert(data_oid == UUID.oid.decimal);
+			lib.assert(data_oid == UUID.oid.decimal);
 			return data;
 		}
 
@@ -341,7 +341,7 @@ pub const Types = struct {
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) i16 {
-			std.debug.assert(data_oid == Int16Array.oid.decimal);
+			lib.assert(data_oid == Int16Array.oid.decimal);
 			return Int16.decode(data, Int16.oid.decimal);
 		}
 	};
@@ -364,7 +364,7 @@ pub const Types = struct {
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) i32 {
-			std.debug.assert(data_oid == Int32Array.oid.decimal);
+			lib.assert(data_oid == Int32Array.oid.decimal);
 			return Int32.decode(data, Int32.oid.decimal);
 		}
 	};
@@ -390,7 +390,7 @@ pub const Types = struct {
 			switch (data_oid) {
 				TimestampArray.oid.decimal => return TimestampArray.decodeOne(data, data_oid),
 				else => {
-					std.debug.assert(data_oid == Int64Array.oid.decimal);
+					lib.assert(data_oid == Int64Array.oid.decimal);
 					return Int64.decode(data, Int64.oid.decimal);
 				},
 			}
@@ -415,7 +415,7 @@ pub const Types = struct {
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
-			std.debug.assert(data_oid == TimestampArray.oid.decimal);
+			lib.assert(data_oid == TimestampArray.oid.decimal);
 			return Timestamp.decode(data, Timestamp.oid.decimal);
 		}
 	};
@@ -437,7 +437,7 @@ pub const Types = struct {
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) f32 {
-			std.debug.assert(data_oid == Float32Array.oid.decimal);
+			lib.assert(data_oid == Float32Array.oid.decimal);
 			return Float32.decode(data, Float32.oid.decimal);
 		}
 	};
@@ -459,7 +459,7 @@ pub const Types = struct {
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) f64 {
-			std.debug.assert(data_oid == Float64Array.oid.decimal);
+			lib.assert(data_oid == Float64Array.oid.decimal);
 			return Float64.decode(data, Float64.oid.decimal);
 		}
 	};
@@ -484,7 +484,7 @@ pub const Types = struct {
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) bool {
-			std.debug.assert(data_oid == BoolArray.oid.decimal);
+			lib.assert(data_oid == BoolArray.oid.decimal);
 			return Bool.decode(data, Bool.oid.decimal);
 		}
 	};
@@ -537,7 +537,7 @@ pub const Types = struct {
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) []u8 {
-			std.debug.assert(data_oid == UUIDArray.oid.decimal);
+			lib.assert(data_oid == UUIDArray.oid.decimal);
 			return UUID.decode(data, UUID.oid.decimal);
 		}
 	};
