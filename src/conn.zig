@@ -1066,3 +1066,33 @@ test "PG: query column names" {
 		try t.expectString("name", result.column_names[1]);
 	}
 }
+
+test "PG: JSON struct" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		const result = c.exec(\\
+		\\ insert into all_types (id, col_json, col_jsonb)
+		\\ values ($1, $2, $3)
+		, .{3, DummyStruct{.id = 1, .name = "Leto"}, &DummyStruct{.id = 2, .name = "Ghanima"}});
+
+		if (result) |affected| {
+			try t.expectEqual(1, affected);
+		} else |err| {
+			try t.fail(c, err);
+		}
+	}
+
+	var result = try c.query("select col_json, col_jsonb from all_types where id = $1", .{3});
+	defer result.deinit();
+
+	const row = (try result.next()) orelse unreachable;
+	try t.expectString("{\"id\":1,\"name\":\"Leto\"}", row.get([]u8, 0));
+	try t.expectString("{\"id\": 2, \"name\": \"Ghanima\"}", row.get(?[]const u8, 1).?);
+}
+
+const DummyStruct = struct{
+	id: i32,
+	name: []const u8,
+};

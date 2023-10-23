@@ -22,6 +22,7 @@ const text_encoding = [2]u8{0, 0};
 const binary_encoding = [2]u8{0, 1};
 
 pub const Types = struct {
+
 	pub const Int16 = struct {
 		pub const oid = OID.make(21);
 		const encoding = &binary_encoding;
@@ -160,14 +161,9 @@ pub const Types = struct {
 		fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(Numeric.encoding, format_pos);
 
-			try buf.write(&.{0, 0, 0, 0}); // length placeholder
-			const pos = buf.len();
+			const state = try variableLengthStart(buf);
 			try std.fmt.formatFloatDecimal(value, .{}, buf.writer());
-			const len = buf.len() - pos;
-
-			var encoded_len: [4]u8 = undefined;
-			std.mem.writeIntBig(i32, &encoded_len, @intCast(len));
-			buf.writeAt(&encoded_len, pos - 4);
+			variableLengthFill(buf, state);
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) f64 {
@@ -330,6 +326,13 @@ pub const Types = struct {
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
+
+		fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(JSON.encoding, format_pos);
+			const state = try variableLengthStart(buf);
+			try std.json.stringify(value, .{}, buf.writer());
+			variableLengthFill(buf, state);
+		}
 	};
 
 	pub const JSONB = struct {
@@ -343,6 +346,14 @@ pub const Types = struct {
 			view.writeIntBig(i32, @intCast(value.len + 1));
 			view.writeByte(1); // jsonb version
 			view.write(value);
+		}
+
+		fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(JSON.encoding, format_pos);
+			const state = try variableLengthStart(buf);
+			try buf.writeByte(1); // jsonb version
+			try std.json.stringify(value, .{}, buf.writer());
+			variableLengthFill(buf, state);
 		}
 
 		fn decode(data: []const u8, data_oid: i32) []const u8 {
@@ -650,6 +661,18 @@ pub const Types = struct {
 		_ = try buf.skip(space);
 		return view;
 	}
+
+	fn variableLengthStart(buf: *buffer.Buffer) !usize {
+		try buf.write(&.{0, 0, 0, 0}); // length placeholder
+		return buf.len();
+	}
+
+	fn variableLengthFill(buf: *buffer.Buffer, pos: usize) void {
+		const len = buf.len() - pos;
+		var encoded_len: [4]u8 = undefined;
+		std.mem.writeIntBig(i32, &encoded_len, @intCast(len));
+		buf.writeAt(&encoded_len, pos - 4);
+	}
 };
 
 // expose our Types directly so callers can do types.Int32 rather than
@@ -761,12 +784,18 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 						const E = std.meta.Elem(ptr.child);
 						return bindSlice(E, oid, @as([]const E, value), buf, format_pos);
 					},
+					.Struct => switch (oid) {
+						Types.JSON.oid.decimal => return Types.JSON.encode(value, buf, format_pos),
+						Types.JSONB.oid.decimal => return Types.JSONB.encode(value, buf, format_pos),
+						else => return error.CannotBindStruct,
+					},
 					else => compileHaltBindError(T),
 				},
 				else => compileHaltBindError(T),
 			}
 		},
 		.Array => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),
+		.Struct => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),
 		.Optional => |opt| {
 			if (value) |v| {
 				return bindValue(opt.child, oid, v, buf, format_pos);
