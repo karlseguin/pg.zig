@@ -404,17 +404,6 @@ pub const Conn = struct {
 		};
 	}
 
-	pub fn scalar(self: *Conn, comptime T: type, sql: []const u8, values: anytype) ScalarReturnType(T) {
-		var result = try self.queryOpts(sql, values, .{});
-		defer result.deinit();
-
-		const row = (try result.next()) orelse return null;
-		const value = row.get(T, 0);
-		try result.drain();
-
-		return value;
-	}
-
 	// Execute a query that does not return rows
 	pub fn exec(self: *Conn, sql: []const u8, values: anytype) !?i64 {
 		return self.execOpts(sql, values, .{});
@@ -595,20 +584,6 @@ pub const Conn = struct {
 	}
 };
 
-fn ScalarReturnType(comptime T: type) type {
-	const TT = switch (@typeInfo(T)) {
-		.Optional => |opt| opt.child,
-		else => T,
-	};
-
-	const TTT = switch (TT) {
-		[]u8 => []const u8,
-		else => TT,
-	};
-
-	return anyerror!?TTT;
-}
-
 const t = lib.testing;
 test "Conn: startup trust (no pass)" {
 	var conn = try Conn.open(t.allocator, .{});
@@ -710,19 +685,6 @@ test "Conn: exec query that returns rows" {
 	try t.expectEqual(2, c.exec("select * from simple_table where value like $1", .{"exec_sel_%"}));
 }
 
-test "Conn: scalar" {
-	var c = t.connect(.{});
-	defer c.deinit();
-
-	try t.expectEqual(null, try c.scalar(?i32, "select $1::int", .{null}));
-	try t.expectEqual(9876, (try c.scalar(i32, "select $1::int", .{9876})).?);
-	try t.expectEqual(null, try c.scalar(?i32, "select $1::int", .{null}));
-	try t.expectEqual(1234, (try c.scalar(?i32, "select $1::int", .{1234})).?);
-	try t.expectEqual(false, (try c.scalar(bool, "select $1::bool", .{false})).?);
-	try t.expectString("abc", (try c.scalar([]u8, "select $1::text", .{"abc"})).?);
-	try t.expectEqual(null, try c.scalar(?[]u8, "select $1::text", .{null}));
-}
-
 test "Conn: parse error" {
 	var c = t.connect(.{});
 	defer c.deinit();
@@ -734,7 +696,7 @@ test "Conn: parse error" {
 	try t.expectString("syntax error at or near \"selct\"", err.message);
 
 	// connection is still usable
-	try t.expectEqual(2, (try c.scalar(i32, "select 2", .{})).?);
+	try t.expectEqual(2, t.scalar(&c, "select 2"));
 }
 
 test "Conn: wrong parameter count" {
@@ -744,7 +706,7 @@ test "Conn: wrong parameter count" {
 	try t.expectError(error.ParameterCount, c.query("select $1", .{1, 2}));
 
 	// connection is still usable
-	try t.expectEqual(3, (try c.scalar(i32, "select 3", .{})).?);
+	try t.expectEqual(3, t.scalar(&c, "select 3"));
 }
 
 test "Conn: bind error" {
@@ -753,7 +715,7 @@ test "Conn: bind error" {
 	try t.expectError(error.PG, c.query("select $1::bool", .{33.2}));
 
 	// connection is still usable
-	try t.expectEqual(4, (try c.scalar(i32, "select 4", .{})).?);
+	try t.expectEqual(4, t.scalar(&c, "select 4"));
 }
 
 test "PG: type support" {
