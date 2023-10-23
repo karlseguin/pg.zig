@@ -23,7 +23,7 @@ const binary_encoding = [2]u8{0, 1};
 
 pub const Types = struct {
 	pub const Int16 = struct {
-		const oid = OID.make(21);
+		pub const oid = OID.make(21);
 		const encoding = &binary_encoding;
 
 		fn encode(value: i16, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -37,14 +37,14 @@ pub const Types = struct {
 			return Int16.encode(@intCast(value), buf, format_pos);
 		}
 
-		pub fn decode(data: []const u8) i16 {
-			std.debug.assert(data.len == 2);
+		pub fn decode(data: []const u8, data_oid: i32) i16 {
+			std.debug.assert(data.len == 2 and data_oid == Int16.oid.decimal);
 			return std.mem.readIntBig(i16, data[0..2]);
 		}
 	};
 
 	pub const Int32 = struct {
-		const oid = OID.make(23);
+		pub const oid = OID.make(23);
 		const encoding = &binary_encoding;
 
 		fn encode(value: i32, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -58,14 +58,14 @@ pub const Types = struct {
 			return Int32.encode(@intCast(value), buf, format_pos);
 		}
 
-		pub fn decode(data: []const u8) i32 {
-			std.debug.assert(data.len == 4);
+		pub fn decode(data: []const u8, data_oid: i32) i32 {
+			std.debug.assert(data.len == 4 and data_oid == Int32.oid.decimal);
 			return std.mem.readIntBig(i32, data[0..4]);
 		}
 	};
 
 	pub const Int64 = struct {
-		const oid = OID.make(20);
+		pub const oid = OID.make(20);
 		const encoding = &binary_encoding;
 
 		fn encode(value: i64, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -79,14 +79,36 @@ pub const Types = struct {
 			return Int64.encode(@intCast(value), buf, format_pos);
 		}
 
-		pub fn decode(data: []const u8) i64 {
-			std.debug.assert(data.len == 8);
-			return std.mem.readIntBig(i64, data[0..8]);
+		pub fn decode(data: []const u8, data_oid: i32) i64 {
+			switch (data_oid) {
+				Timestamp.oid.decimal => return Timestamp.decode(data, data_oid),
+				else => {
+					std.debug.assert(data.len == 8 and data_oid == Int64.oid.decimal);
+					return std.mem.readIntBig(i64, data[0..8]);
+				},
+			}
+		}
+	};
+
+	pub const Timestamp = struct {
+		pub const oid = OID.make(1114);
+		const encoding = &binary_encoding;
+		const us_from_epoch_to_y2k = 946_684_800_000_000;
+
+		fn encode(value: i64, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(Timestamp.encoding, format_pos);
+			try buf.write(&.{0, 0, 0, 8}); // length of our data
+			return buf.writeIntBig(i64, value - us_from_epoch_to_y2k);
+		}
+
+		pub fn decode(data: []const u8, data_oid: i32) i64 {
+			std.debug.assert(data.len == 8 and data_oid == Timestamp.oid.decimal);
+			return std.mem.readIntBig(i64, data[0..8]) + us_from_epoch_to_y2k;
 		}
 	};
 
 	pub const Float32 = struct {
-		const oid = OID.make(700);
+		pub const oid = OID.make(700);
 		const encoding = &binary_encoding;
 
 		fn encode(value: f32, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -96,8 +118,8 @@ pub const Types = struct {
 			return buf.writeIntBig(i32, tmp.*);
 		}
 
-		pub fn decode(data: []const u8) f32 {
-			std.debug.assert(data.len == 4);
+		pub fn decode(data: []const u8, data_oid: i32) f32 {
+			std.debug.assert(data.len == 4 and data_oid == Float32.oid.decimal);
 			const n = std.mem.readIntBig(i32, data[0..4]);
 			const tmp: *f32 = @constCast(@ptrCast(&n));
 			return tmp.*;
@@ -105,7 +127,7 @@ pub const Types = struct {
 	};
 
 	pub const Float64 = struct {
-		const oid = OID.make(701);
+		pub const oid = OID.make(701);
 		const encoding = &binary_encoding;
 
 		fn encode(value: f64, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -117,16 +139,45 @@ pub const Types = struct {
 			return buf.writeIntBig(i64, tmp.*);
 		}
 
-		pub fn decode(data: []const u8) f64 {
-			std.debug.assert(data.len == 8);
-			const n = std.mem.readIntBig(i64, data[0..8]);
-			const tmp: *f64 = @constCast(@ptrCast(&n));
-			return tmp.*;
+		pub fn decode(data: []const u8, data_oid: i32) f64 {
+			switch (data_oid) {
+				Numeric.oid.decimal => return Numeric.decode(data, data_oid),
+				else => {
+					std.debug.assert(data.len == 8 and data_oid == Float64.oid.decimal);
+					const n = std.mem.readIntBig(i64, data[0..8]);
+					const tmp: *f64 = @constCast(@ptrCast(&n));
+					return tmp.*;
+				},
+			}
+		}
+	};
+
+	// TODO: switch to binary encoding
+	pub const Numeric = struct {
+		pub const oid = OID.make(1700);
+		const encoding = &text_encoding;
+
+		fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(Numeric.encoding, format_pos);
+
+			try buf.write(&.{0, 0, 0, 0}); // length placeholder
+			const pos = buf.len();
+			try std.fmt.formatFloatDecimal(value, .{}, buf.writer());
+			const len = buf.len() - pos;
+
+			var encoded_len: [4]u8 = undefined;
+			std.mem.writeIntBig(i32, &encoded_len, @intCast(len));
+			buf.writeAt(&encoded_len, pos - 4);
+		}
+
+		pub fn decode(data: []const u8, data_oid: i32) f64 {
+			std.debug.assert(data_oid == Numeric.oid.decimal);
+			return std.fmt.parseFloat(f64, data) catch 0;
 		}
 	};
 
 	pub const Bool = struct {
-		const oid = OID.make(16);
+		pub const oid = OID.make(16);
 		const encoding = &binary_encoding;
 
 		fn encode(value: bool, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -135,14 +186,14 @@ pub const Types = struct {
 			return buf.writeByte(if (value) 1 else 0);
 		}
 
-		pub fn decode(data: []const u8) bool {
-			std.debug.assert(data.len == 1);
+		pub fn decode(data: []const u8, data_oid: i32) bool {
+			std.debug.assert(data.len == 1 and data_oid == Bool.oid.decimal);
 			return data[0] == 1;
 		}
 	};
 
 	pub const String = struct {
-		const oid = OID.make(25);
+		pub const oid = OID.make(25);
 		// https://www.postgresql.org/message-id/CAMovtNoHFod2jMAKQjjxv209PCTJx5Kc66anwWvX0mEiaXwgmA%40mail.gmail.com
 		// says using the text format for text-like things is faster. There was
 		// some other threads that discussed solutions, but it isn't clear if it was
@@ -156,13 +207,14 @@ pub const Types = struct {
 			view.write(value);
 		}
 
-		pub fn decode(data: []const u8) []const u8 {
+		pub fn decode(data: []const u8, data_oid: i32) []const u8 {
+			_ = data_oid;
 			return data;
 		}
 	};
 
 	pub const Bytea = struct {
-		const oid = OID.make(17);
+		pub const oid = OID.make(17);
 		const encoding = &binary_encoding;
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -172,13 +224,14 @@ pub const Types = struct {
 			view.write(value);
 		}
 
-		pub fn decode(data: []const u8) []const u8 {
+		pub fn decode(data: []const u8, data_oid: i32) []const u8 {
+			_ = data_oid;
 			return data;
 		}
 	};
 
 	pub const UUID = struct {
-		const oid = OID.make(2950);
+		pub const oid = OID.make(2950);
 		const encoding = &binary_encoding;
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -192,7 +245,8 @@ pub const Types = struct {
 			}
 		}
 
-		pub fn decode(data: []const u8) []const u8 {
+		pub fn decode(data: []const u8, data_oid: i32) []const u8 {
+			std.debug.assert(data_oid == UUID.oid.decimal);
 			return data;
 		}
 
@@ -270,7 +324,7 @@ pub const Types = struct {
 	};
 
 	pub const Int16Array = struct {
-		const oid = OID.make(1005);
+		pub const oid = OID.make(1005);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const i16, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -285,10 +339,15 @@ pub const Types = struct {
 			buf.writeAt(&Int16.oid, oid_pos);
 			return writeIntArray(i16, 2, values, buf);
 		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) i16 {
+			std.debug.assert(data_oid == Int16Array.oid.decimal);
+			return Int16.decode(data, Int16.oid.decimal);
+		}
 	};
 
 	pub const Int32Array = struct {
-		const oid = OID.make(1007);
+		pub const oid = OID.make(1007);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const i32, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -304,14 +363,14 @@ pub const Types = struct {
 			return writeIntArray(i32, 4, values, buf);
 		}
 
-		pub fn decode(data: []const u8) i32 {
-			std.debug.assert(data.len == 4);
-			return std.mem.readIntBig(i32, data[0..4]);
+		pub fn decodeOne(data: []const u8, data_oid: i32) i32 {
+			std.debug.assert(data_oid == Int32Array.oid.decimal);
+			return Int32.decode(data, Int32.oid.decimal);
 		}
 	};
 
 	pub const Int64Array = struct {
-		const oid = OID.make(1016);
+		pub const oid = OID.make(1016);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const i64, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -327,14 +386,42 @@ pub const Types = struct {
 			return writeIntArray(i64, 8, values, buf);
 		}
 
-		pub fn decode(data: []const u8) i64 {
-			std.debug.assert(data.len == 8);
-			return std.mem.readIntBig(i64, data[0..8]);
+		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
+			switch (data_oid) {
+				TimestampArray.oid.decimal => return TimestampArray.decodeOne(data, data_oid),
+				else => {
+					std.debug.assert(data_oid == Int64Array.oid.decimal);
+					return Int64.decode(data, Int64.oid.decimal);
+				},
+			}
+		}
+	};
+
+	pub const TimestampArray = struct {
+		pub const oid = OID.make(1115);
+		const encoding = &binary_encoding;
+		const us_from_epoch_to_y2k = 946_684_800_000_000;
+
+
+		fn encode(values: []const i64, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Timestamp.oid.encoded, oid_pos);
+
+			// every value is 12 bytes, 4 byte length + 8 byte value
+			var view = try reserveView(buf, 12 * values.len);
+			for (values) |value| {
+				view.write(&.{0, 0, 0, 8}); // length of value
+				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
+			}
+		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
+			std.debug.assert(data_oid == TimestampArray.oid.decimal);
+			return Timestamp.decode(data, Timestamp.oid.decimal);
 		}
 	};
 
 	pub const Float32Array = struct {
-		const oid = OID.make(1021);
+		pub const oid = OID.make(1021);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const f32, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -348,10 +435,15 @@ pub const Types = struct {
 				view.writeIntBig(i32, tmp.*);
 			}
 		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) f32 {
+			std.debug.assert(data_oid == Float32Array.oid.decimal);
+			return Float32.decode(data, Float32.oid.decimal);
+		}
 	};
 
 	pub const Float64Array = struct {
-		const oid = OID.make(1022);
+		pub const oid = OID.make(1022);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const f64, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -365,10 +457,15 @@ pub const Types = struct {
 				view.writeIntBig(i64, tmp.*);
 			}
 		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) f64 {
+			std.debug.assert(data_oid == Float64Array.oid.decimal);
+			return Float64.decode(data, Float64.oid.decimal);
+		}
 	};
 
 	pub const BoolArray = struct {
-		const oid = OID.make(1000);
+		pub const oid = OID.make(1000);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const bool, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -385,30 +482,43 @@ pub const Types = struct {
 				}
 			}
 		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) bool {
+			std.debug.assert(data_oid == BoolArray.oid.decimal);
+			return Bool.decode(data, Bool.oid.decimal);
+		}
 	};
 
 	pub const ByteaArray = struct {
-		const oid = OID.make(1001);
+		pub const oid = OID.make(1001);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Bytea.oid.encoded, oid_pos);
 			return writeByteArray(values, buf);
 		}
+
+		pub fn decodeOne(data: []const u8, _: i32) []const u8 {
+			return data;
+		}
 	};
 
 	pub const StringArray = struct {
-		const oid = OID.make(1009);
+		pub const oid = OID.make(1009);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&String.oid.encoded, oid_pos);
 			return writeByteArray(values, buf);
 		}
+
+		pub fn decodeOne(data: []const u8, _: i32) []const u8 {
+			return data;
+		}
 	};
 
 	pub const UUIDArray = struct {
-		const oid = OID.make(2951);
+		pub const oid = OID.make(2951);
 		const encoding = &binary_encoding;
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -424,6 +534,11 @@ pub const Types = struct {
 					else => return error.InvalidUUID,
 				}
 			}
+		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) []u8 {
+			std.debug.assert(data_oid == UUIDArray.oid.decimal);
+			return UUID.decode(data, UUID.oid.decimal);
 		}
 	};
 
@@ -531,27 +646,29 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 		},
 		.ComptimeInt => {
 			switch (oid) {
-				21 => {
+				Types.Int16.oid.decimal => {
 					if (value > 32767 or value < -32768) return error.IntWontFit;
 					return Types.Int16.encode(@intCast(value), buf, format_pos);
 				},
-				23 => {
+				Types.Int32.oid.decimal => {
 					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
+				Types.Timestamp.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
 				else => return Types.Int64.encode(@intCast(value), buf, format_pos),
 			}
 		},
 		.Int => {
 			switch (oid) {
-				21 => {
+				Types.Int16.oid.decimal => {
 					if (value > 32767 or value < -32768) return error.IntWontFit;
 					return Types.Int16.encode(@intCast(value), buf, format_pos);
 				},
-				23 => {
+				Types.Int32.oid.decimal => {
 					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
+				Types.Timestamp.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
 				else => {
 					if (value > 9223372036854775807 or value < -9223372036854775808) return error.IntWontFit;
 					return Types.Int64.encode(@intCast(value), buf, format_pos);
@@ -560,7 +677,8 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 		},
 		.ComptimeFloat => {
 			switch (oid) {
-				700 => return Types.Float32.encode(@floatCast(value), buf, format_pos),
+				Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
+				Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
 				else => return Types.Float64.encode(@floatCast(value), buf, format_pos),
 			}
 		},
@@ -636,7 +754,12 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 				switch (int.bits) {
 					16 => try Types.Int16Array.encode(value, buf, oid_pos),
 					32 => try Types.Int32Array.encode(value, buf, oid_pos),
-					64 => try Types.Int64Array.encode(value, buf, oid_pos),
+					64 => {
+						switch (oid) {
+							1115 => try Types.TimestampArray.encode(value, buf, oid_pos),
+							else => try Types.Int64Array.encode(value, buf, oid_pos),
+						}
+					},
 					else => compileHaltBindError(SliceT),
 				}
 			} else {

@@ -70,7 +70,11 @@ pub fn setup() !void {
 		\\   col_enum custom_enum,
 		\\   col_enum_arr custom_enum[],
 		\\   col_uuid uuid,
-		\\   col_uuid_arr uuid[]
+		\\   col_uuid_arr uuid[],
+		\\   col_numeric decimal(7, 3),
+		\\   col_numeric_arr decimal(9, 5)[],
+		\\   col_timestamp timestamp,
+		\\   col_timestamp_arr timestamp[]
 		\\ );
 	, .{}) catch |err| try fail(c, err);
 }

@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) !void {
 			.root_source_file = .{ .path = "src/pg.zig" },
 			.target = target,
 			.optimize = optimize,
-			// .filter = "bind error",
+			// .filter = "type support",
 		});
 		addLibs(lib_test, modules);
 

@@ -19,6 +19,10 @@ pub const Result = struct {
 	_dyn_state: bool,
 	_state: State,
 
+	// a sliced version of _state.oids (so we don't have to keep reslicing it to
+	// number_of_columns on each row)
+	_oids: []i32,
+
 	// a sliced version of _state.values (so we don't have to keep reslicing it to
 	// number_of_columns on each row)
 	_values: []State.Value,
@@ -94,6 +98,7 @@ pub const Result = struct {
 
 				return .{
 					.values = values,
+					.oids = self._oids,
 				};
 			},
 			'C' => {
@@ -185,6 +190,7 @@ pub const Result = struct {
 };
 
 pub const Row = struct {
+	oids: []i32,
 	values: []Result.State.Value,
 
 	pub fn get(self: *const Row, comptime T: type, col: usize) ScalarReturnType(T) {
@@ -201,14 +207,15 @@ pub const Row = struct {
 		};
 
 		const data = value.data;
+		const oid = self.oids[col];
 		switch (TT) {
-			i16 => return types.Int16.decode(data),
-			i32 => return types.Int32.decode(data),
-			i64 => return types.Int64.decode(data),
-			f32 => return types.Float32.decode(data),
-			f64 => return types.Float64.decode(data),
-			bool => return types.Bool.decode(data),
-			[]u8, []const u8 => return types.String.decode(data),
+			i16 => return types.Int16.decode(data, oid),
+			i32 => return types.Int32.decode(data, oid),
+			i64 => return types.Int64.decode(data, oid),
+			f32 => return types.Float32.decode(data, oid),
+			f64 => return types.Float64.decode(data, oid),
+			bool => return types.Bool.decode(data, oid),
+			[]u8, []const u8 => return types.String.decode(data, oid),
 			else => compileHaltGetError(T),
 		}
 	}
@@ -221,7 +228,7 @@ pub const Row = struct {
 		};
 	}
 
-	pub fn getIterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
+	pub fn iterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
 		const value = self.values[col];
 		const TT = switch (@typeInfo(T)) {
 			.Optional => |opt| blk: {
@@ -232,13 +239,13 @@ pub const Row = struct {
 		};
 
 		const decoder = switch (TT) {
-			i16 => types.Int16.decode,
-			i32 => types.Int32.decode,
-			i64 => types.Int64.decode,
-			f32 => types.Float32.decode,
-			f64 => types.Float64.decode,
-			bool => types.Bool.decode,
-			[]u8, []const u8 => types.Bytea.decode,
+			i16 => types.Int16Array.decodeOne,
+			i32 => types.Int32Array.decodeOne,
+			i64 => types.Int64Array.decodeOne,
+			f32 => types.Float32Array.decodeOne,
+			f64 => types.Float64Array.decodeOne,
+			bool => types.BoolArray.decodeOne,
+			[]u8, []const u8 => types.ByteaArray.decodeOne,
 			else => compileHaltGetError(T),
 		};
 
@@ -248,6 +255,7 @@ pub const Row = struct {
 			return .{
 				.len = 0,
 				._pos = 0,
+				._oid = 0,
 				._data = &[_]u8{},
 				._decoder = decoder,
 			};
@@ -270,6 +278,7 @@ pub const Row = struct {
 			._pos = 0,
 			._data = data[20..],
 			._decoder = decoder,
+			._oid = self.oids[col],
 		};
 	}
 
@@ -290,9 +299,10 @@ pub const Row = struct {
 fn Iterator(comptime T: type) type {
 	return struct {
 		len: usize,
+		_oid: i32,
 		_pos: usize,
 		_data: []const u8,
-		_decoder: *const fn(data: []const u8) ItemType(),
+		_decoder: *const fn(data: []const u8, data_oid: i32) ItemType(),
 
 		fn ItemType() type {
 			return switch (@typeInfo(T)) {
@@ -318,7 +328,7 @@ fn Iterator(comptime T: type) type {
 			std.debug.assert(data.len >= data_end);
 
 			self._pos = data_end;
-			return self._decoder(data[len_end..data_end]);
+			return self._decoder(data[len_end..data_end], self._oid);
 		}
 
 		pub fn alloc(self: Self, allocator: Allocator) ![]T {
@@ -332,12 +342,13 @@ fn Iterator(comptime T: type) type {
 			const decoder = self._decoder;
 
 			var pos: usize = 0;
+			const oid = self._oid;
 			for (0..self.len) |i| {
 				// TODO: for fixed length types, we don't need to decode the length
 				const len_end = pos + 4;
 				const len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
 				pos = len_end + @as(usize, @intCast(len));
-				into[i] = decoder(data[len_end..pos]);
+				into[i] = decoder(data[len_end..pos], oid);
 			}
 		}
 	};
@@ -594,7 +605,7 @@ test "Result: iterator" {
 		defer result.deinit();
 		var row = (try result.next()).?;
 
-		var iterator = row.getIterator(i32, 0);
+		var iterator = row.iterator(i32, 0);
 		try t.expectEqual(0, iterator.len);
 
 		try t.expectEqual(null, iterator.next());
@@ -611,7 +622,7 @@ test "Result: iterator" {
 		defer result.deinit();
 		var row = (try result.next()).?;
 
-		var iterator = row.getIterator(i32, 0);
+		var iterator = row.iterator(i32, 0);
 		try t.expectEqual(1, iterator.len);
 
 		try t.expectEqual(9, iterator.next());
@@ -630,7 +641,7 @@ test "Result: iterator" {
 		defer result.deinit();
 		var row = (try result.next()).?;
 
-		var iterator = row.getIterator(i32, 0);
+		var iterator = row.iterator(i32, 0);
 		try t.expectEqual(2, iterator.len);
 
 		try t.expectEqual(0, iterator.next());
@@ -654,15 +665,15 @@ test "Result: int[]" {
 
 	var row = (try result.next()).?;
 
-	const v1 = try row.getIterator(i16, 0).alloc(t.allocator);
+	const v1 = try row.iterator(i16, 0).alloc(t.allocator);
 	defer t.allocator.free(v1);
 	try t.expectSlice(i16, &.{-303, 9449, 2}, v1);
 
-	const v2 = try row.getIterator(i32, 1).alloc(t.allocator);
+	const v2 = try row.iterator(i32, 1).alloc(t.allocator);
 	defer t.allocator.free(v2);
 	try t.expectSlice(i32, &.{-3003, 49493229, 0}, v2);
 
-	const v3 = try row.getIterator(i64, 2).alloc(t.allocator);
+	const v3 = try row.iterator(i64, 2).alloc(t.allocator);
 	defer t.allocator.free(v3);
 	try t.expectSlice(i64, &.{944949338498392, -2}, v3);
 }
@@ -677,11 +688,11 @@ test "Result: float[]" {
 
 	var row = (try result.next()).?;
 
-	const v1 = try row.getIterator(f32, 0).alloc(t.allocator);
+	const v1 = try row.iterator(f32, 0).alloc(t.allocator);
 	defer t.allocator.free(v1);
 	try t.expectSlice(f32, &.{1.1, 0, -384.2}, v1);
 
-	const v2 = try row.getIterator(f64, 1).alloc(t.allocator);
+	const v2 = try row.iterator(f64, 1).alloc(t.allocator);
 	defer t.allocator.free(v2);
 	try t.expectSlice(f64, &.{-888585.123322, 0.001}, v2);
 }
@@ -696,7 +707,7 @@ test "Result: bool[]" {
 
 	var row = (try result.next()).?;
 
-	const v1 = try row.getIterator(bool, 0).alloc(t.allocator);
+	const v1 = try row.iterator(bool, 0).alloc(t.allocator);
 	defer t.allocator.free(v1);
 	try t.expectSlice(bool, &.{true, false, false}, v1);
 }
@@ -713,13 +724,13 @@ test "Result: text[] & bytea[]" {
 
 	var row = (try result.next()).?;
 
-	const v1 = try row.getIterator([]u8, 0).alloc(t.allocator);
+	const v1 = try row.iterator([]u8, 0).alloc(t.allocator);
 	defer t.allocator.free(v1);
 	try t.expectString("over", v1[0]);
 	try t.expectString("9000", v1[1]);
 	try t.expectEqual(2, v1.len);
 
-	const v2 = try row.getIterator([]const u8, 1).alloc(t.allocator);
+	const v2 = try row.iterator([]const u8, 1).alloc(t.allocator);
 	defer t.allocator.free(v2);
 	try t.expectString(&arr1, v2[0]);
 	try t.expectString(&arr2, v2[1]);

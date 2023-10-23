@@ -178,7 +178,6 @@ pub const Conn = struct {
 	}
 
 	pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !Result {
-		// std.debug.print("{c}\n", .{self._state});
 		var dyn_state = false;
 		var number_of_columns: u16 = 0;
 		var state = self._result_state;
@@ -398,6 +397,7 @@ pub const Conn = struct {
 			._state = state,
 			._allocator = allocator,
 			._dyn_state = dyn_state,
+			._oids = state.oids[0..number_of_columns],
 			._values = state.values[0..number_of_columns],
 			.column_names = if (opts.column_names) state.names[0..number_of_columns] else &[_][]const u8{},
 			.number_of_columns = number_of_columns,
@@ -775,7 +775,9 @@ test "PG: type support" {
 		\\   col_text, col_text_arr,
 		\\   col_bytea, col_bytea_arr,
 		\\   col_enum, col_enum_arr,
-		\\   col_uuid, col_uuid_arr
+		\\   col_uuid, col_uuid_arr,
+		\\   col_numeric, col_numeric_arr,
+		\\   col_timestamp, col_timestamp_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -787,7 +789,9 @@ test "PG: type support" {
 		\\   $14, $15,
 		\\   $16, $17,
 		\\   $18, $19,
-		\\   $20, $21
+		\\   $20, $21,
+		\\   $22, $23,
+		\\   $24, $25
 		\\ )
 		, .{
 			1,
@@ -801,6 +805,8 @@ test "PG: type support" {
 			[_]u8{0, 0, 2, 255, 255, 255}, &[_][]u8{&bytea1, &bytea2},
 			"val1", [_][]const u8{"val1", "val2"},
 			"b7cc282f-ec43-49be-8e09-aafab0104915", [_][]const u8{"166B4751-D702-4FB9-9A2A-CD6B69ED18D6", "ae2f475f-8070-41b7-ba33-86bba8897bde"},
+			1234.567, null,
+			169804639500713, [_]i64{169804639500713, -94668480000000}
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -821,7 +827,9 @@ test "PG: type support" {
 		\\   col_text, col_text_arr,
 		\\   col_bytea, col_bytea_arr,
 		\\   col_enum, col_enum_arr,
-		\\   col_uuid, col_uuid_arr
+		\\   col_uuid, col_uuid_arr,
+		\\   col_numeric, 'numeric[] placeholder',
+		\\   col_timestamp, col_timestamp_arr
 		\\ from all_types where id = $1
 	, .{1});
 	defer result.deinit();
@@ -838,43 +846,43 @@ test "PG: type support" {
 	{
 		// smallint & smallint[]
 		try t.expectEqual(382, row.get(i16, 1));
-		try t.expectSlice(i16, &.{-9000, 9001}, try row.getIterator(i16, 2).alloc(aa));
+		try t.expectSlice(i16, &.{-9000, 9001}, try row.iterator(i16, 2).alloc(aa));
 	}
 
 	{
 		// int & int[]
 		try t.expectEqual(-96534, row.get(i32, 3));
-		try t.expectSlice(i32, &.{-4929123}, try row.getIterator(i32, 4).alloc(aa));
+		try t.expectSlice(i32, &.{-4929123}, try row.iterator(i32, 4).alloc(aa));
 	}
 
 	{
 		// bigint & bigint[]
 		try t.expectEqual(8983919283, row.get(i64, 5));
-		try t.expectSlice(i64, &.{8888848483,0,-1}, try row.getIterator(i64, 6).alloc(aa));
+		try t.expectSlice(i64, &.{8888848483,0,-1}, try row.iterator(i64, 6).alloc(aa));
 	}
 
 	{
 		// float4, float4[]
 		try t.expectEqual(1.2345, row.get(f32, 7));
-		try t.expectSlice(f32, &.{4.492, -0.000021}, try row.getIterator(f32, 8).alloc(aa));
+		try t.expectSlice(f32, &.{4.492, -0.000021}, try row.iterator(f32, 8).alloc(aa));
 	}
 
 	{
 		// float8, float8[]
 		try t.expectEqual(-48832.3233231, row.get(f64, 9));
-		try t.expectSlice(f64, &.{393.291133, 3.1144}, try row.getIterator(f64, 10).alloc(aa));
+		try t.expectSlice(f64, &.{393.291133, 3.1144}, try row.iterator(f64, 10).alloc(aa));
 	}
 
 	{
 		// bool, bool[]
 		try t.expectEqual(true, row.get(bool, 11));
-		try t.expectSlice(bool, &.{false, true}, try row.getIterator(bool, 12).alloc(aa));
+		try t.expectSlice(bool, &.{false, true}, try row.iterator(bool, 12).alloc(aa));
 	}
 
 	{
 		// text, text[]
 		try t.expectString("a text column", row.get([]u8, 13));
-		var text_arr = try row.getIterator([]const u8, 14).alloc(aa);
+		var text_arr = try row.iterator([]const u8, 14).alloc(aa);
 		try t.expectEqual(3, text_arr.len);
 		try t.expectString("it's", text_arr[0]);
 		try t.expectString("over", text_arr[1]);
@@ -884,7 +892,7 @@ test "PG: type support" {
 	{
 		// bytea, bytea[]
 		try t.expectSlice(u8, &.{0, 0, 2, 255, 255, 255}, row.get([]const u8, 15));
-		var bytea_arr = try row.getIterator([]u8, 16).alloc(aa);
+		var bytea_arr = try row.iterator([]u8, 16).alloc(aa);
 		try t.expectEqual(2, bytea_arr.len);
 		try t.expectSlice(u8, &bytea1, bytea_arr[0]);
 		try t.expectSlice(u8, &bytea2, bytea_arr[1]);
@@ -893,7 +901,7 @@ test "PG: type support" {
 	{
 		// enum, emum[]
 		try t.expectString("val1", row.get([]u8, 17));
-		var enum_arr = try row.getIterator([]const u8, 18).alloc(aa);
+		var enum_arr = try row.iterator([]const u8, 18).alloc(aa);
 		try t.expectEqual(2, enum_arr.len);
 		try t.expectString("val1", enum_arr[0]);
 		try t.expectString("val2", enum_arr[1]);
@@ -902,10 +910,22 @@ test "PG: type support" {
 	{
 		//uuid, uuid[]
 		try t.expectSlice(u8, &.{183, 204, 40, 47, 236, 67, 73, 190, 142, 9, 170, 250, 176, 16, 73, 21}, row.get([]u8, 19));
-		var uuid_arr = try row.getIterator([]const u8, 20).alloc(aa);
+		var uuid_arr = try row.iterator([]const u8, 20).alloc(aa);
 		try t.expectEqual(2, uuid_arr.len);
 		try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 214}, uuid_arr[0]);
 		try t.expectSlice(u8, &.{174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222}, uuid_arr[1]);
+	}
+
+	{
+		//decimal
+		try t.expectString("1234.567", row.get([]u8, 21));
+		try t.expectEqual(1234.567, row.get(f64, 21));
+	}
+
+	{
+		//timestamp
+		try t.expectEqual(169804639500713, row.get(i64, 23));
+		try t.expectSlice(i64, &.{169804639500713, -94668480000000}, try row.iterator(i64, 24).alloc(aa));
 	}
 
 	try t.expectEqual(null, try result.next());
@@ -927,7 +947,9 @@ test "PG: null support" {
 		\\   col_text, col_text_arr,
 		\\   col_bytea, col_bytea_arr,
 		\\   col_enum, col_enum_arr,
-		\\   col_uuid, col_uuid_arr
+		\\   col_uuid, col_uuid_arr,
+		\\   col_numeric, col_numeric_arr,
+		\\   col_timestamp, col_timestamp_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -939,7 +961,9 @@ test "PG: null support" {
 		\\   $14, $15,
 		\\   $16, $17,
 		\\   $18, $19,
-		\\   $20, $21
+		\\   $20, $21,
+		\\   $22, $23,
+		\\   $24, $25
 		\\ )
 		, .{
 			2,
@@ -952,7 +976,9 @@ test "PG: null support" {
 			null, null,
 			null, null,
 			null, null,
-			null, null
+			null, null,
+			null, null,
+			null, null,
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -973,41 +999,49 @@ test "PG: null support" {
 		\\   col_text, col_text_arr,
 		\\   col_bytea, col_bytea_arr,
 		\\   col_enum, col_enum_arr,
-		\\   col_uuid, col_uuid_arr
+		\\   col_uuid, col_uuid_arr,
+		\\   col_numeric, 'numeric[] placeholder',
+		\\   col_timestamp, col_timestamp_arr
 		\\ from all_types where id = $1
 	, .{2});
 	defer result.deinit();
 
 	const row = (try result.next()) orelse unreachable;
 	try t.expectEqual(null, row.get(?i16, 1));
-	try t.expectEqual(null, row.getIterator(?i16, 2));
+	try t.expectEqual(null, row.iterator(?i16, 2));
 
 	try t.expectEqual(null, row.get(?i32, 3));
-	try t.expectEqual(null, row.getIterator(?i32, 4));
+	try t.expectEqual(null, row.iterator(?i32, 4));
 
 	try t.expectEqual(null, row.get(?i64, 5));
-	try t.expectEqual(null, row.getIterator(?i64, 6));
+	try t.expectEqual(null, row.iterator(?i64, 6));
 
 	try t.expectEqual(null, row.get(?f32, 7));
-	try t.expectEqual(null, row.getIterator(?f32, 8));
+	try t.expectEqual(null, row.iterator(?f32, 8));
 
 	try t.expectEqual(null, row.get(?f64, 9));
-	try t.expectEqual(null, row.getIterator(?f64, 10));
+	try t.expectEqual(null, row.iterator(?f64, 10));
 
 	try t.expectEqual(null, row.get(?bool, 11));
-	try t.expectEqual(null, row.getIterator(?bool, 12));
+	try t.expectEqual(null, row.iterator(?bool, 12));
 
 	try t.expectEqual(null, row.get(?[]u8, 13));
-	try t.expectEqual(null, row.getIterator(?[]u8, 14));
+	try t.expectEqual(null, row.iterator(?[]u8, 14));
 
 	try t.expectEqual(null, row.get(?[]const u8, 15));
-	try t.expectEqual(null, row.getIterator(?[]const u8, 16));
+	try t.expectEqual(null, row.iterator(?[]const u8, 16));
 
 	try t.expectEqual(null, row.get(?[]const u8, 17));
-	try t.expectEqual(null, row.getIterator(?[]const u8, 18));
+	try t.expectEqual(null, row.iterator(?[]const u8, 18));
 
 	try t.expectEqual(null, row.get(?[]u8, 19));
-	try t.expectEqual(null, row.getIterator(?[]const u8, 20));
+	try t.expectEqual(null, row.iterator(?[]const u8, 20));
+
+	try t.expectEqual(null, row.get(?[]u8, 21));
+	try t.expectEqual(null, row.get(?f64, 21));
+
+	try t.expectEqual(null, row.get(?i64, 23));
+	try t.expectEqual(null, row.iterator(?i64, 24));
 
 	try t.expectEqual(null, try result.next());
 }
