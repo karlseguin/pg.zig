@@ -19,6 +19,10 @@ pub const Result = struct {
 	_dyn_state: bool,
 	_state: State,
 
+	// a sliced version of _state.values (so we don't have to keep reslicing it to
+	// number_of_columns on each row)
+	_values: []State.Value,
+
 	pub fn deinit(self: Result) void {
 		const allocator = self._allocator;
 		if (self._dyn_state) {
@@ -27,6 +31,13 @@ pub const Result = struct {
 
 		for (self.column_names) |name| {
 			allocator.free(name);
+		}
+
+		// value.data references the buffer of the reader, this buffer is potentially
+		// reused and potentially discarded. There are at least a few very good
+		// reasons why the least we can do is blank it out.
+		for (self._values) |*value| {
+			value.data = &[_]u8{};
 		}
 		self._conn._reader.endFlow();
 	}
@@ -58,8 +69,6 @@ pub const Result = struct {
 		switch (msg.type) {
 			'D' => {
 				const data = msg.data;
-				const state = self._state;
-
 				// Since our Row API gets data by column #, we need translate the column
 				// # to a slice within msg.data. We could do this on the fly within Row,
 				// but creating this mapping up front simplifies things and, in normal
@@ -68,17 +77,17 @@ pub const Result = struct {
 
 				// first column starts at position 2
 				var offset: usize = 2;
-				var values = state.values;
-				for (0..self.number_of_columns) |i| {
+				var values = self._values;
+				for (values) |*value| {
 					const data_start = offset + 4;
 					const length = std.mem.readIntBig(i32, data[offset..data_start][0..4]);
 					if (length == -1) {
-						values[i].is_null = true;
+						value.is_null = true;
+						value.data = &[_]u8{};
 					} else {
 						const data_end = data_start + @as(usize, @intCast(length));
-						var entry = &values[i];
-						entry.is_null = false;
-						entry.data = data[data_start..data_end];
+						value.is_null = false;
+						value.data = data[data_start..data_end];
 						offset = data_end;
 					}
 				}
@@ -111,7 +120,7 @@ pub const Result = struct {
 		values: []Value,
 
 		// The OID for each returned column
-		result_oids: []i32,
+		oids: []i32,
 
 		pub const Value = struct {
 			is_null: bool,
@@ -125,13 +134,13 @@ pub const Result = struct {
 			const values = try allocator.alloc(Value, size);
 			errdefer allocator.free(values);
 
-			const result_oids = try allocator.alloc(i32, size);
-			errdefer allocator.free(result_oids);
+			const oids = try allocator.alloc(i32, size);
+			errdefer allocator.free(oids);
 
 			return .{
 				.names = names,
 				.values = values,
-				.result_oids = result_oids,
+				.oids = oids,
 			};
 		}
 
@@ -158,7 +167,7 @@ pub const Result = struct {
 
 				{
 					const end = pos + 4;
-					self.result_oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
+					self.oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
 					pos = end;
 				}
 
@@ -170,7 +179,7 @@ pub const Result = struct {
 		pub fn deinit(self: State, allocator: Allocator) void {
 			allocator.free(self.names);
 			allocator.free(self.values);
-			allocator.free(self.result_oids);
+			allocator.free(self.oids);
 		}
 	};
 };
@@ -185,7 +194,10 @@ pub const Row = struct {
 				if (value.is_null) return null;
 				break :blk opt.child;
 			},
-			else => T,
+			else => blk: {
+				std.debug.assert(value.is_null == false);
+				break :blk T;
+			},
 		};
 
 		const data = value.data;
@@ -227,11 +239,10 @@ pub const Row = struct {
 			f64 => types.Float64.decode,
 			bool => types.Bool.decode,
 			[]u8, []const u8 => types.Bytea.decode,
-			else => compileHaltGetError(TT),
+			else => compileHaltGetError(T),
 		};
 
 		const data = value.data;
-
 		if (data.len == 12) {
 			// we have an empty
 			return .{
@@ -276,7 +287,7 @@ pub const Row = struct {
 	}
 };
 
-pub fn Iterator(comptime T: type) type {
+fn Iterator(comptime T: type) type {
 	return struct {
 		len: usize,
 		_pos: usize,
@@ -311,12 +322,12 @@ pub fn Iterator(comptime T: type) type {
 		}
 
 		pub fn alloc(self: Self, allocator: Allocator) ![]T {
-			var arr = try allocator.alloc(T, self.len);
-			self.fill(arr);
-			return arr;
+			var into = try allocator.alloc(T, self.len);
+			self.fill(into);
+			return into;
 		}
 
-		pub fn fill(self: Self, arr: []T) void {
+		pub fn fill(self: Self, into: []T) void {
 			const data = self._data;
 			const decoder = self._decoder;
 
@@ -326,7 +337,7 @@ pub fn Iterator(comptime T: type) type {
 				const len_end = pos + 4;
 				const len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
 				pos = len_end + @as(usize, @intCast(len));
-				arr[i] = decoder(data[len_end..pos]);
+				into[i] = decoder(data[len_end..pos]);
 			}
 		}
 	};
@@ -713,4 +724,16 @@ test "Result: text[] & bytea[]" {
 	try t.expectString(&arr1, v2[0]);
 	try t.expectString(&arr2, v2[1]);
 	try t.expectEqual(2, v2.len);
+}
+
+test "Result: UUID" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select $1::uuid, $2::uuid";
+	var result = try c.query(sql, .{"fcbebf0f-b996-43b9-9818-672bc689cda8", &[_]u8{174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222}});
+	defer result.deinit();
+
+	const row = (try result.next()).?;
+	try t.expectSlice(u8, &.{252, 190, 191, 15, 185, 150, 67, 185, 152, 24, 103, 43, 198, 137, 205, 168}, row.get([]u8, 0));
+	try t.expectSlice(u8, &.{174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222}, row.get([]u8, 1));
 }

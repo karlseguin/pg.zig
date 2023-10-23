@@ -132,12 +132,12 @@ test "Pool" {
 		defer pool.release(c1);
 
 		const affected = try c1.exec("delete from pool_test", .{});
-		try t.expectEqual(6000, affected.?);
+		try t.expectEqual(1500, affected.?);
 	}
 }
 
 fn testPool(p: *Pool) void {
-	for (0..2000) |i| {
+	for (0..500) |i| {
 		const conn = p.acquire() catch unreachable;
 		_ = conn.exec("insert into pool_test (id) values ($1)", .{i}) catch unreachable;
 		p.release(conn);

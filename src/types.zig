@@ -1,18 +1,33 @@
 const std = @import("std");
+const lib = @import("lib.zig");
 const buffer = @import("buffer");
-
-const text_format = [_]u8{0, 0};
-const binary_format = [_]u8{0, 1};
 
 // These are nested inside the the Types structure so that we can generate an
 // oid => encoding maping. See the oidEncoding function.
+const OID = struct {
+	decimal: i32,
+	encoded: [4]u8,
+
+	fn make(decimal: i32) OID {
+		var encoded: [4]u8 = undefined;
+		std.mem.writeIntBig(i32, &encoded, decimal);
+		return .{
+			.decimal = decimal,
+			.encoded = encoded,
+		};
+	}
+};
+
+const text_encoding = [2]u8{0, 0};
+const binary_encoding = [2]u8{0, 1};
+
 pub const Types = struct {
 	pub const Int16 = struct {
-		const oid = [_]u8{0, 0, 0, 21};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(21);
+		const encoding = &binary_encoding;
 
 		fn encode(value: i16, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&binary_format, format_pos);
+			buf.writeAt(Int16.encoding, format_pos);
 			try buf.write(&.{0, 0, 0, 2}); // length of our data
 			return buf.writeIntBig(i16, value);
 		}
@@ -29,11 +44,11 @@ pub const Types = struct {
 	};
 
 	pub const Int32 = struct {
-		const oid = [_]u8{0, 0, 0, 23};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(23);
+		const encoding = &binary_encoding;
 
 		fn encode(value: i32, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&binary_format, format_pos);
+			buf.writeAt(Int32.encoding, format_pos);
 			try buf.write(&.{0, 0, 0, 4}); // length of our data
 			return buf.writeIntBig(i32, value);
 		}
@@ -50,11 +65,11 @@ pub const Types = struct {
 	};
 
 	pub const Int64 = struct {
-		const oid = [_]u8{0, 0, 0, 20};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(20);
+		const encoding = &binary_encoding;
 
 		fn encode(value: i64, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&binary_format, format_pos);
+			buf.writeAt(Int64.encoding, format_pos);
 			try buf.write(&.{0, 0, 0, 8}); // length of our data
 			return buf.writeIntBig(i64, value);
 		}
@@ -71,52 +86,51 @@ pub const Types = struct {
 	};
 
 	pub const Float32 = struct {
-		const oid = [_]u8{0, 0, 2, 188};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(700);
+		const encoding = &binary_encoding;
 
 		fn encode(value: f32, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&binary_format, format_pos);
+			buf.writeAt(Float32.encoding, format_pos);
 			try buf.write(&.{0, 0, 0, 4}); // length of our data
-			const t: *i32 = @constCast(@ptrCast(&value));
-			return buf.writeIntBig(i32, t.*);
+			const tmp: *i32 = @constCast(@ptrCast(&value));
+			return buf.writeIntBig(i32, tmp.*);
 		}
 
 		pub fn decode(data: []const u8) f32 {
 			std.debug.assert(data.len == 4);
 			const n = std.mem.readIntBig(i32, data[0..4]);
-			const t : *f32 = @constCast(@ptrCast(&n));
-			return t.*;
+			const tmp: *f32 = @constCast(@ptrCast(&n));
+			return tmp.*;
 		}
 	};
 
 	pub const Float64 = struct {
-		const oid = [_]u8{0, 0, 2, 189};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(701);
+		const encoding = &binary_encoding;
 
 		fn encode(value: f64, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&binary_format, format_pos);
+			buf.writeAt(Float64.encoding, format_pos);
 
 			try buf.write(&.{0, 0, 0, 8}); // length of our data
 			// not sure if this is the best option...
-			const t: *i64 = @constCast(@ptrCast(&value));
-			return buf.writeIntBig(i64, t.*);
+			const tmp: *i64 = @constCast(@ptrCast(&value));
+			return buf.writeIntBig(i64, tmp.*);
 		}
 
 		pub fn decode(data: []const u8) f64 {
 			std.debug.assert(data.len == 8);
 			const n = std.mem.readIntBig(i64, data[0..8]);
-			const t : *f64 = @constCast(@ptrCast(&n));
-			return t.*;
+			const tmp: *f64 = @constCast(@ptrCast(&n));
+			return tmp.*;
 		}
 	};
 
 	pub const Bool = struct {
-		const oid = [_]u8{0, 0, 0, 16};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(16);
+		const encoding = &binary_encoding;
 
 		fn encode(value: bool, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&binary_format, format_pos);
-
+			buf.writeAt(Bool.encoding, format_pos);
 			try buf.write(&.{0, 0, 0, 1}); // length of our data
 			return buf.writeByte(if (value) 1 else 0);
 		}
@@ -128,15 +142,15 @@ pub const Types = struct {
 	};
 
 	pub const String = struct {
+		const oid = OID.make(25);
 		// https://www.postgresql.org/message-id/CAMovtNoHFod2jMAKQjjxv209PCTJx5Kc66anwWvX0mEiaXwgmA%40mail.gmail.com
 		// says using the text format for text-like things is faster. There was
 		// some other threads that discussed solutions, but it isn't clear if it was
 		// ever fixed.
-		const oid = [_]u8{0, 0, 0, 25};
-		const pg_send_format = &text_format;
+		const encoding = &text_encoding;
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&text_format, format_pos);
+			buf.writeAt(String.encoding, format_pos);
 			var view = try reserveView(buf, 4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
@@ -148,11 +162,11 @@ pub const Types = struct {
 	};
 
 	pub const Bytea = struct {
-		const oid = [_]u8{0, 0, 0, 17};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(17);
+		const encoding = &binary_encoding;
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(&binary_format, format_pos);
+			buf.writeAt(Bytea.encoding, format_pos);
 			var view = try reserveView(buf, 4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
@@ -163,12 +177,104 @@ pub const Types = struct {
 		}
 	};
 
+	pub const UUID = struct {
+		const oid = OID.make(2950);
+		const encoding = &binary_encoding;
+
+		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(UUID.encoding, format_pos);
+			var view = try reserveView(buf, 20);
+			view.write(&.{0, 0, 0, 16});
+			switch (value.len) {
+				16 => view.write(value),
+				36 => view.write(&(try UUID.toBytes(value))),
+				else => return error.InvalidUUID,
+			}
+		}
+
+		pub fn decode(data: []const u8) []const u8 {
+			return data;
+		}
+
+		const hex = "0123456789abcdef";
+		const encoded_pos = [16]u8{ 0, 2, 4, 6, 9, 11, 14, 16, 19, 21, 24, 26, 28, 30, 32, 34 };
+		const hex_to_nibble = [256]u8{
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+			0x08, 0x09, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		};
+
+		pub fn toString(uuid: []const u8) ![36]u8 {
+			if (uuid.len != 16) {
+				return error.InvalidUUID;
+			}
+
+			var out: [36]u8 = undefined;
+			out[8] = '-';
+			out[13] = '-';
+			out[18] = '-';
+			out[23] = '-';
+
+			inline for (encoded_pos, 0..) |i, j| {
+				out[i + 0] = hex[uuid[j] >> 4];
+				out[i + 1] = hex[uuid[j] & 0x0f];
+			}
+			return out;
+		}
+
+		pub fn toBytes(str: []const u8) ![16]u8 {
+			if (str.len != 36 or str[8] != '-' or str[13] != '-' or str[18] != '-' or str[23] != '-') {
+				return error.InvalidUUID;
+			}
+
+			var out: [16]u8 = undefined;
+			inline for (encoded_pos, 0..) |i, j| {
+				const hi = hex_to_nibble[str[i + 0]];
+				const lo = hex_to_nibble[str[i + 1]];
+				if (hi == 0xff or lo == 0xff) {
+					return error.InvalidUUID;
+				}
+				out[j] = hi << 4 | lo;
+			}
+			return out;
+		}
+	};
+
 	pub const Int16Array = struct {
-		const oid = [_]u8{0, 0, 3, 237};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1005);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const i16, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&Int16.oid, oid_pos);
+			buf.writeAt(&Int16.oid.encoded, oid_pos);
 			return writeIntArray(i16, 2, values, buf);
 		}
 
@@ -182,11 +288,11 @@ pub const Types = struct {
 	};
 
 	pub const Int32Array = struct {
-		const oid = [_]u8{0, 0, 3, 239};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1007);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const i32, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&Int32.oid, oid_pos);
+			buf.writeAt(&Int32.oid.encoded, oid_pos);
 			return writeIntArray(i32, 4, values, buf);
 		}
 
@@ -205,11 +311,11 @@ pub const Types = struct {
 	};
 
 	pub const Int64Array = struct {
-		const oid = [_]u8{0, 0, 3, 248};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1016);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const i64, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&Int64.oid, oid_pos);
+			buf.writeAt(&Int64.oid.encoded, oid_pos);
 			return writeIntArray(i64, 8, values, buf);
 		}
 
@@ -228,45 +334,45 @@ pub const Types = struct {
 	};
 
 	pub const Float32Array = struct {
-		const oid = [_]u8{0, 0, 3, 253};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1021);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const f32, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&Float32.oid, oid_pos);
+			buf.writeAt(&Float32.oid.encoded, oid_pos);
 
 			// every value takes 8 bytes, 4 for the length, 4 for the value
 			var view = try reserveView(buf, 8 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 4}); //length
-				const t: *i32 = @constCast(@ptrCast(&value));
-				view.writeIntBig(i32, t.*);
+				const tmp: *i32 = @constCast(@ptrCast(&value));
+				view.writeIntBig(i32, tmp.*);
 			}
 		}
 	};
 
 	pub const Float64Array = struct {
-		const oid = [_]u8{0, 0, 3, 254};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1022);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const f64, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&Float64.oid, oid_pos);
+			buf.writeAt(&Float64.oid.encoded, oid_pos);
 
 			// every value takes 12 bytes, 4 for the length, 8 for the value
 			var view = try reserveView(buf, 12 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 8}); //length
-				const t: *i64 = @constCast(@ptrCast(&value));
-				view.writeIntBig(i64, t.*);
+				const tmp: *i64 = @constCast(@ptrCast(&value));
+				view.writeIntBig(i64, tmp.*);
 			}
 		}
 	};
 
 	pub const BoolArray = struct {
-		const oid = [_]u8{0, 0, 3, 232};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1000);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const bool, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&Bool.oid, oid_pos);
+			buf.writeAt(&Bool.oid.encoded, oid_pos);
 
 			// every value takes 5 bytes, 4 for the length, 1 for the value
 			var view = try reserveView(buf, 5 * values.len);
@@ -282,34 +388,55 @@ pub const Types = struct {
 	};
 
 	pub const ByteaArray = struct {
-		const oid = [_]u8{0, 0, 3, 233};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1001);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&Bytea.oid, oid_pos);
+			buf.writeAt(&Bytea.oid.encoded, oid_pos);
 			return writeByteArray(values, buf);
 		}
 	};
 
 	pub const StringArray = struct {
-		const oid = [_]u8{0, 0, 3, 241};
-		const pg_send_format = &binary_format;
+		const oid = OID.make(1009);
+		const encoding = &binary_encoding;
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
-			buf.writeAt(&String.oid, oid_pos);
+			buf.writeAt(&String.oid.encoded, oid_pos);
 			return writeByteArray(values, buf);
 		}
 	};
 
-	// Return the encoding we want PG to use for a particular OID
-	fn oidEncoding(oid: i32) *const [2]u8 {
-		inline for (@typeInfo(@This()).Struct.decls) |decl| {
-			const S = @field(@This(), decl.name);
-			if (std.mem.readIntBig(i32, &S.oid) == oid) {
-				return S.pg_send_format;
+	pub const UUIDArray = struct {
+		const oid = OID.make(2951);
+		const encoding = &binary_encoding;
+
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&UUID.oid.encoded, oid_pos);
+
+			// every value is 20 bytes, 4 byte length + 16 byte value
+			var view = try reserveView(buf, 20 * values.len);
+			for (values) |value| {
+				view.write(&.{0, 0, 0, 16}); // length of value
+				switch (value.len) {
+					16 => view.write(value),
+					36 => view.write(&(try UUID.toBytes(value))),
+					else => return error.InvalidUUID,
+				}
 			}
 		}
-		return &text_format;
+	};
+
+	// Return the encoding we want PG to use for a particular OID
+	fn encoding(oid: i32) *const [2]u8 {
+		inline for (@typeInfo(@This()).Struct.decls) |decl| {
+			const S = @field(@This(), decl.name);
+			if (oid == S.oid.decimal) {
+				return S.encoding;
+			}
+		}
+		// default to text encoding
+		return &binary_encoding;
 	}
 
 	fn writeIntArray(comptime T: type, size: usize, values: []const T, buf: *buffer.Buffer) !void {
@@ -324,17 +451,17 @@ pub const Types = struct {
 	}
 
 	fn writeByteArray(values: []const []const u8, buf: *buffer.Buffer) !void {
-			// each value has a 4 byte length prefix
-			var len = values.len * 4;
-			for (values) |value| {
-				len += value.len;
-			}
+		// each value has a 4 byte length prefix
+		var len = values.len * 4;
+		for (values) |value| {
+			len += value.len;
+		}
 
-			var view = try reserveView(buf, len);
-			for (values) |value| {
-				view.writeIntBig(i32, @intCast(value.len));
-				view.write(value);
-			}
+		var view = try reserveView(buf, len);
+		for (values) |value| {
+			view.writeIntBig(i32, @intCast(value.len));
+			view.write(value);
+		}
 	}
 
 	fn reserveView(buf: *buffer.Buffer, space: usize) !buffer.View {
@@ -472,6 +599,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	if (T == u8) {
 		switch (oid) {
 			17 => return Types.Bytea.encode(value, buf, format_pos),
+			2950 => return Types.UUID.encode(value, buf, format_pos),
 			else => return Types.String.encode(value, buf, format_pos),
 		}
 	}
@@ -484,7 +612,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 
 	// arrays are always binary encoded (for now...)
 
-	buf.writeAt(&binary_format, format_pos);
+	buf.writeAt(&binary_encoding, format_pos);
 
 	const start_pos = buf.len();
 
@@ -529,8 +657,11 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 		.Pointer => |ptr| switch (ptr.size) {
 			.Slice => switch (ptr.child) {
 				u8 => switch (oid) {
-					1001 => try Types.ByteaArray.encode(value, buf, oid_pos),
-					else => try Types.StringArray.encode(value, buf, oid_pos),
+					1009 => try Types.StringArray.encode(value, buf, oid_pos),
+					2951 => try Types.UUIDArray.encode(value, buf, oid_pos),
+					// we try this as a default to support user defined types with unknown oids
+					// (like an array of enums)
+					else => try Types.ByteaArray.encode(value, buf, oid_pos),
 				},
 				else => compileHaltBindError(SliceT),
 			},
@@ -538,15 +669,15 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 		},
 		.Array => |arr| switch (arr.child) {
 			u8 => switch (oid) {
-				1001 => try Types.ByteaArray.encode(&value, buf, oid_pos),
-				else => try Types.StringArray.encode(&value, buf, oid_pos),
+				1009 => try Types.StringArray.encode(&value, buf, oid_pos),
+				2951 => try Types.UUIDArray.encode(&value, buf, oid_pos),
+				// we try this as a default to support user defined types with unknown oids
+				// (like an array of enums)
+				else => try Types.ByteaArray.encode(&value, buf, oid_pos),
 			},
 			else => compileHaltBindError(SliceT),
 		},
-		else => |x| {
-			@compileLog(x);
-			compileHaltBindError(SliceT);
-		},
+		else => compileHaltBindError(SliceT),
 	}
 
 	var param_len: [4]u8 = undefined;
@@ -571,10 +702,25 @@ pub fn resultEncoding(oids: []i32, buf: *buffer.Buffer) !void {
 
 	view.writeIntBig(u16, @intCast(oids.len));
 	for (oids) |oid| {
-		view.write(Types.oidEncoding(oid));
+		view.write(Types.encoding(oid));
 	}
 }
 
 fn compileHaltBindError(comptime T: type) noreturn {
 	@compileError("cannot bind value of type " ++ @typeName(T));
+}
+
+const t = lib.testing;
+test "UUID: toString" {
+	try t.expectError(error.InvalidUUID, Types.UUID.toString(&.{73, 190, 142, 9, 170, 250, 176, 16, 73, 21}));
+
+	const s = try Types.UUID.toString(&.{183, 204, 40, 47, 236, 67, 73, 190, 142, 9, 170, 250, 176, 16, 73, 21});
+	try t.expectString("b7cc282f-ec43-49be-8e09-aafab0104915", &s);
+}
+
+test "UUID: toBytes" {
+	try t.expectError(error.InvalidUUID, Types.UUID.toBytes(""));
+
+	const s = try Types.UUID.toBytes("166B4751-D702-4FB9-9A2A-CD6B69ED18D6");
+	try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 214}, &s);
 }

@@ -28,21 +28,26 @@ pub fn getRandom() std.rand.DefaultPrng {
 pub fn setup() !void {
 	var c = connect(.{});
 	defer c.deinit();
-	_ = try c.exec(
+	_ = c.exec(
 		\\ drop user if exists pgz_user_nopass;
 		\\ drop user if exists pgz_user_clear;
 		\\ drop user if exists pgz_user_scram_sha256;
 		\\ create user pgz_user_nopass;
 		\\ create user pgz_user_clear with password 'pgz_user_clear_pw';
 		\\ create user pgz_user_scram_sha256 with password 'pgz_user_scram_sha256_pw';
-	, .{});
+	, .{}) catch |err| try fail(c, err);
 
-	_ = try c.exec(
+	_ = c.exec(
 		\\ drop table if exists simple_table;
 		\\ create table simple_table (value text);
-	, .{});
+	, .{}) catch |err| try fail(c, err);
 
-	_ = try c.exec(
+	_ = c.exec(
+		\\ drop type if exists custom_enum cascade;
+		\\ create type custom_enum as enum ('val1', 'val2');
+	, .{}) catch |err| try fail(c, err);
+
+	_ = c.exec(
 		\\ drop table if exists all_types;
 		\\ create table all_types (
 		\\   id integer primary key,
@@ -61,9 +66,13 @@ pub fn setup() !void {
 		\\   col_float8_arr float[],
 		\\   col_bool_arr bool[],
 		\\   col_text_arr text[],
-		\\   col_bytea_arr bytea[]
+		\\   col_bytea_arr bytea[],
+		\\   col_enum custom_enum,
+		\\   col_enum_arr custom_enum[],
+		\\   col_uuid uuid,
+		\\   col_uuid_arr uuid[]
 		\\ );
-	, .{});
+	, .{}) catch |err| try fail(c, err);
 }
 
 // Dummy net.Stream, lets us setup data to be read and capture data that is written.

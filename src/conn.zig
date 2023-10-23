@@ -139,7 +139,7 @@ pub const Conn = struct {
 			// read the server's response
 			const res = try self.read();
 			if (res.type != 'R') {
-				return error.UnexpectedDBMessage;
+				return self.unexpectedMessage();
 			}
 
 			switch (try proto.AuthenticationRequest.parse(res.data)) {
@@ -155,10 +155,10 @@ pub const Conn = struct {
 			// and we're now waiting for a reply, server should send a final auth ok message
 			const res = try self.read();
 			if (res.type != 'R') {
-				return error.UnexpectedDBMessage;
+				return self.unexpectedMessage();
 			}
 			if (std.meta.activeTag(try proto.AuthenticationRequest.parse(res.data)) != .ok) {
-				return error.UnexpectedDBMessage;
+				return self.unexpectedMessage();
 			}
 		}
 
@@ -168,7 +168,7 @@ pub const Conn = struct {
 				'Z' => return,
 				'K' => {}, // TODO: BackendKeyData
 				'S' => {}, // TODO: ParameterStatus,
-				else => return error.UnexpectedDBMessage,
+				else => return self.unexpectedMessage(),
 			}
 		}
 	}
@@ -178,6 +178,7 @@ pub const Conn = struct {
 	}
 
 	pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !Result {
+		// std.debug.print("{c}\n", .{self._state});
 		var dyn_state = false;
 		var number_of_columns: u16 = 0;
 		var state = self._result_state;
@@ -257,11 +258,18 @@ pub const Conn = struct {
 				try self.stream.writeAll(buf.string());
 			}
 
+			// no longer idle, we're now in a query
+			self._state = 'Q';
+
 			// First message we expect back is a ParseComplete, which has no data.
 			{
-				const msg = try self.read();
+				const msg = self.read() catch |err| {
+					self.readyForQuery() catch {};
+					return err;
+				};
+
 				if (msg.type != '1') {
-					return error.UnexpectedDBMessage;
+					return self.unexpectedMessage();
 				}
 			}
 
@@ -269,10 +277,13 @@ pub const Conn = struct {
 				// we expect a ParameterDescription message
 				const msg = try self.read();
 				if (msg.type != 't') {
-					return error.UnexpectedDBMessage;
+					return self.unexpectedMessage();
 				}
 
 				const data = msg.data;
+				if (std.mem.readIntBig(i16, data[0..2]) != param_oids.len) {
+					return error.ParameterCount;
+				}
 				var pos: usize = 2;
 				for (0..param_oids.len) |i| {
 					const end = pos + 4;
@@ -291,12 +302,8 @@ pub const Conn = struct {
 					'n' => {}, // no data, number_of_columns = 0
 					'T' => {
 						const data = msg.data;
-						if (data.len < 2) {
-							return error.UnexpectedDBMessage;
-						}
-
 						number_of_columns = std.mem.readIntBig(u16, data[0..2]);
-						if (number_of_columns > state.result_oids.len) {
+						if (number_of_columns > state.oids.len) {
 							// we have more columns than our self._result_state can handle, we
 							// need to create a new Result.State specifically for this
 							dyn_state = true;
@@ -305,7 +312,7 @@ pub const Conn = struct {
 						const a: ?Allocator = if (opts.column_names) allocator else null;
 						try state.from(number_of_columns, data, a);
 					},
-					else => return error.UnexpectedDBMessage,
+					else => return self.unexpectedMessage(),
 				}
 			}
 
@@ -335,7 +342,7 @@ pub const Conn = struct {
 			// we're not done builing our Bind message! The last part is us telling
 			// the server what format it should use for each column that it's sending
 			// back (if any).
-			try types.resultEncoding(state.result_oids[0..number_of_columns], buf);
+			try types.resultEncoding(state.oids[0..number_of_columns], buf);
 
 			{
 				// fill in the length of our Bind message
@@ -364,12 +371,11 @@ pub const Conn = struct {
 				const msg = try self.read();
 				if (msg.type != '2') {
 					// expecting a BindComplete
-					return error.UnexpectedDBMessage;
+					return self.unexpectedMessage();
 				}
 			}
 		}
 
-		// no longer idle, we're now in a query
 		self._state = 'Q';
 
 		return .{
@@ -377,9 +383,21 @@ pub const Conn = struct {
 			._state = state,
 			._allocator = allocator,
 			._dyn_state = dyn_state,
-			.number_of_columns = number_of_columns,
+			._values = state.values[0..number_of_columns],
 			.column_names = if (opts.column_names) state.names[0..number_of_columns] else &[_][]const u8{},
+			.number_of_columns = number_of_columns,
 		};
+	}
+
+	pub fn scalar(self: *Conn, comptime T: type, sql: []const u8, values: anytype) ScalarReturnType(T) {
+		var result = try self.queryOpts(sql, values, .{});
+		defer result.deinit();
+
+		const row = (try result.next()) orelse return null;
+		const value = row.get(T, 0);
+		try result.drain();
+
+		return value;
 	}
 
 	// Execute a query that does not return rows
@@ -425,14 +443,14 @@ pub const Conn = struct {
 				'Z' => return affected,
 				'T' => affected = 0,
 				'D' => affected = (affected orelse 0) + 1,
- 				else => return error.UnexpectedDBMessage,
+ 				else => return self.unexpectedMessage(),
 			}
 		}
 	}
 
 	fn authSASL(self: *Conn, opts: StartupOpts, req: proto.AuthenticationRequest.SASL) !void {
 		if (!req.scram_sha_256) {
-			return error.UnusportedSASLMechanism;
+			return self.unexpectedMessage();
 		}
 		var buf = &self._buf;
 
@@ -548,14 +566,33 @@ pub const Conn = struct {
 		return error.PG;
 	}
 
+	fn unexpectedMessage(self: *Conn) error{UnexpectedDBMessage} {
+		self._state = 'E';
+		return error.UnexpectedDBMessage;
+	}
+
 	// should not be called directly
 	pub fn readyForQuery(self: *Conn) !void {
 		const msg = try self.read();
 		if (msg.type != 'Z') {
-			return error.UnexpectedDBMessage;
+			return self.unexpectedMessage();
 		}
 	}
 };
+
+fn ScalarReturnType(comptime T: type) type {
+	const TT = switch (@typeInfo(T)) {
+		.Optional => |opt| opt.child,
+		else => T,
+	};
+
+	const TTT = switch (TT) {
+		[]u8 => []const u8,
+		else => TT,
+	};
+
+	return anyerror!?TTT;
+}
 
 const t = lib.testing;
 test "Conn: startup trust (no pass)" {
@@ -658,6 +695,19 @@ test "Conn: exec query that returns rows" {
 	try t.expectEqual(2, c.exec("select * from simple_table where value like $1", .{"exec_sel_%"}));
 }
 
+test "Conn: scalar" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	try t.expectEqual(null, try c.scalar(?i32, "select $1::int", .{null}));
+	try t.expectEqual(9876, (try c.scalar(i32, "select $1::int", .{9876})).?);
+	try t.expectEqual(null, try c.scalar(?i32, "select $1::int", .{null}));
+	try t.expectEqual(1234, (try c.scalar(?i32, "select $1::int", .{1234})).?);
+	try t.expectEqual(false, (try c.scalar(bool, "select $1::bool", .{false})).?);
+	try t.expectString("abc", (try c.scalar([]u8, "select $1::text", .{"abc"})).?);
+	try t.expectEqual(null, try c.scalar(?[]u8, "select $1::text", .{null}));
+}
+
 test "Conn: parse error" {
 	var c = t.connect(.{});
 	defer c.deinit();
@@ -667,6 +717,16 @@ test "Conn: parse error" {
 	try t.expectString("42601", err.code);
 	try t.expectString("ERROR", err.severity);
 	try t.expectString("syntax error at or near \"selct\"", err.message);
+
+	// connection is still usable
+	try t.expectEqual(2, (try c.scalar(i32, "select 2", .{})).?);
+}
+
+test "Conn: wrong parameter count" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	try t.expectError(error.ParameterCount, c.query("select $1", .{}));
+	// try t.expectError(error.ParameterCount, c.query("select $1", .{1, 2}));
 }
 
 test "PG: type support" {
@@ -679,26 +739,41 @@ test "PG: type support" {
 		const result = c.exec(\\
 		\\ insert into all_types (
 		\\   id,
-		\\   col_int2, col_int4, col_int8, col_float4, col_float8,
-		\\   col_bool, col_text, col_bytea,
-		\\   col_int2_arr, col_int4_arr, col_int8_arr,
-		\\   col_float4_arr, col_float8_arr, col_bool_arr,
-		\\   col_text_arr, col_bytea_arr
+		\\   col_int2, col_int2_arr,
+		\\   col_int4, col_int4_arr,
+		\\   col_int8, col_int8_arr,
+		\\   col_float4, col_float4_arr,
+		\\   col_float8, col_float8_arr,
+		\\   col_bool, col_bool_arr,
+		\\   col_text, col_text_arr,
+		\\   col_bytea, col_bytea_arr,
+		\\   col_enum, col_enum_arr,
+		\\   col_uuid, col_uuid_arr
 		\\ ) values (
 		\\   $1,
-		\\   $2, $3, $4, $5, $6,
-		\\   $7, $8, $9,
-		\\   $10, $11, $12,
-		\\   $13, $14, $15,
-		\\   $16, $17
+		\\   $2, $3,
+		\\   $4, $5,
+		\\   $6, $7,
+		\\   $8, $9,
+		\\   $10, $11,
+		\\   $12, $13,
+		\\   $14, $15,
+		\\   $16, $17,
+		\\   $18, $19,
+		\\   $20, $21
 		\\ )
 		, .{
 			1,
-			@as(i16, 382), @as(i32, -96534), @as(i64, 8983919283), @as(f32, 1.2345), @as(f64, -48832.3233231),
-			true, "a text column", [_]u8{0, 0, 2, 255, 255, 255},
-			[_]i16{-9000, 9001}, [_]i32{-4929123}, [_]i64{8888848483,0,-1},
-			[_]f32{4.492, -0.000021}, [_]f64{393.291133, 3.1144}, [_]bool{false, true},
-			[_][]const u8{"it's", "over", "9000"}, &[_][]u8{&bytea1, &bytea2}
+			@as(i16, 382), [_]i16{-9000, 9001},
+			@as(i32, -96534), [_]i32{-4929123},
+			@as(i64, 8983919283), [_]i64{8888848483,0,-1},
+			@as(f32, 1.2345), [_]f32{4.492, -0.000021},
+			@as(f64, -48832.3233231), [_]f64{393.291133, 3.1144},
+			true, [_]bool{false, true},
+			"a text column", [_][]const u8{"it's", "over", "9000"},
+			[_]u8{0, 0, 2, 255, 255, 255}, &[_][]u8{&bytea1, &bytea2},
+			"val1", [_][]const u8{"val1", "val2"},
+			"b7cc282f-ec43-49be-8e09-aafab0104915", [_][]const u8{"166B4751-D702-4FB9-9A2A-CD6B69ED18D6", "ae2f475f-8070-41b7-ba33-86bba8897bde"},
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -707,7 +782,21 @@ test "PG: type support" {
 		}
 	}
 
-	var result = try c.query("select * from all_types where id = $1", .{1});
+	var result = try c.query(
+		\\ select
+		\\   id,
+		\\   col_int2, col_int2_arr,
+		\\   col_int4, col_int4_arr,
+		\\   col_int8, col_int8_arr,
+		\\   col_float4, col_float4_arr,
+		\\   col_float8, col_float8_arr,
+		\\   col_bool, col_bool_arr,
+		\\   col_text, col_text_arr,
+		\\   col_bytea, col_bytea_arr,
+		\\   col_enum, col_enum_arr,
+		\\   col_uuid, col_uuid_arr
+		\\ from all_types where id = $1
+	, .{1});
 	defer result.deinit();
 
 	// used for our arrays
@@ -718,32 +807,79 @@ test "PG: type support" {
 
 	const row = (try result.next()) orelse unreachable;
 	try t.expectEqual(1, row.get(i32, 0));
-	try t.expectEqual(382, row.get(i16, 1));
-	try t.expectEqual(-96534, row.get(i32, 2));
-	try t.expectEqual(8983919283, row.get(i64, 3));
-	try t.expectEqual(1.2345, row.get(f32, 4));
-	try t.expectEqual(-48832.3233231, row.get(f64, 5));
-	try t.expectEqual(true, row.get(bool, 6));
-	try t.expectString("a text column", row.get([]u8, 7));
-	try t.expectSlice(u8, &.{0, 0, 2, 255, 255, 255}, row.get([]const u8, 8));
 
-	try t.expectSlice(i16, &.{-9000, 9001}, try row.getIterator(i16, 9).alloc(aa));
-	try t.expectSlice(i32, &.{-4929123}, try row.getIterator(i32, 10).alloc(aa));
-	try t.expectSlice(i64, &.{8888848483,0,-1}, try row.getIterator(i64, 11).alloc(aa));
-	try t.expectSlice(f32, &.{4.492, -0.000021}, try row.getIterator(f32, 12).alloc(aa));
-	try t.expectSlice(f64, &.{393.291133, 3.1144}, try row.getIterator(f64, 13).alloc(aa));
-	try t.expectSlice(bool, &.{false, true}, try row.getIterator(bool, 14).alloc(aa));
+	{
+		// smallint & smallint[]
+		try t.expectEqual(382, row.get(i16, 1));
+		try t.expectSlice(i16, &.{-9000, 9001}, try row.getIterator(i16, 2).alloc(aa));
+	}
 
-	var text_arr = try row.getIterator([]const u8, 15).alloc(aa);
-	try t.expectEqual(3, text_arr.len);
-	try t.expectString("it's", text_arr[0]);
-	try t.expectString("over", text_arr[1]);
-	try t.expectString("9000", text_arr[2]);
+	{
+		// int & int[]
+		try t.expectEqual(-96534, row.get(i32, 3));
+		try t.expectSlice(i32, &.{-4929123}, try row.getIterator(i32, 4).alloc(aa));
+	}
 
-	var bytea_arr = try row.getIterator([]u8, 16).alloc(aa);
-	try t.expectEqual(2, bytea_arr.len);
-	try t.expectSlice(u8, &bytea1, bytea_arr[0]);
-	try t.expectSlice(u8, &bytea2, bytea_arr[1]);
+	{
+		// bigint & bigint[]
+		try t.expectEqual(8983919283, row.get(i64, 5));
+		try t.expectSlice(i64, &.{8888848483,0,-1}, try row.getIterator(i64, 6).alloc(aa));
+	}
+
+	{
+		// float4, float4[]
+		try t.expectEqual(1.2345, row.get(f32, 7));
+		try t.expectSlice(f32, &.{4.492, -0.000021}, try row.getIterator(f32, 8).alloc(aa));
+	}
+
+	{
+		// float8, float8[]
+		try t.expectEqual(-48832.3233231, row.get(f64, 9));
+		try t.expectSlice(f64, &.{393.291133, 3.1144}, try row.getIterator(f64, 10).alloc(aa));
+	}
+
+	{
+		// bool, bool[]
+		try t.expectEqual(true, row.get(bool, 11));
+		try t.expectSlice(bool, &.{false, true}, try row.getIterator(bool, 12).alloc(aa));
+	}
+
+	{
+		// text, text[]
+		try t.expectString("a text column", row.get([]u8, 13));
+		var text_arr = try row.getIterator([]const u8, 14).alloc(aa);
+		try t.expectEqual(3, text_arr.len);
+		try t.expectString("it's", text_arr[0]);
+		try t.expectString("over", text_arr[1]);
+		try t.expectString("9000", text_arr[2]);
+	}
+
+	{
+		// bytea, bytea[]
+		try t.expectSlice(u8, &.{0, 0, 2, 255, 255, 255}, row.get([]const u8, 15));
+		var bytea_arr = try row.getIterator([]u8, 16).alloc(aa);
+		try t.expectEqual(2, bytea_arr.len);
+		try t.expectSlice(u8, &bytea1, bytea_arr[0]);
+		try t.expectSlice(u8, &bytea2, bytea_arr[1]);
+	}
+
+	{
+		// enum, emum[]
+		try t.expectString("val1", row.get([]u8, 17));
+		var enum_arr = try row.getIterator([]const u8, 18).alloc(aa);
+		try t.expectEqual(2, enum_arr.len);
+		try t.expectString("val1", enum_arr[0]);
+		try t.expectString("val2", enum_arr[1]);
+	}
+
+	{
+		//uuid, uuid[]
+		try t.expectSlice(u8, &.{183, 204, 40, 47, 236, 67, 73, 190, 142, 9, 170, 250, 176, 16, 73, 21}, row.get([]u8, 19));
+		var uuid_arr = try row.getIterator([]const u8, 20).alloc(aa);
+		try t.expectEqual(2, uuid_arr.len);
+		try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 214}, uuid_arr[0]);
+		try t.expectSlice(u8, &.{174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222}, uuid_arr[1]);
+	}
 
 	try t.expectEqual(null, try result.next());
 }
@@ -753,26 +889,42 @@ test "PG: null support" {
 	defer c.deinit();
 	{
 		const result = c.exec(\\
-		\\ insert into all_types (id,
-		\\   col_int2, col_int4, col_int8, col_float4, col_float8,
-		\\   col_bool, col_text, col_bytea,
-		\\   col_int2_arr, col_int4_arr, col_int8_arr,
-		\\   col_float4_arr, col_float8_arr, col_bool_arr,
-		\\   col_text_arr, col_bytea_arr
+		\\ insert into all_types (
+		\\   id,
+		\\   col_int2, col_int2_arr,
+		\\   col_int4, col_int4_arr,
+		\\   col_int8, col_int8_arr,
+		\\   col_float4, col_float4_arr,
+		\\   col_float8, col_float8_arr,
+		\\   col_bool, col_bool_arr,
+		\\   col_text, col_text_arr,
+		\\   col_bytea, col_bytea_arr,
+		\\   col_enum, col_enum_arr,
+		\\   col_uuid, col_uuid_arr
 		\\ ) values (
 		\\   $1,
-		\\   $2, $3, $4, $5, $6,
-		\\   $7, $8, $9,
-		\\   $10, $11, $12,
-		\\   $13, $14, $15,
-		\\   $16, $17
+		\\   $2, $3,
+		\\   $4, $5,
+		\\   $6, $7,
+		\\   $8, $9,
+		\\   $10, $11,
+		\\   $12, $13,
+		\\   $14, $15,
+		\\   $16, $17,
+		\\   $18, $19,
+		\\   $20, $21
 		\\ )
 		, .{
 			2,
-			null, null, null, null, null,
-			null, null, null,
-			null, null, null,
-			null, null, null,
+			null, null,
+			null, null,
+			null, null,
+			null, null,
+			null, null,
+			null, null,
+			null, null,
+			null, null,
+			null, null,
 			null, null
 		});
 		if (result) |affected| {
@@ -782,26 +934,53 @@ test "PG: null support" {
 		}
 	}
 
-	var result = try c.query("select * from all_types where id = $1", .{2});
+	var result = try c.query(
+		\\ select
+		\\   id,
+		\\   col_int2, col_int2_arr,
+		\\   col_int4, col_int4_arr,
+		\\   col_int8, col_int8_arr,
+		\\   col_float4, col_float4_arr,
+		\\   col_float8, col_float8_arr,
+		\\   col_bool, col_bool_arr,
+		\\   col_text, col_text_arr,
+		\\   col_bytea, col_bytea_arr,
+		\\   col_enum, col_enum_arr,
+		\\   col_uuid, col_uuid_arr
+		\\ from all_types where id = $1
+	, .{2});
 	defer result.deinit();
 
 	const row = (try result.next()) orelse unreachable;
 	try t.expectEqual(null, row.get(?i16, 1));
-	try t.expectEqual(null, row.get(?i32, 2));
-	try t.expectEqual(null, row.get(?i64, 3));
-	try t.expectEqual(null, row.get(?f32, 4));
-	try t.expectEqual(null, row.get(?f64, 5));
-	try t.expectEqual(null, row.get(?bool, 6));
-	try t.expectEqual(null, row.get(?[]u8, 7));
-	try t.expectEqual(null, row.get(?[]const u8, 8));
-	try t.expectEqual(null, row.getIterator(?i16, 9));
-	try t.expectEqual(null, row.getIterator(?i32, 10));
-	try t.expectEqual(null, row.getIterator(?i64, 11));
-	try t.expectEqual(null, row.getIterator(?f32, 12));
-	try t.expectEqual(null, row.getIterator(?f64, 13));
-	try t.expectEqual(null, row.getIterator(?bool, 14));
-	try t.expectEqual(null, row.getIterator(?[]u8, 15));
+	try t.expectEqual(null, row.getIterator(?i16, 2));
+
+	try t.expectEqual(null, row.get(?i32, 3));
+	try t.expectEqual(null, row.getIterator(?i32, 4));
+
+	try t.expectEqual(null, row.get(?i64, 5));
+	try t.expectEqual(null, row.getIterator(?i64, 6));
+
+	try t.expectEqual(null, row.get(?f32, 7));
+	try t.expectEqual(null, row.getIterator(?f32, 8));
+
+	try t.expectEqual(null, row.get(?f64, 9));
+	try t.expectEqual(null, row.getIterator(?f64, 10));
+
+	try t.expectEqual(null, row.get(?bool, 11));
+	try t.expectEqual(null, row.getIterator(?bool, 12));
+
+	try t.expectEqual(null, row.get(?[]u8, 13));
+	try t.expectEqual(null, row.getIterator(?[]u8, 14));
+
+	try t.expectEqual(null, row.get(?[]const u8, 15));
 	try t.expectEqual(null, row.getIterator(?[]const u8, 16));
+
+	try t.expectEqual(null, row.get(?[]const u8, 17));
+	try t.expectEqual(null, row.getIterator(?[]const u8, 18));
+
+	try t.expectEqual(null, row.get(?[]u8, 19));
+	try t.expectEqual(null, row.getIterator(?[]const u8, 20));
 
 	try t.expectEqual(null, try result.next());
 }
