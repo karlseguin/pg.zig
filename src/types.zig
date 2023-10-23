@@ -206,11 +206,6 @@ pub const Types = struct {
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
-
-		pub fn decode(data: []const u8, data_oid: i32) []const u8 {
-			_ = data_oid;
-			return data;
-		}
 	};
 
 	pub const Bytea = struct {
@@ -225,8 +220,10 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) []const u8 {
-			_ = data_oid;
-			return data;
+			switch (data_oid) {
+				JSONB.oid.decimal => return JSONB.decode(data, data_oid),
+				else => return data,
+			}
 		}
 	};
 
@@ -320,6 +317,37 @@ pub const Types = struct {
 				out[j] = hi << 4 | lo;
 			}
 			return out;
+		}
+	};
+
+	pub const JSON = struct {
+		pub const oid = OID.make(114);
+		const encoding = &binary_encoding;
+
+		fn encodeBytes(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(JSON.encoding, format_pos);
+			var view = try reserveView(buf, 4 + value.len);
+			view.writeIntBig(i32, @intCast(value.len));
+			view.write(value);
+		}
+	};
+
+	pub const JSONB = struct {
+		pub const oid = OID.make(3802);
+		const encoding = &binary_encoding;
+
+		fn encodeBytes(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(JSONB.encoding, format_pos);
+			var view = try reserveView(buf, 5 + value.len);
+			// + 1 for the version
+			view.writeIntBig(i32, @intCast(value.len + 1));
+			view.writeByte(1); // jsonb version
+			view.write(value);
+		}
+
+		fn decode(data: []const u8, data_oid: i32) []const u8 {
+			lib.assert(data.len > 0 and data_oid == JSONB.oid.decimal);
+			return data[1..];
 		}
 	};
 
@@ -498,8 +526,11 @@ pub const Types = struct {
 			return writeByteArray(values, buf);
 		}
 
-		pub fn decodeOne(data: []const u8, _: i32) []const u8 {
-			return data;
+		pub fn decodeOne(data: []const u8, data_oid: i32) []const u8 {
+			switch (data_oid) {
+				JSONBArray.oid.decimal => return JSONBArray.decodeOne(data),
+				else => return data,
+			}
 		}
 	};
 
@@ -510,10 +541,6 @@ pub const Types = struct {
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&String.oid.encoded, oid_pos);
 			return writeByteArray(values, buf);
-		}
-
-		pub fn decodeOne(data: []const u8, _: i32) []const u8 {
-			return data;
 		}
 	};
 
@@ -539,6 +566,44 @@ pub const Types = struct {
 		pub fn decodeOne(data: []const u8, data_oid: i32) []u8 {
 			lib.assert(data_oid == UUIDArray.oid.decimal);
 			return UUID.decode(data, UUID.oid.decimal);
+		}
+	};
+
+	pub const JSONArray = struct {
+		pub const oid = OID.make(199);
+		const encoding = &binary_encoding;
+
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&JSON.oid.encoded, oid_pos);
+			return writeByteArray(values, buf);
+		}
+	};
+
+	pub const JSONBArray = struct {
+		pub const oid = OID.make(3807);
+		const encoding = &binary_encoding;
+
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&JSONB.oid.encoded, oid_pos);
+
+			// every value has a 5 byte prefix, a 4 byte length and a 1 byte version
+			var len = values.len * 5;
+			for (values) |value| {
+				len += value.len;
+			}
+
+			var view = try reserveView(buf, len);
+			for (values) |value| {
+				// + 1 for the version
+				view.writeIntBig(i32, @intCast(value.len + 1));
+				view.writeByte(1); // version
+				view.write(value);
+			}
+		}
+
+		fn decodeOne(value: []const u8) []const u8 {
+			lib.assert(value.len > 0 and value[0] == 1); // the version
+			return value[1..];
 		}
 	};
 
@@ -716,8 +781,10 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, format_pos: usize) !void {
 	if (T == u8) {
 		switch (oid) {
-			17 => return Types.Bytea.encode(value, buf, format_pos),
-			2950 => return Types.UUID.encode(value, buf, format_pos),
+			Types.Bytea.oid.decimal => return Types.Bytea.encode(value, buf, format_pos),
+			Types.UUID.oid.decimal => return Types.UUID.encode(value, buf, format_pos),
+			Types.JSONB.oid.decimal => return Types.JSONB.encodeBytes(value, buf, format_pos),
+			Types.JSON.oid.decimal => return Types.JSON.encodeBytes(value, buf, format_pos),
 			else => return Types.String.encode(value, buf, format_pos),
 		}
 	}
@@ -780,8 +847,10 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 		.Pointer => |ptr| switch (ptr.size) {
 			.Slice => switch (ptr.child) {
 				u8 => switch (oid) {
-					1009 => try Types.StringArray.encode(value, buf, oid_pos),
-					2951 => try Types.UUIDArray.encode(value, buf, oid_pos),
+					Types.StringArray.oid.decimal => try Types.StringArray.encode(value, buf, oid_pos),
+					Types.UUIDArray.oid.decimal => try Types.UUIDArray.encode(value, buf, oid_pos),
+					Types.JSONBArray.oid.decimal => try Types.JSONBArray.encode(value, buf, oid_pos),
+					Types.JSONArray.oid.decimal => try Types.JSONArray.encode(value, buf, oid_pos),
 					// we try this as a default to support user defined types with unknown oids
 					// (like an array of enums)
 					else => try Types.ByteaArray.encode(value, buf, oid_pos),
@@ -792,8 +861,10 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 		},
 		.Array => |arr| switch (arr.child) {
 			u8 => switch (oid) {
-				1009 => try Types.StringArray.encode(&value, buf, oid_pos),
-				2951 => try Types.UUIDArray.encode(&value, buf, oid_pos),
+				Types.StringArray.oid.decimal => try Types.StringArray.encode(&value, buf, oid_pos),
+				Types.UUIDArray.oid.decimal => try Types.UUIDArray.encode(&value, buf, oid_pos),
+				Types.JSONBArray.oid.decimal => try Types.JSONBArray.encode(&value, buf, oid_pos),
+				Types.JSONArray.oid.decimal => try Types.JSONArray.encode(&value, buf, oid_pos),
 				// we try this as a default to support user defined types with unknown oids
 				// (like an array of enums)
 				else => try Types.ByteaArray.encode(&value, buf, oid_pos),

@@ -74,7 +74,11 @@ pub fn setup() !void {
 		\\   col_numeric decimal(7, 3),
 		\\   col_numeric_arr decimal(9, 5)[],
 		\\   col_timestamp timestamp,
-		\\   col_timestamp_arr timestamp[]
+		\\   col_timestamp_arr timestamp[],
+		\\   col_json json,
+		\\   col_json_arr json[],
+		\\   col_jsonb jsonb,
+		\\   col_jsonb_arr jsonb[]
 		\\ );
 	, .{}) catch |err| try fail(c, err);
 }

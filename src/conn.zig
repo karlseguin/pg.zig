@@ -739,7 +739,9 @@ test "PG: type support" {
 		\\   col_enum, col_enum_arr,
 		\\   col_uuid, col_uuid_arr,
 		\\   col_numeric, col_numeric_arr,
-		\\   col_timestamp, col_timestamp_arr
+		\\   col_timestamp, col_timestamp_arr,
+		\\   col_json, col_json_arr,
+		\\   col_jsonb, col_jsonb_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -753,7 +755,9 @@ test "PG: type support" {
 		\\   $18, $19,
 		\\   $20, $21,
 		\\   $22, $23,
-		\\   $24, $25
+		\\   $24, $25,
+		\\   $26, $27,
+		\\   $28, $29
 		\\ )
 		, .{
 			1,
@@ -768,7 +772,9 @@ test "PG: type support" {
 			"val1", [_][]const u8{"val1", "val2"},
 			"b7cc282f-ec43-49be-8e09-aafab0104915", [_][]const u8{"166B4751-D702-4FB9-9A2A-CD6B69ED18D6", "ae2f475f-8070-41b7-ba33-86bba8897bde"},
 			1234.567, null,
-			169804639500713, [_]i64{169804639500713, -94668480000000}
+			169804639500713, [_]i64{169804639500713, -94668480000000},
+			"{\"count\":1.3}", [_][]const u8{"[1,2,3]", "{\"rows\":[{\"a\": true}]}"},
+			"{\"over\":9000}", [_][]const u8{"[true,false]", "{\"cols\":[{\"z\": 0.003}]}"},
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -791,7 +797,9 @@ test "PG: type support" {
 		\\   col_enum, col_enum_arr,
 		\\   col_uuid, col_uuid_arr,
 		\\   col_numeric, 'numeric[] placeholder',
-		\\   col_timestamp, col_timestamp_arr
+		\\   col_timestamp, col_timestamp_arr,
+		\\   col_json, col_json_arr,
+		\\   col_jsonb, col_jsonb_arr
 		\\ from all_types where id = $1
 	, .{1});
 	defer result.deinit();
@@ -890,6 +898,24 @@ test "PG: type support" {
 		try t.expectSlice(i64, &.{169804639500713, -94668480000000}, try row.iterator(i64, 24).alloc(aa));
 	}
 
+	{
+		// json, json[]
+		try t.expectString("{\"count\":1.3}", row.get([]u8, 25));
+		var text_arr = try row.iterator([]const u8, 26).alloc(aa);
+		try t.expectEqual(2, text_arr.len);
+		try t.expectString("[1,2,3]", text_arr[0]);
+		try t.expectString("{\"rows\":[{\"a\": true}]}", text_arr[1]);
+	}
+
+		{
+		// jsonb, jsonb[]
+		try t.expectString("{\"over\": 9000}", row.get([]u8, 27));
+		var text_arr = try row.iterator([]const u8, 28).alloc(aa);
+		try t.expectEqual(2, text_arr.len);
+		try t.expectString("[true, false]", text_arr[0]);
+		try t.expectString("{\"cols\": [{\"z\": 0.003}]}", text_arr[1]);
+	}
+
 	try t.expectEqual(null, try result.next());
 }
 
@@ -911,7 +937,9 @@ test "PG: null support" {
 		\\   col_enum, col_enum_arr,
 		\\   col_uuid, col_uuid_arr,
 		\\   col_numeric, col_numeric_arr,
-		\\   col_timestamp, col_timestamp_arr
+		\\   col_timestamp, col_timestamp_arr,
+		\\   col_json, col_json_arr,
+		\\   col_jsonb, col_jsonb_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -925,10 +953,14 @@ test "PG: null support" {
 		\\   $18, $19,
 		\\   $20, $21,
 		\\   $22, $23,
-		\\   $24, $25
+		\\   $24, $25,
+		\\   $26, $27,
+		\\   $28, $29
 		\\ )
 		, .{
 			2,
+			null, null,
+			null, null,
 			null, null,
 			null, null,
 			null, null,
@@ -963,7 +995,9 @@ test "PG: null support" {
 		\\   col_enum, col_enum_arr,
 		\\   col_uuid, col_uuid_arr,
 		\\   col_numeric, 'numeric[] placeholder',
-		\\   col_timestamp, col_timestamp_arr
+		\\   col_timestamp, col_timestamp_arr,
+		\\   col_json, col_json_arr,
+		\\   col_jsonb, col_jsonb_arr
 		\\ from all_types where id = $1
 	, .{2});
 	defer result.deinit();
@@ -1004,6 +1038,12 @@ test "PG: null support" {
 
 	try t.expectEqual(null, row.get(?i64, 23));
 	try t.expectEqual(null, row.iterator(?i64, 24));
+
+	try t.expectEqual(null, row.get(?[]u8, 25));
+	try t.expectEqual(null, row.iterator(?[]const u8, 26));
+
+	try t.expectEqual(null, row.get(?[]u8, 27));
+	try t.expectEqual(null, row.iterator(?[]const u8, 28));
 
 	try t.expectEqual(null, try result.next());
 }

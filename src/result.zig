@@ -215,7 +215,7 @@ pub const Row = struct {
 			f32 => return types.Float32.decode(data, oid),
 			f64 => return types.Float64.decode(data, oid),
 			bool => return types.Bool.decode(data, oid),
-			[]u8, []const u8 => return types.String.decode(data, oid),
+			[]u8, []const u8 => return types.Bytea.decode(data, oid),
 			else => compileHaltGetError(T),
 		}
 	}
