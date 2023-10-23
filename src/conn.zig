@@ -263,6 +263,8 @@ pub const Conn = struct {
 
 			// First message we expect back is a ParseComplete, which has no data.
 			{
+				// If Parse fails, then the server won't reply to our other messages
+				// (i.e. Describ) and it'l immediately send a ReadyForQuery.
 				const msg = self.read() catch |err| {
 					self.readyForQuery() catch {};
 					return err;
@@ -282,13 +284,23 @@ pub const Conn = struct {
 
 				const data = msg.data;
 				if (std.mem.readIntBig(i16, data[0..2]) != param_oids.len) {
+					// We weren't given the correct # of parameters. We need to return an
+					// error, but the server doesn't know that we're bailing. We still
+					// need to read the rest of its messages
+					const next = try self.read();
+					if (next.type == 'T' or next.type == 'n') {
+						self.readyForQuery() catch {};
+					} else {
+						self.unexpectedMessage() catch {};
+					}
 					return error.ParameterCount;
-				}
-				var pos: usize = 2;
-				for (0..param_oids.len) |i| {
-					const end = pos + 4;
-					param_oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
-					pos = end;
+				} else {
+					var pos: usize = 2;
+					for (0..param_oids.len) |i| {
+						const end = pos + 4;
+						param_oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
+						pos = end;
+					}
 				}
 			}
 
@@ -368,7 +380,10 @@ pub const Conn = struct {
 			try self.stream.writeAll(buf.string());
 
 			{
-				const msg = try self.read();
+				const msg = self.read() catch |err| {
+					self.readyForQuery() catch {};
+					return err;
+				};
 				if (msg.type != '2') {
 					// expecting a BindComplete
 					return self.unexpectedMessage();
@@ -726,7 +741,19 @@ test "Conn: wrong parameter count" {
 	var c = t.connect(.{});
 	defer c.deinit();
 	try t.expectError(error.ParameterCount, c.query("select $1", .{}));
-	// try t.expectError(error.ParameterCount, c.query("select $1", .{1, 2}));
+	try t.expectError(error.ParameterCount, c.query("select $1", .{1, 2}));
+
+	// connection is still usable
+	try t.expectEqual(3, (try c.scalar(i32, "select 3", .{})).?);
+}
+
+test "Conn: bind error" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	try t.expectError(error.PG, c.query("select $1::bool", .{33.2}));
+
+	// connection is still usable
+	try t.expectEqual(4, (try c.scalar(i32, "select 4", .{})).?);
 }
 
 test "PG: type support" {
