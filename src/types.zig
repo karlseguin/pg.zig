@@ -23,6 +23,23 @@ const binary_encoding = [2]u8{0, 1};
 
 pub const Types = struct {
 
+	pub const Char = struct {
+		// A blank-padded char
+		pub const oid = OID.make(1042);
+		const encoding = &binary_encoding;
+
+		fn encode(value: u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			buf.writeAt(Char.encoding, format_pos);
+			try buf.write(&.{0, 0, 0, 1}); // length of our data
+			return buf.writeByte(value);
+		}
+
+		pub fn decode(data: []const u8, data_oid: i32) u8 {
+			lib.assert(data.len == 1 and data_oid == Char.oid.decimal);
+			return data[0];
+		}
+	};
+
 	pub const Int16 = struct {
 		pub const oid = OID.make(21);
 		const encoding = &binary_encoding;
@@ -618,6 +635,35 @@ pub const Types = struct {
 		}
 	};
 
+	pub const CharArray = struct {
+		pub const oid = OID.make(1014);
+		const encoding = &binary_encoding;
+
+		// This is for a char[] bound to a []u8
+		fn encodeOne(values: []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Char.oid.encoded, oid_pos);
+
+			// every value has a 5 byte prefix, a 4 byte length and a 1 byte char
+			const len = values.len * 5;
+			var view = try reserveView(buf, len);
+			for (values) |value| {
+				view.write(&.{0, 0, 0, 1});
+				view.writeByte(value);
+			}
+		}
+
+		// This is for a char[] bound to a [][]u8
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Char.oid.encoded, oid_pos);
+			return writeByteArray(values, buf);
+		}
+
+		pub fn decodeOne(value: []const u8, data_oid: i32) u8 {
+			lib.assert(value.len == 1 and data_oid == CharArray.oid.decimal);
+			return value[0];
+		}
+	};
+
 	// Return the encoding we want PG to use for a particular OID
 	fn encoding(oid: i32) *const [2]u8 {
 		inline for (@typeInfo(@This()).Struct.decls) |decl| {
@@ -743,6 +789,10 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
 				Types.Timestamp.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+				Types.Char.oid.decimal => {
+					if (value > 255 or value < 0) return error.IntWontFit;
+					return Types.Char.encode(@intCast(value), buf, format_pos);
+				},
 				else => return Types.Int64.encode(@intCast(value), buf, format_pos),
 			}
 		},
@@ -757,6 +807,10 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
 				Types.Timestamp.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+				Types.Char.oid.decimal => {
+					if (value > 255 or value < 0) return error.IntWontFit;
+					return Types.Char.encode(@intCast(value), buf, format_pos);
+				},
 				else => {
 					if (value > 9223372036854775807 or value < -9223372036854775808) return error.IntWontFit;
 					return Types.Int64.encode(@intCast(value), buf, format_pos);
@@ -770,10 +824,12 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 				else => return Types.Float64.encode(@floatCast(value), buf, format_pos),
 			}
 		},
-		.Float => |float| switch (float.bits) {
-			32 => return Types.Float32.encode(@floatCast(value), buf, format_pos),
-			64 => return Types.Float64.encode(@floatCast(value), buf, format_pos),
-			else => compileHaltBindError(T),
+		.Float => {
+			switch (oid) {
+				Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
+				Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
+				else => return Types.Float64.encode(@floatCast(value), buf, format_pos),
+			}
 		},
 		.Bool => return Types.Bool.encode(value, buf, format_pos),
 		.Pointer => |ptr| {
@@ -814,6 +870,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 			Types.UUID.oid.decimal => return Types.UUID.encode(value, buf, format_pos),
 			Types.JSONB.oid.decimal => return Types.JSONB.encodeBytes(value, buf, format_pos),
 			Types.JSON.oid.decimal => return Types.JSON.encodeBytes(value, buf, format_pos),
+			Types.CharArray.oid.decimal => {}, // this is an array of chars, fallthrough to array logic
 			else => return Types.String.encode(value, buf, format_pos),
 		}
 	}
@@ -860,9 +917,10 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 				}
 			} else {
 				switch (int.bits) {
-					1...16 => try Types.Int16Array.encodeUnsigned(value, buf, oid_pos),
-					17...32 => try Types.Int32Array.encodeUnsigned(value, buf, oid_pos),
-					33...64 => try Types.Int64Array.encodeUnsigned(value, buf, oid_pos),
+					8 => try Types.CharArray.encodeOne(value, buf, oid_pos),
+					16 => try Types.Int16Array.encodeUnsigned(value, buf, oid_pos),
+					32 => try Types.Int32Array.encodeUnsigned(value, buf, oid_pos),
+					64 => try Types.Int64Array.encodeUnsigned(value, buf, oid_pos),
 					else => compileHaltBindError(SliceT),
 				}
 			}
@@ -880,6 +938,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 					Types.UUIDArray.oid.decimal => try Types.UUIDArray.encode(value, buf, oid_pos),
 					Types.JSONBArray.oid.decimal => try Types.JSONBArray.encode(value, buf, oid_pos),
 					Types.JSONArray.oid.decimal => try Types.JSONArray.encode(value, buf, oid_pos),
+					Types.CharArray.oid.decimal => try Types.CharArray.encode(value, buf, oid_pos),
 					// we try this as a default to support user defined types with unknown oids
 					// (like an array of enums)
 					else => try Types.ByteaArray.encode(value, buf, oid_pos),
@@ -894,6 +953,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 				Types.UUIDArray.oid.decimal => try Types.UUIDArray.encode(&value, buf, oid_pos),
 				Types.JSONBArray.oid.decimal => try Types.JSONBArray.encode(&value, buf, oid_pos),
 				Types.JSONArray.oid.decimal => try Types.JSONArray.encode(&value, buf, oid_pos),
+				Types.CharArray.oid.decimal => try Types.CharArray.encode(value, buf, oid_pos),
 				// we try this as a default to support user defined types with unknown oids
 				// (like an array of enums)
 				else => try Types.ByteaArray.encode(&value, buf, oid_pos),
@@ -944,6 +1004,13 @@ test "UUID: toString" {
 test "UUID: toBytes" {
 	try t.expectError(error.InvalidUUID, Types.UUID.toBytes(""));
 
-	const s = try Types.UUID.toBytes("166B4751-D702-4FB9-9A2A-CD6B69ED18D6");
-	try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 214}, &s);
+	{
+		const s = try Types.UUID.toBytes("166B4751-D702-4FB9-9A2A-CD6B69ED18D6");
+		try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 214}, &s);
+	}
+
+	{
+		const s = try Types.UUID.toBytes("166b4751-d702-4fb9-9a2a-cd6b69ed18d7");
+		try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 215}, &s);
+	}
 }

@@ -5,6 +5,7 @@ const Buffer = @import("buffer").Buffer;
 
 const proto = lib.proto;
 const types = lib.types;
+const Pool = lib.Pool;
 const Reader = lib.Reader;
 const Result = lib.Result;
 const Timeout = lib.Timeout;
@@ -14,13 +15,15 @@ const Stream = std.net.Stream;
 const Allocator = std.mem.Allocator;
 
 pub const Conn = struct {
-	stream: Stream,
-
 	// If we get a postgreSQL error, this will be set.
 	err: ?proto.Error,
 
+	_stream: Stream,
+
 	// The underlying data for err
 	_err_data: ?[]const u8,
+
+	_pool: ?*Pool = null,
 
 	// The current transation state, this is whatever the last ReadyForQuery
 	// message told us
@@ -52,10 +55,10 @@ pub const Conn = struct {
 		port: ?u16 = null,
 		write_buffer: ?u16 = null,
 		read_buffer: ?u16 = null,
-		state_size: u16 = 32,
+		result_state_size: u16 = 32,
 	};
 
-	pub const StartupOpts = struct {
+	pub const AuthOpts = struct {
 		username: []const u8 = "postgres",
 		password: ?[]const u8 = null,
 		database: ?[]const u8 = null,
@@ -63,7 +66,7 @@ pub const Conn = struct {
 	};
 
 	pub const QueryOpts = struct {
-		timeout: ?u32 = 30_000,
+		timeout: ?u32 = null,
 		column_names: bool = false,
 		allocator: ?Allocator = null,
 	};
@@ -82,17 +85,17 @@ pub const Conn = struct {
 		const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
 		errdefer reader.deinit();
 
-		const result_state = try Result.State.init(allocator, opts.state_size);
+		const result_state = try Result.State.init(allocator, opts.result_state_size);
 		errdefer result_state.deinit(allocator);
 
-		const param_oids = try allocator.alloc(i32, opts.state_size);
+		const param_oids = try allocator.alloc(i32, opts.result_state_size);
 		errdefer param_oids.deinit(allocator);
 
 		return .{
 			.err = null,
-			.stream = stream,
 			._buf = buf,
 			._reader = reader,
+			._stream = stream,
 			._err_data = null,
 			._state = 'I', // idle
 			._allocator = allocator,
@@ -101,7 +104,7 @@ pub const Conn = struct {
 		};
 	}
 
-	pub fn deinit(self: Conn) void {
+	pub fn deinit(self: *Conn) void {
 		const allocator = self._allocator;
 		if (self._err_data) |err_data| {
 			allocator.free(err_data);
@@ -112,11 +115,19 @@ pub const Conn = struct {
 		self._result_state.deinit(allocator);
 
 		// try to send a Terminate to the DB
-		self.stream.writeAll(&.{'X', 0, 0, 0, 4}) catch {};
-		self.stream.close();
+		self.write(&.{'X', 0, 0, 0, 4}) catch {};
+		self._stream.close();
 	}
 
-	pub fn startup(self: *Conn, opts: StartupOpts) !void {
+	pub fn release(self: *Conn) void {
+		var pool = self._pool orelse {
+			self.deinit();
+			return;
+		};
+		pool.release(self);
+	}
+
+	pub fn auth(self: *Conn, opts: AuthOpts) !void {
 		var buf = &self._buf;
 
 		try self._reader.startFlow(opts.timeout);
@@ -131,7 +142,7 @@ pub const Conn = struct {
 
 			buf.resetRetainingCapacity();
 			try startup_message.write(buf);
-			try self.stream.writeAll(buf.string());
+			try self.write(buf.string());
 		}
 
 		var expect_response = true;
@@ -254,7 +265,7 @@ pub const Conn = struct {
 					// Sync payload length
 					0, 0, 0, 4
 				});
-				try self.stream.writeAll(buf.string());
+				try self.write(buf.string());
 			}
 
 			// no longer idle, we're now in a query
@@ -376,7 +387,7 @@ pub const Conn = struct {
 				0, 0, 0, 4
 			});
 
-			try self.stream.writeAll(buf.string());
+			try self.write(buf.string());
 
 			{
 				const msg = self.read() catch |err| {
@@ -421,7 +432,7 @@ pub const Conn = struct {
 			try simple_query.write(buf);
 			// no longer idle, we're now in a query
 			self._state = 'Q';
-			try self.stream.writeAll(buf.string());
+			try self.write(buf.string());
 		} else {
 			// TODO: there's some optimization opportunities here, since we know
 			// we aren't expecting any result. We don't have to ask PG to DESCRIBE
@@ -438,7 +449,12 @@ pub const Conn = struct {
 		// actually have a response.
 		var affected: ?i64 = null;
 		while (true) {
-			const msg = try self.read();
+			const msg = self.read() catch |err| {
+				if (err == error.PG) {
+					self.readyForQuery() catch {};
+				}
+				return err;
+			};
 			switch (msg.type) {
 				'C' => {
 					const cc = try proto.CommandComplete.parse(msg.data);
@@ -452,7 +468,7 @@ pub const Conn = struct {
 		}
 	}
 
-	fn authSASL(self: *Conn, opts: StartupOpts, req: proto.AuthenticationRequest.SASL) !void {
+	fn authSASL(self: *Conn, opts: AuthOpts, req: proto.AuthenticationRequest.SASL) !void {
 		if (!req.scram_sha_256) {
 			return self.unexpectedMessage();
 		}
@@ -469,7 +485,7 @@ pub const Conn = struct {
 			};
 			buf.resetRetainingCapacity();
 			try msg.write(buf);
-			try self.stream.writeAll(buf.string());
+			try self.write(buf.string());
 		}
 
 		{
@@ -489,7 +505,7 @@ pub const Conn = struct {
 			};
 			buf.resetRetainingCapacity();
 			try msg.write(buf);
-			try self.stream.writeAll(buf.string());
+			try self.write(buf.string());
 		}
 
 		{
@@ -503,7 +519,7 @@ pub const Conn = struct {
 		}
 	}
 
-	fn authMD5Password(self: *Conn, opts: StartupOpts, salt: []const u8) !void {
+	fn authMD5Password(self: *Conn, opts: AuthOpts, salt: []const u8) !void {
 		var hash: [16]u8 = undefined;
 		{
 			var hasher = std.crypto.hash.Md5.init(.{});
@@ -531,14 +547,17 @@ pub const Conn = struct {
 		var buf = &self._buf;
 		buf.resetRetainingCapacity();
 		try pw.write(buf);
-		try self.stream.writeAll(buf.string());
+		try self.write(buf.string());
 	}
 
 	// Should not be called directly
 	pub fn read(self: *Conn) !lib.Message {
 		var reader = &self._reader;
 		while (true) {
-			const msg = try reader.next();
+			const msg = reader.next() catch |err| {
+				self._state = 'E';
+				return err;
+			};
 			switch (msg.type) {
 				'Z' => {
 					self._state = msg.data[0];
@@ -549,6 +568,13 @@ pub const Conn = struct {
 				else => return msg,
 			}
 		}
+	}
+
+	fn write(self: *Conn, data: []const u8) !void {
+		self._stream.writeAll(data) catch |err| {
+			self._state = 'E';
+			return err;
+		};
 	}
 
 	fn setErr(self: *Conn, data: []const u8) error{PG, OutOfMemory} {
@@ -585,60 +611,60 @@ pub const Conn = struct {
 };
 
 const t = lib.testing;
-test "Conn: startup trust (no pass)" {
+test "Conn: auth trust (no pass)" {
 	var conn = try Conn.open(t.allocator, .{});
 	defer conn.deinit();
-	try conn.startup(.{.username = "pgz_user_nopass", .database = "postgres"});
+	try conn.auth(.{.username = "pgz_user_nopass", .database = "postgres"});
 }
 
-test "Conn: startup unknown user" {
+test "Conn: auth unknown user" {
 	var conn = try Conn.open(t.allocator, .{});
 	defer conn.deinit();
-	try t.expectError(error.PG, conn.startup(.{.username = "does_not_exist"}));
+	try t.expectError(error.PG, conn.auth(.{.username = "does_not_exist"}));
 	try t.expectString("password authentication failed for user \"does_not_exist\"", conn.err.?.message);
 }
 
-test "Conn: startup cleartext password" {
+test "Conn: auth cleartext password" {
 	{
 		var conn = try Conn.open(t.allocator, .{});
 		defer conn.deinit();
-		try t.expectError(error.PG, conn.startup(.{.username = "pgz_user_clear"}));
+		try t.expectError(error.PG, conn.auth(.{.username = "pgz_user_clear"}));
 		try t.expectString("empty password returned by client", conn.err.?.message);
 	}
 
 	{
 		var conn = try Conn.open(t.allocator, .{});
 		defer conn.deinit();
-		try t.expectError(error.PG, conn.startup(.{.username = "pgz_user_clear", .password = "wrong"}));
+		try t.expectError(error.PG, conn.auth(.{.username = "pgz_user_clear", .password = "wrong"}));
 		try t.expectString("password authentication failed for user \"pgz_user_clear\"", conn.err.?.message);
 	}
 
 	{
 		var conn = try Conn.open(t.allocator, .{});
 		defer conn.deinit();
-		try conn.startup(.{.username = "pgz_user_clear", .password = "pgz_user_clear_pw", .database = "postgres"});
+		try conn.auth(.{.username = "pgz_user_clear", .password = "pgz_user_clear_pw", .database = "postgres"});
 	}
 }
 
-test "Conn: startup scram-sha-256 password" {
+test "Conn: auth scram-sha-256 password" {
 	{
 		var conn = try Conn.open(t.allocator, .{});
 		defer conn.deinit();
-		try t.expectError(error.PG, conn.startup(.{.username = "pgz_user_scram_sha256"}));
+		try t.expectError(error.PG, conn.auth(.{.username = "pgz_user_scram_sha256"}));
 		try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
 	}
 
 	{
 		var conn = try Conn.open(t.allocator, .{});
 		defer conn.deinit();
-		try t.expectError(error.PG, conn.startup(.{.username = "pgz_user_scram_sha256", .password = "wrong"}));
+		try t.expectError(error.PG, conn.auth(.{.username = "pgz_user_scram_sha256", .password = "wrong"}));
 		try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
 	}
 
 	{
 		var conn = try Conn.open(t.allocator, .{});
 		defer conn.deinit();
-		try conn.startup(.{.username = "pgz_user_scram_sha256", .password = "pgz_user_scram_sha256_pw", .database = "postgres"});
+		try conn.auth(.{.username = "pgz_user_scram_sha256", .password = "pgz_user_scram_sha256_pw", .database = "postgres"});
 	}
 }
 
@@ -741,7 +767,9 @@ test "PG: type support" {
 		\\   col_numeric, col_numeric_arr,
 		\\   col_timestamp, col_timestamp_arr,
 		\\   col_json, col_json_arr,
-		\\   col_jsonb, col_jsonb_arr
+		\\   col_jsonb, col_jsonb_arr,
+		\\   col_char, col_char_arr,
+		\\   col_charn, col_charn_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -757,7 +785,9 @@ test "PG: type support" {
 		\\   $22, $23,
 		\\   $24, $25,
 		\\   $26, $27,
-		\\   $28, $29
+		\\   $28, $29,
+		\\   $30, $31,
+		\\   $32, $33
 		\\ )
 		, .{
 			1,
@@ -775,6 +805,8 @@ test "PG: type support" {
 			169804639500713, [_]i64{169804639500713, -94668480000000},
 			"{\"count\":1.3}", [_][]const u8{"[1,2,3]", "{\"rows\":[{\"a\": true}]}"},
 			"{\"over\":9000}", [_][]const u8{"[true,false]", "{\"cols\":[{\"z\": 0.003}]}"},
+			79, [_]u8{'1', 'z', '!'},
+			"Teg", [_][]const u8{&.{78, 82}, "hi"}
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -799,7 +831,9 @@ test "PG: type support" {
 		\\   col_numeric, 'numeric[] placeholder',
 		\\   col_timestamp, col_timestamp_arr,
 		\\   col_json, col_json_arr,
-		\\   col_jsonb, col_jsonb_arr
+		\\   col_jsonb, col_jsonb_arr,
+		\\   col_char, col_char_arr,
+		\\   col_charn, col_charn_arr
 		\\ from all_types where id = $1
 	, .{1});
 	defer result.deinit();
@@ -852,38 +886,38 @@ test "PG: type support" {
 	{
 		// text, text[]
 		try t.expectString("a text column", row.get([]u8, 13));
-		var text_arr = try row.iterator([]const u8, 14).alloc(aa);
-		try t.expectEqual(3, text_arr.len);
-		try t.expectString("it's", text_arr[0]);
-		try t.expectString("over", text_arr[1]);
-		try t.expectString("9000", text_arr[2]);
+		const arr = try row.iterator([]const u8, 14).alloc(aa);
+		try t.expectEqual(3, arr.len);
+		try t.expectString("it's", arr[0]);
+		try t.expectString("over", arr[1]);
+		try t.expectString("9000", arr[2]);
 	}
 
 	{
 		// bytea, bytea[]
 		try t.expectSlice(u8, &.{0, 0, 2, 255, 255, 255}, row.get([]const u8, 15));
-		var bytea_arr = try row.iterator([]u8, 16).alloc(aa);
-		try t.expectEqual(2, bytea_arr.len);
-		try t.expectSlice(u8, &bytea1, bytea_arr[0]);
-		try t.expectSlice(u8, &bytea2, bytea_arr[1]);
+		const arr = try row.iterator([]u8, 16).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectSlice(u8, &bytea1, arr[0]);
+		try t.expectSlice(u8, &bytea2, arr[1]);
 	}
 
 	{
 		// enum, emum[]
 		try t.expectString("val1", row.get([]u8, 17));
-		var enum_arr = try row.iterator([]const u8, 18).alloc(aa);
-		try t.expectEqual(2, enum_arr.len);
-		try t.expectString("val1", enum_arr[0]);
-		try t.expectString("val2", enum_arr[1]);
+		const arr = try row.iterator([]const u8, 18).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectString("val1", arr[0]);
+		try t.expectString("val2", arr[1]);
 	}
 
 	{
 		//uuid, uuid[]
 		try t.expectSlice(u8, &.{183, 204, 40, 47, 236, 67, 73, 190, 142, 9, 170, 250, 176, 16, 73, 21}, row.get([]u8, 19));
-		var uuid_arr = try row.iterator([]const u8, 20).alloc(aa);
-		try t.expectEqual(2, uuid_arr.len);
-		try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 214}, uuid_arr[0]);
-		try t.expectSlice(u8, &.{174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222}, uuid_arr[1]);
+		const arr = try row.iterator([]const u8, 20).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectSlice(u8, &.{22, 107, 71, 81, 215, 2, 79, 185, 154, 42, 205, 107, 105, 237, 24, 214}, arr[0]);
+		try t.expectSlice(u8, &.{174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222}, arr[1]);
 	}
 
 	{
@@ -901,19 +935,38 @@ test "PG: type support" {
 	{
 		// json, json[]
 		try t.expectString("{\"count\":1.3}", row.get([]u8, 25));
-		var text_arr = try row.iterator([]const u8, 26).alloc(aa);
-		try t.expectEqual(2, text_arr.len);
-		try t.expectString("[1,2,3]", text_arr[0]);
-		try t.expectString("{\"rows\":[{\"a\": true}]}", text_arr[1]);
+		const arr = try row.iterator([]const u8, 26).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectString("[1,2,3]", arr[0]);
+		try t.expectString("{\"rows\":[{\"a\": true}]}", arr[1]);
 	}
 
-		{
+	{
 		// jsonb, jsonb[]
 		try t.expectString("{\"over\": 9000}", row.get([]u8, 27));
-		var text_arr = try row.iterator([]const u8, 28).alloc(aa);
-		try t.expectEqual(2, text_arr.len);
-		try t.expectString("[true, false]", text_arr[0]);
-		try t.expectString("{\"cols\": [{\"z\": 0.003}]}", text_arr[1]);
+		const arr = try row.iterator([]const u8, 28).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectString("[true, false]", arr[0]);
+		try t.expectString("{\"cols\": [{\"z\": 0.003}]}", arr[1]);
+	}
+
+	{
+		// char, char[]
+		try t.expectEqual(79, row.get(u8, 29));
+		const arr = try row.iterator(u8, 30).alloc(aa);
+		try t.expectEqual(3, arr.len);
+		try t.expectEqual('1', arr[0]);
+		try t.expectEqual('z', arr[1]);
+		try t.expectEqual('!', arr[2]);
+	}
+
+	{
+		// charn, charn[]
+		try t.expectString("Teg", row.get([]u8, 31));
+		const arr = try row.iterator([]u8, 32).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectString("NR", arr[0]);
+		try t.expectString("hi", arr[1]);
 	}
 
 	try t.expectEqual(null, try result.next());
@@ -939,7 +992,9 @@ test "PG: null support" {
 		\\   col_numeric, col_numeric_arr,
 		\\   col_timestamp, col_timestamp_arr,
 		\\   col_json, col_json_arr,
-		\\   col_jsonb, col_jsonb_arr
+		\\   col_jsonb, col_jsonb_arr,
+		\\   col_char, col_char_arr,
+		\\   col_charn, col_charn_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -955,10 +1010,14 @@ test "PG: null support" {
 		\\   $22, $23,
 		\\   $24, $25,
 		\\   $26, $27,
-		\\   $28, $29
+		\\   $28, $29,
+		\\   $30, $31,
+		\\   $32, $33
 		\\ )
 		, .{
 			2,
+			null, null,
+			null, null,
 			null, null,
 			null, null,
 			null, null,
@@ -997,7 +1056,9 @@ test "PG: null support" {
 		\\   col_numeric, 'numeric[] placeholder',
 		\\   col_timestamp, col_timestamp_arr,
 		\\   col_json, col_json_arr,
-		\\   col_jsonb, col_jsonb_arr
+		\\   col_jsonb, col_jsonb_arr,
+		\\   col_char, col_char_arr,
+		\\   col_charn, col_charn_arr
 		\\ from all_types where id = $1
 	, .{2});
 	defer result.deinit();
@@ -1044,6 +1105,12 @@ test "PG: null support" {
 
 	try t.expectEqual(null, row.get(?[]u8, 27));
 	try t.expectEqual(null, row.iterator(?[]const u8, 28));
+
+	try t.expectEqual(null, row.get(?u8, 29));
+	try t.expectEqual(null, row.iterator(?u8, 30));
+
+	try t.expectEqual(null, row.get(?u8, 31));
+	try t.expectEqual(null, row.iterator(?u8, 32));
 
 	try t.expectEqual(null, try result.next());
 }

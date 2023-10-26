@@ -209,6 +209,7 @@ pub const Row = struct {
 		const data = value.data;
 		const oid = self.oids[col];
 		switch (TT) {
+			u8 => return types.Char.decode(data, oid),
 			i16 => return types.Int16.decode(data, oid),
 			i32 => return types.Int32.decode(data, oid),
 			i64 => return types.Int64.decode(data, oid),
@@ -239,6 +240,7 @@ pub const Row = struct {
 		};
 
 		const decoder = switch (TT) {
+			u8 => types.CharArray.decodeOne,
 			i16 => types.Int16Array.decodeOne,
 			i32 => types.Int32Array.decodeOne,
 			i64 => types.Int64Array.decodeOne,
@@ -253,7 +255,7 @@ pub const Row = struct {
 		if (data.len == 12) {
 			// we have an empty
 			return .{
-				.len = 0,
+				._len = 0,
 				._pos = 0,
 				._oid = 0,
 				._data = &[_]u8{},
@@ -274,7 +276,7 @@ pub const Row = struct {
 		// const lower_bound = std.mem.readIntBig(i32, data[16..20][0..4]);
 
 		return .{
-			.len = @intCast(len),
+			._len = @intCast(len),
 			._pos = 0,
 			._data = data[20..],
 			._decoder = decoder,
@@ -298,7 +300,7 @@ pub const Row = struct {
 
 fn Iterator(comptime T: type) type {
 	return struct {
-		len: usize,
+		_len: usize,
 		_oid: i32,
 		_pos: usize,
 		_data: []const u8,
@@ -313,6 +315,10 @@ fn Iterator(comptime T: type) type {
 
 		const Self = @This();
 
+		pub fn len(self: Self) usize {
+			return self._len;
+		}
+
 		pub fn next(self: *Self) ?T {
 			const pos = self._pos;
 			const data = self._data;
@@ -322,9 +328,9 @@ fn Iterator(comptime T: type) type {
 
 			// TODO: for fixed length types, we don't need to decode the length
 			const len_end = pos + 4;
-			const len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
+			const value_len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
 
-			const data_end = len_end + @as(usize, @intCast(len));
+			const data_end = len_end + @as(usize, @intCast(value_len));
 			lib.assert(data.len >= data_end);
 
 			self._pos = data_end;
@@ -332,7 +338,7 @@ fn Iterator(comptime T: type) type {
 		}
 
 		pub fn alloc(self: Self, allocator: Allocator) ![]T {
-			var into = try allocator.alloc(T, self.len);
+			var into = try allocator.alloc(T, self._len);
 			self.fill(into);
 			return into;
 		}
@@ -343,11 +349,12 @@ fn Iterator(comptime T: type) type {
 
 			var pos: usize = 0;
 			const oid = self._oid;
-			for (0..self.len) |i| {
+			const limit = @min(into.len, self._len);
+			for (0..limit) |i| {
 				// TODO: for fixed length types, we don't need to decode the length
 				const len_end = pos + 4;
-				const len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
-				pos = len_end + @as(usize, @intCast(len));
+				const data_len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
+				pos = len_end + @as(usize, @intCast(data_len));
 				into[i] = decoder(data[len_end..pos], oid);
 			}
 		}
@@ -606,7 +613,7 @@ test "Result: iterator" {
 		var row = (try result.next()).?;
 
 		var iterator = row.iterator(i32, 0);
-		try t.expectEqual(0, iterator.len);
+		try t.expectEqual(0, iterator.len());
 
 		try t.expectEqual(null, iterator.next());
 		try t.expectEqual(null, iterator.next());
@@ -623,7 +630,7 @@ test "Result: iterator" {
 		var row = (try result.next()).?;
 
 		var iterator = row.iterator(i32, 0);
-		try t.expectEqual(1, iterator.len);
+		try t.expectEqual(1, iterator.len());
 
 		try t.expectEqual(9, iterator.next());
 		try t.expectEqual(null, iterator.next());
@@ -642,15 +649,21 @@ test "Result: iterator" {
 		var row = (try result.next()).?;
 
 		var iterator = row.iterator(i32, 0);
-		try t.expectEqual(2, iterator.len);
+		try t.expectEqual(2, iterator.len());
 
 		try t.expectEqual(0, iterator.next());
 		try t.expectEqual(-19, iterator.next());
 		try t.expectEqual(null, iterator.next());
 
-		var arr: [2]i32 = undefined;
-		iterator.fill(&arr);
-		try t.expectSlice(i32, &.{0, -19}, &arr);
+		var arr1: [2]i32 = undefined;
+		iterator.fill(&arr1);
+		try t.expectSlice(i32, &.{0, -19}, &arr1);
+		try result.drain();
+
+		// smaller
+		var arr2: [1]i32 = undefined;
+		iterator.fill(&arr2);
+		try t.expectSlice(i32, &.{0}, &arr2);
 		try result.drain();
 	}
 }

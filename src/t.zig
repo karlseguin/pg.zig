@@ -78,7 +78,11 @@ pub fn setup() !void {
 		\\   col_json json,
 		\\   col_json_arr json[],
 		\\   col_jsonb jsonb,
-		\\   col_jsonb_arr jsonb[]
+		\\   col_jsonb_arr jsonb[],
+		\\   col_char char,
+		\\   col_char_arr char[],
+		\\   col_charn char(3),
+		\\   col_charn_arr char(2)[]
 		\\ );
 	, .{}) catch |err| try fail(c, err);
 }
@@ -169,7 +173,7 @@ pub fn connect(opts: anytype) Conn {
 	const T = @TypeOf(opts);
 
 	var c = Conn.open(allocator, .{}) catch unreachable;
-	c.startup(.{
+	c.auth(.{
 		.database = if (@hasField(T, "database")) opts.database else "postgres",
 		.username = if (@hasField(T, "username")) opts.username else "postgres",
 		.password = if (@hasField(T, "password")) opts.password else "root_pw",
