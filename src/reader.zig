@@ -14,9 +14,17 @@ const zero_timeval = std.mem.toBytes(os.timeval{.tv_sec = 0, .tv_usec = 0});
 // generic just for testing within this file
 fn ReaderT(comptime T: type) type {
 	return struct {
+		// Provided when the reader was allocated (which is the allocator given
+		// when the connection/pool was created). Owns `static` and unless a query-
+		// specific allocator is provided, will be used for any dynamic allocations.
+		default_allocator: Allocator,
+
+		// Current active allocator. This will normally reference `default_allocator`
+		// but a query can provide a specific allocator to use for the processing
+		// of said query. (via startFlow)
 		allocator: Allocator,
 
-		// exists for the lifetime of the reader, but normally references this, but
+		// Exists for the lifetime of the reader, but normally references this, but
 		// for messages that don't fit, we'll allocate memory dynamically and
 		// eventually revert back to buf.
 		static: []u8,
@@ -41,11 +49,12 @@ fn ReaderT(comptime T: type) type {
 				.stream = stream,
 				.static = static,
 				.allocator = allocator,
+				.default_allocator = allocator,
 			};
 		}
 
 		pub fn deinit(self: Self) void {
-			const allocator = self.allocator;
+			const allocator = self.default_allocator;
 			if (self.static.ptr != self.buf.ptr) {
 				allocator.free(self.buf);
 			}
@@ -56,7 +65,7 @@ fn ReaderT(comptime T: type) type {
 		// dynamic buffer it creates. The idea beind this is that if reading 1 row
 		// requires more than static.len other rows within the same result might
 		// as well.
-		pub fn startFlow(self: *Self, timeout_ms: ?u32) !void {
+		pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
 			var timeval = zero_timeval;
 			if (timeout_ms) |ms| {
 				timeval = std.mem.toBytes(os.timeval{
@@ -67,9 +76,13 @@ fn ReaderT(comptime T: type) type {
 			if (!builtin.is_test) {
 				return os.setsockopt(self.stream.handle, os.SOL.SOCKET, os.SO.RCVTIMEO, &timeval);
 			}
+			self.allocator = allocator orelse self.default_allocator;
 		}
 
-		pub fn endFlow(self: *Self) void {
+		pub fn endFlow(self: *Self) !void {
+			const allocator = self.allocator;
+
+			self.allocator = self.default_allocator;
 			if (self.static.ptr == self.buf.ptr) {
 				// we never created a dynamic buffer
 				return;
@@ -86,24 +99,41 @@ fn ReaderT(comptime T: type) type {
 			const start = self.start;
 			const extra = pos - start;
 
+			var new_buf: []u8 = undefined;
 			if (extra > self.static.len) {
-				// This is unusually. Not only did we overread, but we've overread so
-				// much that we can't use our static buffer. We'll keep using our dynamic
-				// buffer until the next endFlow (or deinit).
-				return;
-			}
+				// This is unusual. Not only did we overread, but we've overread so
+				// much that we can't use our static buffer.
 
-			if (extra > 0) {
-				// we have extra data, but it fits in our static buffer, let's move it
-				@memcpy(self.static[0..extra], self.buf[start..pos]);
+				const default_allocator = self.default_allocator;
+				if (allocator.ptr == default_allocator.ptr) {
+					// The dynamic buffer was allocated with our default allocator, so
+					// we can keep it as-is
+					return;
+				}
+
+				// This is the worst. We have extra data in our dynamically buffer AND
+				// we have a query-specific allocator. This data _cannot_ remain
+				// where it is (because we have no guarantee that the allocator is valid
+				// beyond this query).
+				// So we'll copy it to a new buffer using our default allocator.
+				new_buf = try default_allocator.alloc(u8, extra);
+				@memcpy(new_buf, self.buf[start..pos]);
+			} else {
+				// We either have no extra data, or we have extra data, but it fits in
+				// our static buffer. Either way, we're reverting self.buf to self.static;
+				new_buf = self.static;
+				if (extra > 0) {
+					// We read extra data, copy this into our static buffer
+					@memcpy(new_buf[0..extra], self.buf[start..pos]);
+				}
 			}
 
 			// now we can free the dynamic buffer
-			self.allocator.free(self.buf);
+			allocator.free(self.buf);
 
 			self.pos = extra;
 			self.start = 0;
-			self.buf = self.static;
+			self.buf = new_buf;
 		}
 
 		pub fn next(self: *Self) !Message {
@@ -400,8 +430,8 @@ test "Reader: fuzz" {
 
 		var buf: []const u8 = messages[0..];
 		while (buf.len > 0) {
-			try reader.startFlow(null);
-			defer reader.endFlow();
+			try reader.startFlow(null, null);
+			defer reader.endFlow() catch unreachable;
 			const l = random.uintAtMost(usize, buf.len - 1) + 1;
 			s.add(buf[0..l]);
 			buf = buf[l..];
@@ -526,7 +556,7 @@ test "Reader: start/endFlow basic" {
 	var reader = R.init(t.allocator, 5, s) catch unreachable;
 	defer reader.deinit();
 
-	try reader.startFlow(null);
+	try reader.startFlow(null, null);
 	const msg1 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
 
@@ -535,7 +565,7 @@ test "Reader: start/endFlow basic" {
 
 	const msg3 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
-	reader.endFlow();
+	reader.endFlow() catch unreachable;
 }
 
 test "Reader: start/endFlow overread into static" {
@@ -558,7 +588,7 @@ test "Reader: start/endFlow overread into static" {
 	var reader = R.init(t.allocator, 7, s) catch unreachable;
 	defer reader.deinit();
 
-	try reader.startFlow(null);
+	try reader.startFlow(null, null);
 	const msg1 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
 
@@ -567,12 +597,11 @@ test "Reader: start/endFlow overread into static" {
 
 	const msg3 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
-	reader.endFlow();
+	reader.endFlow() catch unreachable;
 
 	const msg4 = try reader.next();
 	try t.expectSlice(u8, &.{255}, msg4.data);
 }
-
 
 test "Reader: start/endFlow large overread" {
 	const R = ReaderT(*t.Stream);
@@ -594,7 +623,7 @@ test "Reader: start/endFlow large overread" {
 	var reader = R.init(t.allocator, 7, s) catch unreachable;
 	defer reader.deinit();
 
-	try reader.startFlow(null);
+	try reader.startFlow(null, null);
 	const msg1 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
 
@@ -603,7 +632,45 @@ test "Reader: start/endFlow large overread" {
 
 	const msg3 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
-	reader.endFlow();
+	reader.endFlow() catch unreachable;
+
+	const msg4 = try reader.next();
+	try t.expectSlice(u8, &.{255, 250, 245, 240, 235, 230, 225}, msg4.data);
+}
+
+test "Reader: start/endFlow large overread with flow-specific allocator" {
+	const R = ReaderT(*t.Stream);
+	var s = t.Stream.init();
+	defer s.deinit();
+
+	var arena = std.heap.ArenaAllocator.init(t.allocator);
+	defer arena.deinit();
+
+	// 1st message is bigge than static
+	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
+
+	// 2nd message is bigger than first
+	s.add(&[_]u8{2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6});
+
+	// 3rd message is smaller than 2nd (should re-use previous buffer)
+	s.add(&[_]u8{3, 0, 0, 0, 9, 1, 2, 3, 4, 5});
+
+	// 4th message is overread and does not fit into static
+	s.add(&[_]u8{3, 0, 0, 0, 11, 255, 250, 245, 240, 235, 230, 225});
+
+	var reader = R.init(t.allocator, 7, s) catch unreachable;
+	defer reader.deinit();
+
+	try reader.startFlow(arena.allocator(), null);
+	const msg1 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
+
+	const msg2 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6}, msg2.data);
+
+	const msg3 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
+	reader.endFlow() catch unreachable;
 
 	const msg4 = try reader.next();
 	try t.expectSlice(u8, &.{255, 250, 245, 240, 235, 230, 225}, msg4.data);

@@ -130,8 +130,13 @@ pub const Conn = struct {
 	pub fn auth(self: *Conn, opts: AuthOpts) !void {
 		var buf = &self._buf;
 
-		try self._reader.startFlow(opts.timeout);
-		defer self._reader.endFlow();
+		try self._reader.startFlow(null, opts.timeout);
+		defer self._reader.endFlow() catch {
+			// this can only fail in extreme conditions (OOM) and it will only impact
+			// the next query (and if the app is using the pool, the pool will try to
+			// recover from this anyways)
+			self._state = 'F';
+		};
 
 		{
 			// write our startup message
@@ -214,9 +219,14 @@ pub const Conn = struct {
 				allocator.free(param_oids);
 			}
 		}
-		try self._reader.startFlow(opts.timeout);
+		try self._reader.startFlow(allocator, opts.timeout);
 		// in normal cases, endFlow will be called in result.deinit()
-		errdefer self._reader.endFlow();
+		errdefer self._reader.endFlow() catch {
+			// this can only fail in extreme conditions (OOM) and it will only impact
+			// the next query (and if the app is using the pool, the pool will try to
+			// recover from this anyways)
+				self._state = 'F';
+		};
 
 		// Step 1: Parse, Describe, Sync
 		{
@@ -424,8 +434,13 @@ pub const Conn = struct {
 		var buf = &self._buf;
 		buf.reset();
 
-		try self._reader.startFlow(opts.timeout);
-		defer self._reader.endFlow();
+		try self._reader.startFlow(opts.allocator, opts.timeout);
+		defer self._reader.endFlow() catch {
+			// this can only fail in extreme conditions (OOM) and it will only impact
+			// the next query (and if the app is using the pool, the pool will try to
+			// recover from this anyways)
+			self._state = 'F';
+		};
 
 		if (values.len == 0) {
 			const simple_query = proto.Query{.sql = sql};
