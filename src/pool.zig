@@ -31,13 +31,6 @@ pub const Pool = struct {
 		const size = opts.size;
 		const conns = try allocator.alloc(*Conn, size);
 
-		var opened_connections: usize = 0;
-		errdefer {
-			for (0..opened_connections) |i| {
-				conns[i].deinit();
-			}
-		}
-
 		pool.* = .{
 			._cond = .{},
 			._mutex = .{},
@@ -48,6 +41,13 @@ pub const Pool = struct {
 			._reconnector = Reconnector.init(pool),
 			._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
 		};
+
+		var opened_connections: usize = 0;
+		errdefer {
+			for (0..opened_connections) |i| {
+				conns[i].deinit();
+			}
+		}
 
 		for (0..size) |i| {
 			conns[i] = try newConnection(pool, true);
@@ -97,6 +97,7 @@ pub const Pool = struct {
 			// ReadyForQuery), but we wouldn't want to block for too long. For now,
 			// we'll just replace the connection.
 			conn.deinit();
+			self._allocator.destroy(conn);
 
 			conn_to_add = newConnection(self, true) catch {
 				// we failed to create the connection then and there, signal the
@@ -250,6 +251,22 @@ test "Pool" {
 		const affected = try c1.exec("delete from pool_test", .{});
 		try t.expectEqual(1500, affected.?);
 	}
+}
+
+test "Pool: Release" {
+	var pool = try Pool.init(t.allocator, .{
+		.size = 2,
+		.auth = .{
+			.database = "postgres",
+			.username = "postgres",
+			.password = "root_pw",
+		},
+	});
+	defer pool.deinit();
+
+	const c1 = try pool.acquire();
+	c1._state = 'Q';
+	pool.release(c1);
 }
 
 fn testPool(p: *Pool) void {

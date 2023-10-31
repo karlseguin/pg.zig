@@ -3,6 +3,8 @@ const lib = @import("lib.zig");
 
 pub const Conn = lib.Conn;
 pub const Pool = lib.Pool;
+pub const Result = lib.Result;
+pub const Row = lib.Row;
 
 pub fn uuidToHex(uuid: []const u8) ![36]u8 {
 	return lib.types.UUID.toString(uuid);
