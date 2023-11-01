@@ -125,6 +125,7 @@ pub const Conn = struct {
 			self.deinit();
 			return;
 		};
+		self.err = null;
 		pool.release(self);
 	}
 
