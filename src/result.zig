@@ -94,6 +94,7 @@ pub const Result = struct {
 					if (length == -1) {
 						value.is_null = true;
 						value.data = &[_]u8{};
+						offset = data_start;
 					} else {
 						const data_end = data_start + @as(usize, @intCast(length));
 						value.is_null = false;
