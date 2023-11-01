@@ -60,7 +60,7 @@ Releases the connection back to the pool. The pool might decide to close the con
 Executes the query with arguments, returns the number of rows affected, or null. Should not be used with a query that returns rows.
 
 ### query(sql: []const u8, args: anytype) !Result
-Executes the query with arguments, returns a result.
+Executes the query with arguments, returns a result. `deinit`, and possibly `drain`, must be called on the returned `Result`.
 
 ### queryOpts(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
 Same as `query` but takes options:
@@ -68,6 +68,12 @@ Same as `query` but takes options:
 - `timeout` - This is not reliable and should probably not be used. Currently it simply puts a recv socket timeout. On timeout, the connection will likely no longer be valid (which the pool will detect and handle when the connection is released) and the underlying query will likely still execute. Defaults to `null`
 - `column_names` - Whether or not the `result.column_names` should be populated. When true, this requires memory allocation (duping the column names). Default to `false`
 - `allocator` - The allocator to use for any allocations needed when executing the query and reading the results. When `null` this will default to the connection's allocator. If you were executing a query in a web-request and each web-request had its own arena tied to the lifetime of the request, it might make sense to use that arena. Defaults to `null`.
+
+### row(sql: []const u8, args: anytype) !?QueryRow
+Executes the query with arguments, returns a single row. Returns an error if the query returns more than one row. Returns null if the query returns no row. `deinit` must be called on the returned `Row`.
+
+### row(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
+Same as `row` but takes the same options as `queryOpts`
 
 ## Result
 The `conn.query` and `conn.queryOpts` methods return a `pg.Result` which is used to read rows and values.
@@ -123,6 +129,9 @@ Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
 `bool` - `bool[]`
 * `[]const u8` - More strict than `get([]u8)`). Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`
 * `[]u8` - Alias to `[]const u8`.
+
+## QueryRow
+A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed.
 
 ## Iterator(T)
 The iterator returns from `row.iterator(T, col)` can be iterated using the `next() ?T` call:

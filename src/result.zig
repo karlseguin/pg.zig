@@ -227,14 +227,6 @@ pub const Row = struct {
 		}
 	}
 
-	fn ScalarReturnType(comptime T: type) type {
-		return switch (T) {
-			[]u8 => []const u8,
-			?[]u8 => ?[]const u8,
-			else => T,
-		};
-	}
-
 	pub fn iterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
 		const value = self.values[col];
 		const TT = switch (@typeInfo(T)) {
@@ -289,20 +281,45 @@ pub const Row = struct {
 			._oid = self.oids[col],
 		};
 	}
+};
 
-	fn IteratorReturnType(comptime T: type) type {
-		return switch (T) {
-			[]u8 => Iterator([]const u8),
-			?[]u8 => ?Iterator([]const u8),
-			else => {
-				if (std.meta.activeTag(@typeInfo(T)) == .Optional) {
-					return ?Iterator(T);
-				}
-				return Iterator(T);
-			}
-		};
+pub const QueryRow = struct {
+	row: Row,
+	result: Result,
+
+	pub fn get(self: *const QueryRow, comptime T: type, col: usize) ScalarReturnType(T) {
+		return self.row.get(T, col);
+	}
+
+	pub fn iterator(self: *const QueryRow, comptime T: type, col: usize) IteratorReturnType(T) {
+		return self.row.iterator(T, col);
+	}
+
+	pub fn deinit(self: *const QueryRow) void {
+		self.result.deinit();
 	}
 };
+
+fn ScalarReturnType(comptime T: type) type {
+	return switch (T) {
+		[]u8 => []const u8,
+		?[]u8 => ?[]const u8,
+		else => T,
+	};
+}
+
+fn IteratorReturnType(comptime T: type) type {
+	return switch (T) {
+		[]u8 => Iterator([]const u8),
+		?[]u8 => ?Iterator([]const u8),
+		else => {
+			if (std.meta.activeTag(@typeInfo(T)) == .Optional) {
+				return ?Iterator(T);
+			}
+			return Iterator(T);
+		}
+	};
+}
 
 fn Iterator(comptime T: type) type {
 	return struct {

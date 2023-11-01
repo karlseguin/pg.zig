@@ -11,6 +11,7 @@ pub const SASL = @import("sasl.zig").SASL;
 const result = @import("result.zig");
 pub const Row = result.Row;
 pub const Result = result.Result;
+pub const QueryRow = result.QueryRow;
 
 const reader = @import("reader.zig");
 pub const Reader = reader.Reader;

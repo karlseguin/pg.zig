@@ -9,6 +9,7 @@ const Pool = lib.Pool;
 const Reader = lib.Reader;
 const Result = lib.Result;
 const Timeout = lib.Timeout;
+const QueryRow = lib.QueryRow;
 
 const os = std.os;
 const Stream = std.net.Stream;
@@ -422,6 +423,31 @@ pub const Conn = struct {
 			._values = state.values[0..number_of_columns],
 			.column_names = if (opts.column_names) state.names[0..number_of_columns] else &[_][]const u8{},
 			.number_of_columns = number_of_columns,
+		};
+	}
+
+	pub fn row(self: *Conn, sql: []const u8, values: anytype) !?QueryRow {
+		return self.rowOpts(sql, values, .{});
+	}
+
+	pub fn rowOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !?QueryRow {
+		var result = try self.queryOpts(sql, values, opts);
+		errdefer result.deinit();
+
+		const r = try result.next() orelse {
+			result.deinit();
+			return null;
+		};
+
+		if (try result.next() != null) {
+			try result.drain();
+			result.deinit();
+			return error.MoreThanOneRow;
+		}
+
+		return .{
+			.row = r,
+			.result = result,
 		};
 	}
 
@@ -1172,6 +1198,31 @@ test "PG: JSON struct" {
 	const row = (try result.next()) orelse unreachable;
 	try t.expectString("{\"id\":1,\"name\":\"Leto\"}", row.get([]u8, 0));
 	try t.expectString("{\"id\": 2, \"name\": \"Ghanima\"}", row.get(?[]const u8, 1).?);
+}
+
+test "PG: row" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	const r1 = try c.row("select 1 where $1", .{false});
+	try t.expectEqual(null, r1);
+
+	const r2 = (try c.row("select 2 where $1", .{true})) orelse unreachable;
+	try t.expectEqual(2, r2.get(i32, 0));
+	r2.deinit();
+
+	// make sure the conn is still valid after a successful row
+	const r3 = (try c.row("select $1::int where $2", .{3, true})) orelse unreachable;
+	try t.expectEqual(3, r3.get(i32, 0));
+	r3.deinit();
+
+	// make sure the conn is still valid after a successful row
+	try t.expectError(error.MoreThanOneRow, c.row("select 1 union all select 2", .{}));
+
+	// make sure the conn is still valid after MoreThanOneRow error
+	const r4 = (try c.row("select $1::text where $2", .{"hi", true})) orelse unreachable;
+	try t.expectString("hi", r4.get([]u8, 0));
+	r4.deinit();
 }
 
 const DummyStruct = struct{
