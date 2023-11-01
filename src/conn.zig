@@ -811,7 +811,8 @@ test "PG: type support" {
 		\\   col_json, col_json_arr,
 		\\   col_jsonb, col_jsonb_arr,
 		\\   col_char, col_char_arr,
-		\\   col_charn, col_charn_arr
+		\\   col_charn, col_charn_arr,
+		\\   col_timestamptz, col_timestamptz_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -829,7 +830,8 @@ test "PG: type support" {
 		\\   $26, $27,
 		\\   $28, $29,
 		\\   $30, $31,
-		\\   $32, $33
+		\\   $32, $33,
+		\\   $34, $35
 		\\ )
 		, .{
 			1,
@@ -848,7 +850,8 @@ test "PG: type support" {
 			"{\"count\":1.3}", [_][]const u8{"[1,2,3]", "{\"rows\":[{\"a\": true}]}"},
 			"{\"over\":9000}", [_][]const u8{"[true,false]", "{\"cols\":[{\"z\": 0.003}]}"},
 			79, [_]u8{'1', 'z', '!'},
-			"Teg", [_][]const u8{&.{78, 82}, "hi"}
+			"Teg", [_][]const u8{&.{78, 82}, "hi"},
+			169804639500713, [_]i64{169804639500713, -94668480000000},
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -875,7 +878,8 @@ test "PG: type support" {
 		\\   col_json, col_json_arr,
 		\\   col_jsonb, col_jsonb_arr,
 		\\   col_char, col_char_arr,
-		\\   col_charn, col_charn_arr
+		\\   col_charn, col_charn_arr,
+		\\   col_timestamptz, col_timestamptz_arr
 		\\ from all_types where id = $1
 	, .{1});
 	defer result.deinit();
@@ -1009,6 +1013,12 @@ test "PG: type support" {
 		try t.expectEqual(2, arr.len);
 		try t.expectString("NR", arr[0]);
 		try t.expectString("hi", arr[1]);
+	}
+
+	{
+		//timestamp
+		try t.expectEqual(169804639500713, row.get(i64, 33));
+		try t.expectSlice(i64, &.{169804639500713, -94668480000000}, try row.iterator(i64, 34).alloc(aa));
 	}
 
 	try t.expectEqual(null, try result.next());

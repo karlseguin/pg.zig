@@ -82,7 +82,9 @@ pub fn setup() !void {
 		\\   col_char char,
 		\\   col_char_arr char[],
 		\\   col_charn char(3),
-		\\   col_charn_arr char(2)[]
+		\\   col_charn_arr char(2)[],
+		\\   col_timestamptz timestamptz,
+		\\   col_timestamptz_arr timestamptz[]
 		\\ );
 	, .{}) catch |err| try fail(c, err);
 }

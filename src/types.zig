@@ -99,7 +99,7 @@ pub const Types = struct {
 
 		pub fn decode(data: []const u8, data_oid: i32) i64 {
 			switch (data_oid) {
-				Timestamp.oid.decimal => return Timestamp.decode(data, data_oid),
+				Timestamp.oid.decimal, TimestampTz.oid.decimal => return Timestamp.decode(data, data_oid),
 				else => {
 					lib.assert(data.len == 8 and data_oid == Int64.oid.decimal);
 					return std.mem.readIntBig(i64, data[0..8]);
@@ -120,9 +120,14 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) i64 {
-			lib.assert(data.len == 8 and data_oid == Timestamp.oid.decimal);
+			lib.assert(data.len == 8 and (data_oid == Timestamp.oid.decimal or data_oid == TimestampTz.oid.decimal));
 			return std.mem.readIntBig(i64, data[0..8]) + us_from_epoch_to_y2k;
 		}
+	};
+
+	pub const TimestampTz = struct {
+		pub const oid = OID.make(1184);
+		const encoding = &binary_encoding;
 	};
 
 	pub const Float32 = struct {
@@ -445,6 +450,7 @@ pub const Types = struct {
 		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
 			switch (data_oid) {
 				TimestampArray.oid.decimal => return TimestampArray.decodeOne(data, data_oid),
+				TimestampTzArray.oid.decimal => return TimestampTzArray.decodeOne(data, data_oid),
 				else => {
 					lib.assert(data_oid == Int64Array.oid.decimal);
 					return Int64.decode(data, Int64.oid.decimal);
@@ -457,7 +463,6 @@ pub const Types = struct {
 		pub const oid = OID.make(1115);
 		const encoding = &binary_encoding;
 		const us_from_epoch_to_y2k = 946_684_800_000_000;
-
 
 		fn encode(values: []const i64, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Timestamp.oid.encoded, oid_pos);
@@ -472,6 +477,29 @@ pub const Types = struct {
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
 			lib.assert(data_oid == TimestampArray.oid.decimal);
+			return Timestamp.decode(data, Timestamp.oid.decimal);
+		}
+	};
+
+	pub const TimestampTzArray = struct {
+		pub const oid = OID.make(1185);
+		const encoding = &binary_encoding;
+
+		const us_from_epoch_to_y2k = 946_684_800_000_000;
+
+		fn encode(values: []const i64, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&TimestampTz.oid.encoded, oid_pos);
+
+			// every value is 12 bytes, 4 byte length + 8 byte value
+			var view = try reserveView(buf, 12 * values.len);
+			for (values) |value| {
+				view.write(&.{0, 0, 0, 8}); // length of value
+				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
+			}
+		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
+			lib.assert(data_oid == TimestampTzArray.oid.decimal);
 			return Timestamp.decode(data, Timestamp.oid.decimal);
 		}
 	};
@@ -788,7 +816,7 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
-				Types.Timestamp.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+				Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
 				Types.Char.oid.decimal => {
 					if (value > 255 or value < 0) return error.IntWontFit;
 					return Types.Char.encode(@intCast(value), buf, format_pos);
@@ -806,7 +834,7 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
-				Types.Timestamp.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+				Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
 				Types.Char.oid.decimal => {
 					if (value > 255 or value < 0) return error.IntWontFit;
 					return Types.Char.encode(@intCast(value), buf, format_pos);
@@ -909,7 +937,8 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 					32 => try Types.Int32Array.encode(value, buf, oid_pos),
 					64 => {
 						switch (oid) {
-							1115 => try Types.TimestampArray.encode(value, buf, oid_pos),
+							Types.TimestampArray.oid.decimal => try Types.TimestampArray.encode(value, buf, oid_pos),
+							Types.TimestampTzArray.oid.decimal => try Types.TimestampTzArray.encode(value, buf, oid_pos),
 							else => try Types.Int64Array.encode(value, buf, oid_pos),
 						}
 					},

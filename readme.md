@@ -110,7 +110,7 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `u8` - `char`
 * `i16` - `smallint`
 * `i32` - `int`
-* `i64` - Depends on the underlying column type. A `timestamp` will be converted to microseconds since unix epoch. Otherwise, a `bigint`.
+* `i64` - Depends on the underlying column type. A `timestamp(tz)` will be converted to microseconds since unix epoch. Otherwise, a `bigint`.
 * `f32` - `float4`
 * `f64` - Depends on the underlying column type. A `numeric` will be converted to an `f64`. Otherwise, a `float`.
 * `bool` - `bool`
@@ -123,7 +123,7 @@ Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
 `u8` - `char[]`
 `i16` - `smallint[]`
 `i32` - `int[]`
-`i64` - `bigint[]` or `timestamp[]` (see `get`)
+`i64` - `bigint[]` or `timestamp(tz)[]` (see `get`)
 `f32` - `float4`
 `f64` - `float8` (nuremic[] is currently not supported)
 `bool` - `bool[]`
@@ -220,8 +220,8 @@ When a `[]u8` is bound to a UUID column, it must either be a 16-byte slice, or a
 
 When reading a `uuid` column with `[]u8` a 16-byte slice will be returned. Use the `pg.uuidToHex() ![36]u8` helper if you need it hex-encoded.
 
-### Timestamp
-When you bind an `i64` to a timestamp parameter, the value is assumed to be the number of microseconds since unix epoch (e.g. `std.time.microTimestamp()`). Array binding works the same.
+### Timestamp(tz)
+When you bind an `i64` to a timestamp(tz) parameter, the value is assumed to be the number of microseconds since unix epoch (e.g. `std.time.microTimestamp()`). Array binding works the same.
 
 When reading a `timestamp` column with `i64`, the number of microseconds since unix epoch will be returned
 
