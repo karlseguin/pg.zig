@@ -185,12 +185,16 @@ test "SASL: init" {
 	defer sasl3.deinit(t.allocator);
 	try t.expectString("n,,n=,r=", sasl3.client_first_message[0..8]);
 
-	// The nonce should be random. It's unlikely that if we generate 5, we'd get
+	const sasl4 = try SASL.init(t.allocator);
+	defer sasl4.deinit(t.allocator);
+	try t.expectString("n,,n=,r=", sasl4.client_first_message[0..8]);
+
+	// The nonce should be random. It's unlikely that if we generate 4, we'd get
 	// the same value at a given byte.
 	const nonce1 = sasl1.client_first_message[8..];
 	const nonce2 = sasl2.client_first_message[8..];
 	const nonce3 = sasl3.client_first_message[8..];
-	const nonce4 = sasl3.client_first_message[8..];
+	const nonce4 = sasl4.client_first_message[8..];
 	for (0..18) |i| {
 		try t.expectEqual(true,
 			nonce1[i] != nonce2[i] or
