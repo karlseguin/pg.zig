@@ -1,11 +1,10 @@
 const std = @import("std");
 const lib = @import("lib.zig");
 
+const log = lib.log;
 const Conn = lib.Conn;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
-
-pub const log = std.log.scoped(.pg);
 
 pub const Pool = struct {
 	_opts: Opts,
@@ -91,7 +90,7 @@ pub const Pool = struct {
 	pub fn release(self: *Pool, conn: *Conn) void {
 		var conn_to_add = conn;
 
-		if (conn._state != 'I') {
+		if (conn._state != .Idle) {
 			// conn should always be idle when being released. It's possible we can
 			// recover from this (e.g. maybe we just need to read until we get a
 			// ReadyForQuery), but we wouldn't want to block for too long. For now,
@@ -265,7 +264,7 @@ test "Pool: Release" {
 	defer pool.deinit();
 
 	const c1 = try pool.acquire();
-	c1._state = 'Q';
+	c1._state = .Query;
 	pool.release(c1);
 }
 

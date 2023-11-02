@@ -75,6 +75,15 @@ Executes the query with arguments, returns a single row. Returns an error if the
 ### row(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
 Same as `row` but takes the same options as `queryOpts`
 
+### begin() !void
+Calls `_ = try execOpts("begin", .{}, .{})`
+
+### commit() !void
+Calls `_ = try execOpts("commit", .{}, .{})`
+
+### rollback() !void
+Calls `_ = try execOpts("rollback", .{}, .{})`
+
 ## Result
 The `conn.query` and `conn.queryOpts` methods return a `pg.Result` which is used to read rows and values.
 

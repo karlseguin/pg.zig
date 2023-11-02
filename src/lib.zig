@@ -1,6 +1,7 @@
 // Exposed within this library
 const std = @import("std");
 
+pub const log = std.log.scoped(.pg);
 
 pub const types = @import("types.zig");
 pub const proto = @import("proto.zig");
