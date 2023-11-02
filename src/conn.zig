@@ -1297,7 +1297,50 @@ test "PG: begin/rollback" {
 	try t.expectEqual(null, row);
 }
 
+test "PG: bind enums" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	_ = try c.exec(
+		\\ insert into all_types (id, col_enum, col_enum_arr, col_text, col_text_arr)
+		\\ values (4, $1, $2, $3, $4)
+	, .{DummyEnum.val1, &[_]DummyEnum{DummyEnum.val1, DummyEnum.val2}, DummyEnum.val2, [_]DummyEnum{DummyEnum.val2, DummyEnum.val1}});
+
+	const row = (try c.row(
+		\\ select col_enum, col_text, col_enum_arr, col_text_arr
+		\\ from all_types
+		\\ where id = 4
+	, .{})) orelse unreachable;
+	defer row.deinit();
+
+	try t.expectString("val1", row.get([]u8, 0));
+	try t.expectString("val2", row.get([]u8, 1));
+
+	var arena = std.heap.ArenaAllocator.init(t.allocator);
+	defer arena.deinit();
+	const aa = arena.allocator();
+
+	{
+		const arr = try row.iterator([]const u8, 2).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectString("val1", arr[0]);
+		try t.expectString("val2", arr[1]);
+	}
+
+	{
+		const arr = try row.iterator([]const u8, 3).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectString("val2", arr[0]);
+		try t.expectString("val1", arr[1]);
+	}
+}
+
 const DummyStruct = struct{
 	id: i32,
 	name: []const u8,
+};
+
+const DummyEnum = enum {
+	val1,
+	val2,
 };

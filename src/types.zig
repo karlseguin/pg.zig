@@ -598,6 +598,15 @@ pub const Types = struct {
 			buf.writeAt(&String.oid.encoded, oid_pos);
 			return writeByteArray(values, buf);
 		}
+
+		fn encodeEnum(values: anytype, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&String.oid.encoded, oid_pos);
+			for (values.*) |value| {
+				const str = @tagName(value);
+				try buf.writeIntBig(i32, @intCast(str.len));
+				try buf.write(str);
+			}
+		}
 	};
 
 	pub const UUIDArray = struct {
@@ -887,7 +896,8 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 			// null
 			return buf.write(&.{255, 255, 255, 255});
 		},
-		else => {},
+		.Enum, .EnumLiteral => return bindSlice(u8, oid, @tagName(value), buf, format_pos),
+		else => compileHaltBindError(T),
 	}
 }
 
@@ -976,6 +986,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 			},
 			else => compileHaltBindError(SliceT),
 		},
+		.Enum, .EnumLiteral => try Types.StringArray.encodeEnum(&value, buf, oid_pos),
 		.Array => |arr| switch (arr.child) {
 			u8 => switch (oid) {
 				Types.StringArray.oid.decimal => try Types.StringArray.encode(&value, buf, oid_pos),
