@@ -588,6 +588,13 @@ pub const Types = struct {
 				else => return data,
 			}
 		}
+
+		pub fn decodeOneMutable(data: []const u8, data_oid: i32) []u8 {
+			switch (data_oid) {
+				JSONBArray.oid.decimal => return @constCast(JSONBArray.decodeOne(data)),
+				else => return @constCast(data),
+			}
+		}
 	};
 
 	pub const StringArray = struct {

@@ -211,7 +211,7 @@ pub const Row = struct {
 	oids: []i32,
 	values: []Result.State.Value,
 
-	pub fn get(self: *const Row, comptime T: type, col: usize) ScalarReturnType(T) {
+	pub fn get(self: *const Row, comptime T: type, col: usize) T {
 		const value = self.values[col];
 		const TT = switch (@typeInfo(T)) {
 			.Optional => |opt| blk: {
@@ -234,12 +234,13 @@ pub const Row = struct {
 			f32 => return types.Float32.decode(data, oid),
 			f64 => return types.Float64.decode(data, oid),
 			bool => return types.Bool.decode(data, oid),
-			[]u8, []const u8 => return types.Bytea.decode(data, oid),
+			[]const u8 => return types.Bytea.decode(data, oid),
+			[]u8 => return @constCast(types.Bytea.decode(data, oid)),
 			else => compileHaltGetError(T),
 		}
 	}
 
-	pub fn getCol(self: *const Row, comptime T: type, name: []const u8) ScalarReturnType(T) {
+	pub fn getCol(self: *const Row, comptime T: type, name: []const u8) T {
 		const col = self._result.columnIndex(name);
 		lib.assert(col != null);
 		return self.get(T, col.?);
@@ -263,7 +264,8 @@ pub const Row = struct {
 			f32 => types.Float32Array.decodeOne,
 			f64 => types.Float64Array.decodeOne,
 			bool => types.BoolArray.decodeOne,
-			[]u8, []const u8 => types.ByteaArray.decodeOne,
+			[]const u8 => types.ByteaArray.decodeOne,
+			[]u8 => types.ByteaArray.decodeOneMutable,
 			else => compileHaltGetError(T),
 		};
 
@@ -311,11 +313,11 @@ pub const QueryRow = struct {
 	row: Row,
 	result: Result,
 
-	pub fn get(self: *const QueryRow, comptime T: type, col: usize) ScalarReturnType(T) {
+	pub fn get(self: *const QueryRow, comptime T: type, col: usize) T {
 		return self.row.get(T, col);
 	}
 
-	pub fn getCol(self: *const QueryRow, comptime T: type, name: []const u8) ScalarReturnType(T) {
+	pub fn getCol(self: *const QueryRow, comptime T: type, name: []const u8) T {
 		return self.row.getCol(T, name);
 	}
 
@@ -332,25 +334,11 @@ pub const QueryRow = struct {
 	}
 };
 
-fn ScalarReturnType(comptime T: type) type {
-	return switch (T) {
-		[]u8 => []const u8,
-		?[]u8 => ?[]const u8,
-		else => T,
-	};
-}
-
 fn IteratorReturnType(comptime T: type) type {
-	return switch (T) {
-		[]u8 => Iterator([]const u8),
-		?[]u8 => ?Iterator([]const u8),
-		else => {
-			if (std.meta.activeTag(@typeInfo(T)) == .Optional) {
-				return ?Iterator(T);
-			}
-			return Iterator(T);
-		}
-	};
+	if (std.meta.activeTag(@typeInfo(T)) == .Optional) {
+		return ?Iterator(T);
+	}
+	return Iterator(T);
 }
 
 fn Iterator(comptime T: type) type {
@@ -826,4 +814,29 @@ test "Row: column names" {
 
 	try t.expectEqual(923, row.getCol(i32, "id"));
 	try t.expectString("Leto", row.getCol([]u8, "name"));
+}
+
+test "Result: mutable []u8" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select 'Leto'";
+	var row = (try c.row(sql, .{})).?;
+	defer row.deinit();
+
+	var name = row.get([]u8, 0);
+	name[3] = '!';
+	try t.expectString("Let!", name);
+}
+
+test "Result: mutable [][]u8" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select array['Leto', 'Test']::text[]";
+	var row = (try c.row(sql, .{})).?;
+	defer row.deinit();
+
+	var values = try row.iterator([]u8, 0).alloc(t.allocator);
+	defer t.allocator.free(values);
+	values[0][0] = 'n';
+	try t.expectString("neto", values[0]);
 }
