@@ -106,6 +106,7 @@ pub const Result = struct {
 				return .{
 					.values = values,
 					.oids = self._oids,
+					._result = self,
 				};
 			},
 			'C' => {
@@ -114,6 +115,15 @@ pub const Result = struct {
 			},
 			else => return error.UnexpectedDBMessage,
 		}
+	}
+
+	pub fn columnIndex(self: *const Result, column_name: []const u8) ?usize {
+		for (self.column_names, 0..) |n, i| {
+			if (std.mem.eql(u8, n, column_name)) {
+				return i;
+			}
+		}
+		return null;
 	}
 
 	// For every query, we need to store the type of each column (so we know
@@ -197,6 +207,7 @@ pub const Result = struct {
 };
 
 pub const Row = struct {
+	_result: *Result,
 	oids: []i32,
 	values: []Result.State.Value,
 
@@ -226,6 +237,12 @@ pub const Row = struct {
 			[]u8, []const u8 => return types.Bytea.decode(data, oid),
 			else => compileHaltGetError(T),
 		}
+	}
+
+	pub fn getCol(self: *const Row, comptime T: type, name: []const u8) ScalarReturnType(T) {
+		const col = self._result.columnIndex(name);
+		lib.assert(col != null);
+		return self.get(T, col.?);
 	}
 
 	pub fn iterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
@@ -282,6 +299,12 @@ pub const Row = struct {
 			._oid = self.oids[col],
 		};
 	}
+
+	pub fn iteratorCol(self: *const Row, comptime T: type, name: []const u8) IteratorReturnType(T) {
+		const col = self._result.columnIndex(name);
+		lib.assert(col != null);
+		return self.iterator(T, col.?);
+	}
 };
 
 pub const QueryRow = struct {
@@ -292,8 +315,16 @@ pub const QueryRow = struct {
 		return self.row.get(T, col);
 	}
 
+	pub fn getCol(self: *const QueryRow, comptime T: type, name: []const u8) ScalarReturnType(T) {
+		return self.row.getCol(T, name);
+	}
+
 	pub fn iterator(self: *const QueryRow, comptime T: type, col: usize) IteratorReturnType(T) {
 		return self.row.iterator(T, col);
+	}
+
+	pub fn iteratorCol(self: *const QueryRow, comptime T: type, name: []const u8) IteratorReturnType(T) {
+		return self.row.iteratorCol(T, name);
 	}
 
 	pub fn deinit(self: *const QueryRow) void {
@@ -784,4 +815,15 @@ test "Result: UUID" {
 	const row = (try result.next()).?;
 	try t.expectSlice(u8, &.{252, 190, 191, 15, 185, 150, 67, 185, 152, 24, 103, 43, 198, 137, 205, 168}, row.get([]u8, 0));
 	try t.expectSlice(u8, &.{174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222}, row.get([]u8, 1));
+}
+
+test "Row: column names" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	const sql = "select 923 as id, 'Leto' as name";
+	var row = (try c.rowOpts(sql, .{}, .{.column_names = true})).?;
+	defer row.deinit();
+
+	try t.expectEqual(923, row.getCol(i32, "id"));
+	try t.expectString("Leto", row.getCol([]u8, "name"));
 }

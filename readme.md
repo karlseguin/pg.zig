@@ -102,6 +102,9 @@ Why can't `deinit` handle this? If `deinit` also drained, you'd have to handle a
 ### next(result: \*Result) !?Row
 Iterates to the next row of the result, or returns null if there are no more rows.
 
+### columnIndex(name: []const u8) ?usize
+Returns the index of the column with the given name. This is only valid when the query is executed with the `column_names = true` option.
+
 ## Row
 The `row` represents a single row from a result. Any non-primitive value that you get from the `row` are valid only until the next call to the resul'ts `next`, `deinit` or `drain` methods.
 
@@ -126,6 +129,18 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `[]const u8` - Returns the raw underlying data. Can be used for any column type to get the PG-encoded value. For `text` and `bytea` columns, this will be the expected value. For `numeric`, this will be a text representation of the number. For `UUID` this will be a 16-byte slice (use `pg.uuidToHex [36]u8` if you want a hex-encoded UUID). For `JSON` and `JSONB` this will be the serialized JSON value.
 * `[]u8` - Alias to `[]const u8`. When using `[]u8` the return type is a `[]const u8`. This just exists to save a few keystrokes.
 
+# getCol(comptime T: type, column_name: []const u8) T
+Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts`.
+
+This relies on calling `result.columnIndex` which iterates through `result.column_names` fields. In some cases, this is more efficient than `StringHashMap` lookup, in others, it is worse. For performance-sensitive code, prefer using `get`, or cache the column index in a local variables outside of the `next()` loop:
+
+```zig
+const id_idx = result.columnIndex("id").?
+for (try result.next()) |row| {
+  // row.get(i32, id_idx)
+}
+```
+
 ### iterator(comptime T: type, col: usize) Iterator(T)
 Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
 
@@ -138,6 +153,9 @@ Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
 `bool` - `bool[]`
 * `[]const u8` - More strict than `get([]u8)`). Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`
 * `[]u8` - Alias to `[]const u8`.
+
+### iteratorCol(comptime T: typee, column_name: []const u8) Iterator(T)
+See `getCol`.
 
 ## QueryRow
 A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed.
