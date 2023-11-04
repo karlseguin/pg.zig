@@ -75,6 +75,12 @@ pub const Result = struct {
 	}
 
 	pub fn next(self: *Result) !?Row {
+		if (self._conn._state != .Query) {
+			// Possibly weird state. Most likely cause if calling next() multiple times
+			// despite null being returned.
+			return null;
+		}
+
 		const msg = try self._conn.read();
 		switch (msg.type) {
 			'D' => {
