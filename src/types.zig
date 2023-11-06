@@ -10,7 +10,7 @@ const OID = struct {
 
 	fn make(decimal: i32) OID {
 		var encoded: [4]u8 = undefined;
-		std.mem.writeIntBig(i32, &encoded, decimal);
+		std.mem.writeInt(i32, &encoded, decimal, .big);
 		return .{
 			.decimal = decimal,
 			.encoded = encoded,
@@ -57,7 +57,7 @@ pub const Types = struct {
 
 		pub fn decode(data: []const u8, data_oid: i32) i16 {
 			lib.assert(data.len == 2 and data_oid == Int16.oid.decimal);
-			return std.mem.readIntBig(i16, data[0..2]);
+			return std.mem.readInt(i16, data[0..2], .big);
 		}
 	};
 
@@ -78,7 +78,7 @@ pub const Types = struct {
 
 		pub fn decode(data: []const u8, data_oid: i32) i32 {
 			lib.assert(data.len == 4 and data_oid == Int32.oid.decimal);
-			return std.mem.readIntBig(i32, data[0..4]);
+			return std.mem.readInt(i32, data[0..4], .big);
 		}
 	};
 
@@ -102,7 +102,7 @@ pub const Types = struct {
 				Timestamp.oid.decimal, TimestampTz.oid.decimal => return Timestamp.decode(data, data_oid),
 				else => {
 					lib.assert(data.len == 8 and data_oid == Int64.oid.decimal);
-					return std.mem.readIntBig(i64, data[0..8]);
+					return std.mem.readInt(i64, data[0..8], .big);
 				},
 			}
 		}
@@ -121,7 +121,7 @@ pub const Types = struct {
 
 		pub fn decode(data: []const u8, data_oid: i32) i64 {
 			lib.assert(data.len == 8 and (data_oid == Timestamp.oid.decimal or data_oid == TimestampTz.oid.decimal));
-			return std.mem.readIntBig(i64, data[0..8]) + us_from_epoch_to_y2k;
+			return std.mem.readInt(i64, data[0..8], .big) + us_from_epoch_to_y2k;
 		}
 	};
 
@@ -143,7 +143,7 @@ pub const Types = struct {
 
 		pub fn decode(data: []const u8, data_oid: i32) f32 {
 			lib.assert(data.len == 4 and data_oid == Float32.oid.decimal);
-			const n = std.mem.readIntBig(i32, data[0..4]);
+			const n = std.mem.readInt(i32, data[0..4], .big);
 			const tmp: *f32 = @constCast(@ptrCast(&n));
 			return tmp.*;
 		}
@@ -167,7 +167,7 @@ pub const Types = struct {
 				Numeric.oid.decimal => return Numeric.decode(data, data_oid),
 				else => {
 					lib.assert(data.len == 8 and data_oid == Float64.oid.decimal);
-					const n = std.mem.readIntBig(i64, data[0..8]);
+					const n = std.mem.readInt(i64, data[0..8], .big);
 					const tmp: *f64 = @constCast(@ptrCast(&n));
 					return tmp.*;
 				},
@@ -724,7 +724,7 @@ pub const Types = struct {
 		var view = try reserveView(buf, (size + 4) * values.len);
 
 		var value_len: [4]u8 = undefined;
-		std.mem.writeIntBig(i32, &value_len, @intCast(size));
+		std.mem.writeInt(i32, &value_len, @intCast(size), .big);
 		for (values) |value| {
 			view.write(&value_len);
 			view.writeIntBig(T, value);
@@ -760,7 +760,7 @@ pub const Types = struct {
 	fn variableLengthFill(buf: *buffer.Buffer, pos: usize) void {
 		const len = buf.len() - pos;
 		var encoded_len: [4]u8 = undefined;
-		std.mem.writeIntBig(i32, &encoded_len, @intCast(len));
+		std.mem.writeInt(i32, &encoded_len, @intCast(len), .big);
 		buf.writeAt(&encoded_len, pos - 4);
 	}
 };
@@ -1013,7 +1013,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	var param_len: [4]u8 = undefined;
 	// write the lenght of the parameter, -4 because for paremeters, the length
 	// prefix itself isn't included.
-	std.mem.writeIntBig(i32, &param_len, @intCast(buf.len() - start_pos - 4));
+	std.mem.writeInt(i32, &param_len, @intCast(buf.len() - start_pos - 4), .big);
 	buf.writeAt(&param_len, start_pos);
 }
 

@@ -96,7 +96,7 @@ pub const Result = struct {
 				var values = self._values;
 				for (values) |*value| {
 					const data_start = offset + 4;
-					const length = std.mem.readIntBig(i32, data[offset..data_start][0..4]);
+					const length = std.mem.readInt(i32, data[offset..data_start][0..4], .big);
 					if (length == -1) {
 						value.is_null = true;
 						value.data = &[_]u8{};
@@ -195,7 +195,7 @@ pub const Result = struct {
 
 				{
 					const end = pos + 4;
-					self.oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
+					self.oids[i] = std.mem.readInt(i32, data[pos..end][0..4], .big);
 					pos = end;
 				}
 
@@ -289,15 +289,15 @@ pub const Row = struct {
 
 		// minimum size for 1 empty array
 		lib.assert(data.len >= 20);
-		const dimensions = std.mem.readIntBig(i32, data[0..4]);
+		const dimensions = std.mem.readInt(i32, data[0..4], .big);
 		lib.assert(dimensions == 1);
 
-		const has_nulls = std.mem.readIntBig(i32, data[4..8][0..4]);
+		const has_nulls = std.mem.readInt(i32, data[4..8][0..4], .big);
 		lib.assert(has_nulls == 0);
 
-		// const oid = std.mem.readIntBig(i32, data[8..12][0..4]);
-		const len = std.mem.readIntBig(i32, data[12..16][0..4]);
-		// const lower_bound = std.mem.readIntBig(i32, data[16..20][0..4]);
+		// const oid = std.mem.readInt(i32, data[8..12][0..4], .big);
+		const len = std.mem.readInt(i32, data[12..16][0..4], .big);
+		// const lower_bound = std.mem.readInt(i32, data[16..20][0..4], .big);
 
 		return .{
 			._len = @intCast(len),
@@ -377,7 +377,7 @@ fn Iterator(comptime T: type) type {
 
 			// TODO: for fixed length types, we don't need to decode the length
 			const len_end = pos + 4;
-			const value_len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
+			const value_len = std.mem.readInt(i32, data[pos..len_end][0..4], .big);
 
 			const data_end = len_end + @as(usize, @intCast(value_len));
 			lib.assert(data.len >= data_end);
@@ -402,7 +402,7 @@ fn Iterator(comptime T: type) type {
 			for (0..limit) |i| {
 				// TODO: for fixed length types, we don't need to decode the length
 				const len_end = pos + 4;
-				const data_len = std.mem.readIntBig(i32, data[pos..len_end][0..4]);
+				const data_len = std.mem.readInt(i32, data[pos..len_end][0..4], .big);
 				pos = len_end + @as(usize, @intCast(data_len));
 				into[i] = decoder(data[len_end..pos], oid);
 			}

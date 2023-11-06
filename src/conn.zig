@@ -318,7 +318,7 @@ pub const Conn = struct {
 				}
 
 				const data = msg.data;
-				if (std.mem.readIntBig(i16, data[0..2]) != param_oids.len) {
+				if (std.mem.readInt(i16, data[0..2], .big) != param_oids.len) {
 					// We weren't given the correct # of parameters. We need to return an
 					// error, but the server doesn't know that we're bailing. We still
 					// need to read the rest of its messages
@@ -333,7 +333,7 @@ pub const Conn = struct {
 					var pos: usize = 2;
 					for (0..param_oids.len) |i| {
 						const end = pos + 4;
-						param_oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
+						param_oids[i] = std.mem.readInt(i32, data[pos..end][0..4], .big);
 						pos = end;
 					}
 				}
@@ -349,7 +349,7 @@ pub const Conn = struct {
 					'n' => {}, // no data, number_of_columns = 0
 					'T' => {
 						const data = msg.data;
-						number_of_columns = std.mem.readIntBig(u16, data[0..2]);
+						number_of_columns = std.mem.readInt(u16, data[0..2], .big);
 						if (number_of_columns > state.oids.len) {
 							// we have more columns than our self._result_state can handle, we
 							// need to create a new Result.State specifically for this
