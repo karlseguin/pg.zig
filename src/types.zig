@@ -22,6 +22,8 @@ const text_encoding = [2]u8{0, 0};
 const binary_encoding = [2]u8{0, 1};
 
 pub const Types = struct {
+	// Every supported type is here. This includes the format we want to
+	// encode/decode (text or binary), and the logic for encoding and decoding.
 
 	pub const Char = struct {
 		// A blank-padded char
@@ -190,7 +192,10 @@ pub const Types = struct {
 
 		pub fn decode(data: []const u8, data_oid: i32) f64 {
 			lib.assert(data_oid == Numeric.oid.decimal);
-			return std.fmt.parseFloat(f64, data) catch 0;
+			return std.fmt.parseFloat(f64, data) catch {
+				lib.assert(false);
+				return 0;
+			};
 		}
 	};
 
