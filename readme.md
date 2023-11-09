@@ -1,4 +1,4 @@
-Native PostgreSQL driver for Zig
+# Native PostgreSQL driver for Zig
 
 The driver is early in development and you should consider using libpq, either directly or with a wrapper. If you do decide to use this driver, please read this readme in full to understand various caveats.
 

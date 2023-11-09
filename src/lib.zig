@@ -13,6 +13,7 @@ const result = @import("result.zig");
 pub const Row = result.Row;
 pub const Result = result.Result;
 pub const QueryRow = result.QueryRow;
+pub const Numeric = types.Numeric;
 
 const reader = @import("reader.zig");
 pub const Reader = reader.Reader;

@@ -4,11 +4,11 @@ const buffer = @import("buffer");
 
 // These are nested inside the the Types structure so that we can generate an
 // oid => encoding maping. See the oidEncoding function.
-const OID = struct {
+pub const OID = struct {
 	decimal: i32,
 	encoded: [4]u8,
 
-	fn make(decimal: i32) OID {
+	pub fn make(decimal: i32) OID {
 		var encoded: [4]u8 = undefined;
 		std.mem.writeInt(i32, &encoded, decimal, .big);
 		return .{
@@ -18,12 +18,14 @@ const OID = struct {
 	}
 };
 
-const text_encoding = [2]u8{0, 0};
-const binary_encoding = [2]u8{0, 1};
+pub const text_encoding = [2]u8{0, 0};
+pub const binary_encoding = [2]u8{0, 1};
 
 pub const Types = struct {
 	// Every supported type is here. This includes the format we want to
 	// encode/decode (text or binary), and the logic for encoding and decoding.
+
+	pub usingnamespace @import("types/numeric.zig");
 
 	pub const Char = struct {
 		// A blank-padded char
@@ -166,7 +168,7 @@ pub const Types = struct {
 
 		pub fn decode(data: []const u8, data_oid: i32) f64 {
 			switch (data_oid) {
-				Numeric.oid.decimal => return Numeric.decode(data, data_oid),
+				Types.Numeric.oid.decimal => return Types.Numeric.decode(data, data_oid).toFloat(),
 				else => {
 					lib.assert(data.len == 8 and data_oid == Float64.oid.decimal);
 					const n = std.mem.readInt(i64, data[0..8], .big);
@@ -174,28 +176,6 @@ pub const Types = struct {
 					return tmp.*;
 				},
 			}
-		}
-	};
-
-	// TODO: switch to binary encoding
-	pub const Numeric = struct {
-		pub const oid = OID.make(1700);
-		const encoding = &text_encoding;
-
-		fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
-			buf.writeAt(Numeric.encoding, format_pos);
-
-			const state = try variableLengthStart(buf);
-			try std.fmt.formatFloatDecimal(value, .{}, buf.writer());
-			variableLengthFill(buf, state);
-		}
-
-		pub fn decode(data: []const u8, data_oid: i32) f64 {
-			lib.assert(data_oid == Numeric.oid.decimal);
-			return std.fmt.parseFloat(f64, data) catch {
-				lib.assert(false);
-				return 0;
-			};
 		}
 	};
 
@@ -225,7 +205,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(String.encoding, format_pos);
-			var view = try reserveView(buf, 4 + value.len);
+			var view = try Encode.reserveView(buf, 4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -237,7 +217,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(Bytea.encoding, format_pos);
-			var view = try reserveView(buf, 4 + value.len);
+			var view = try Encode.reserveView(buf, 4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -256,7 +236,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(UUID.encoding, format_pos);
-			var view = try reserveView(buf, 20);
+			var view = try Encode.reserveView(buf, 20);
 			view.write(&.{0, 0, 0, 16});
 			switch (value.len) {
 				16 => view.write(value),
@@ -349,16 +329,16 @@ pub const Types = struct {
 
 		fn encodeBytes(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(JSON.encoding, format_pos);
-			var view = try reserveView(buf, 4 + value.len);
+			var view = try Encode.reserveView(buf, 4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
 
 		fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(JSON.encoding, format_pos);
-			const state = try variableLengthStart(buf);
+			const state = try Encode.variableLengthStart(buf);
 			try std.json.stringify(value, .{}, buf.writer());
-			variableLengthFill(buf, state);
+			Encode.variableLengthFill(buf, state);
 		}
 	};
 
@@ -368,7 +348,7 @@ pub const Types = struct {
 
 		fn encodeBytes(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(JSONB.encoding, format_pos);
-			var view = try reserveView(buf, 5 + value.len);
+			var view = try Encode.reserveView(buf, 5 + value.len);
 			// + 1 for the version
 			view.writeIntBig(i32, @intCast(value.len + 1));
 			view.writeByte(1); // jsonb version
@@ -377,10 +357,10 @@ pub const Types = struct {
 
 		fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(JSON.encoding, format_pos);
-			const state = try variableLengthStart(buf);
+			const state = try Encode.variableLengthStart(buf);
 			try buf.writeByte(1); // jsonb version
 			try std.json.stringify(value, .{}, buf.writer());
-			variableLengthFill(buf, state);
+			Encode.variableLengthFill(buf, state);
 		}
 
 		fn decode(data: []const u8, data_oid: i32) []const u8 {
@@ -395,7 +375,7 @@ pub const Types = struct {
 
 		fn encode(values: []const i16, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Int16.oid.encoded, oid_pos);
-			return writeIntArray(i16, 2, values, buf);
+			return Encode.writeIntArray(i16, 2, values, buf);
 		}
 
 		fn encodeUnsigned(values: []const u16, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -403,7 +383,7 @@ pub const Types = struct {
 				if (v > 32767) return error.UnsignedIntWouldBeTruncated;
 			}
 			buf.writeAt(&Int16.oid, oid_pos);
-			return writeIntArray(i16, 2, values, buf);
+			return Encode.writeIntArray(i16, 2, values, buf);
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) i16 {
@@ -418,7 +398,7 @@ pub const Types = struct {
 
 		fn encode(values: []const i32, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Int32.oid.encoded, oid_pos);
-			return writeIntArray(i32, 4, values, buf);
+			return Encode.writeIntArray(i32, 4, values, buf);
 		}
 
 		fn encodeUnsigned(values: []const u32, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -426,7 +406,7 @@ pub const Types = struct {
 				if (v > 2147483647) return error.UnsignedIntWouldBeTruncated;
 			}
 			buf.writeAt(&Int32.oid, oid_pos);
-			return writeIntArray(i32, 4, values, buf);
+			return Encode.writeIntArray(i32, 4, values, buf);
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) i32 {
@@ -441,7 +421,7 @@ pub const Types = struct {
 
 		fn encode(values: []const i64, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Int64.oid.encoded, oid_pos);
-			return writeIntArray(i64, 8, values, buf);
+			return Encode.writeIntArray(i64, 8, values, buf);
 		}
 
 		fn encodeUnsigned(values: []const u64, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -449,7 +429,7 @@ pub const Types = struct {
 				if (v > 9223372036854775807) return error.UnsignedIntWouldBeTruncated;
 			}
 			buf.writeAt(&Int64.oid, oid_pos);
-			return writeIntArray(i64, 8, values, buf);
+			return Encode.writeIntArray(i64, 8, values, buf);
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
@@ -473,7 +453,7 @@ pub const Types = struct {
 			buf.writeAt(&Timestamp.oid.encoded, oid_pos);
 
 			// every value is 12 bytes, 4 byte length + 8 byte value
-			var view = try reserveView(buf, 12 * values.len);
+			var view = try Encode.reserveView(buf, 12 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 8}); // length of value
 				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
@@ -496,7 +476,7 @@ pub const Types = struct {
 			buf.writeAt(&TimestampTz.oid.encoded, oid_pos);
 
 			// every value is 12 bytes, 4 byte length + 8 byte value
-			var view = try reserveView(buf, 12 * values.len);
+			var view = try Encode.reserveView(buf, 12 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 8}); // length of value
 				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
@@ -517,7 +497,7 @@ pub const Types = struct {
 			buf.writeAt(&Float32.oid.encoded, oid_pos);
 
 			// every value takes 8 bytes, 4 for the length, 4 for the value
-			var view = try reserveView(buf, 8 * values.len);
+			var view = try Encode.reserveView(buf, 8 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 4}); //length
 				const tmp: *i32 = @constCast(@ptrCast(&value));
@@ -539,7 +519,7 @@ pub const Types = struct {
 			buf.writeAt(&Float64.oid.encoded, oid_pos);
 
 			// every value takes 12 bytes, 4 for the length, 8 for the value
-			var view = try reserveView(buf, 12 * values.len);
+			var view = try Encode.reserveView(buf, 12 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 8}); //length
 				const tmp: *i64 = @constCast(@ptrCast(&value));
@@ -561,7 +541,7 @@ pub const Types = struct {
 			buf.writeAt(&Bool.oid.encoded, oid_pos);
 
 			// every value takes 5 bytes, 4 for the length, 1 for the value
-			var view = try reserveView(buf, 5 * values.len);
+			var view = try Encode.reserveView(buf, 5 * values.len);
 			for (values) |value| {
 				// each value is prefixed with a 4 byte length
 				if (value) {
@@ -584,7 +564,7 @@ pub const Types = struct {
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Bytea.oid.encoded, oid_pos);
-			return writeByteArray(values, buf);
+			return Encode.writeByteArray(values, buf);
 		}
 
 		pub fn decodeOne(data: []const u8, data_oid: i32) []const u8 {
@@ -608,7 +588,7 @@ pub const Types = struct {
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&String.oid.encoded, oid_pos);
-			return writeByteArray(values, buf);
+			return Encode.writeByteArray(values, buf);
 		}
 
 		fn encodeEnum(values: anytype, buf: *buffer.Buffer, oid_pos: usize) !void {
@@ -629,7 +609,7 @@ pub const Types = struct {
 			buf.writeAt(&UUID.oid.encoded, oid_pos);
 
 			// every value is 20 bytes, 4 byte length + 16 byte value
-			var view = try reserveView(buf, 20 * values.len);
+			var view = try Encode.reserveView(buf, 20 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 16}); // length of value
 				switch (value.len) {
@@ -652,7 +632,7 @@ pub const Types = struct {
 
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&JSON.oid.encoded, oid_pos);
-			return writeByteArray(values, buf);
+			return Encode.writeByteArray(values, buf);
 		}
 	};
 
@@ -669,7 +649,7 @@ pub const Types = struct {
 				len += value.len;
 			}
 
-			var view = try reserveView(buf, len);
+			var view = try Encode.reserveView(buf, len);
 			for (values) |value| {
 				// + 1 for the version
 				view.writeIntBig(i32, @intCast(value.len + 1));
@@ -694,7 +674,7 @@ pub const Types = struct {
 
 			// every value has a 5 byte prefix, a 4 byte length and a 1 byte char
 			const len = values.len * 5;
-			var view = try reserveView(buf, len);
+			var view = try Encode.reserveView(buf, len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 1});
 				view.writeByte(value);
@@ -704,7 +684,7 @@ pub const Types = struct {
 		// This is for a char[] bound to a [][]u8
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Char.oid.encoded, oid_pos);
-			return writeByteArray(values, buf);
+			return Encode.writeByteArray(values, buf);
 		}
 
 		pub fn decodeOne(value: []const u8, data_oid: i32) u8 {
@@ -714,7 +694,7 @@ pub const Types = struct {
 	};
 
 	// Return the encoding we want PG to use for a particular OID
-	fn encoding(oid: i32) *const [2]u8 {
+	fn resultEncodingFor(oid: i32) *const [2]u8 {
 		inline for (@typeInfo(@This()).Struct.decls) |decl| {
 			const S = @field(@This(), decl.name);
 			if (oid == S.oid.decimal) {
@@ -724,8 +704,15 @@ pub const Types = struct {
 		// default to text encoding
 		return &binary_encoding;
 	}
+};
 
-	fn writeIntArray(comptime T: type, size: usize, values: []const T, buf: *buffer.Buffer) !void {
+// expose our Types directly so callers can do types.Int32 rather than
+// types.Types.Int32
+pub usingnamespace Types;
+
+pub const Encode = struct {
+	// helpers for encoding data (or part of the data)
+	pub fn writeIntArray(comptime T: type, size: usize, values: []const T, buf: *buffer.Buffer) !void {
 		var view = try reserveView(buf, (size + 4) * values.len);
 
 		var value_len: [4]u8 = undefined;
@@ -736,7 +723,7 @@ pub const Types = struct {
 		}
 	}
 
-	fn writeByteArray(values: []const []const u8, buf: *buffer.Buffer) !void {
+	pub fn writeByteArray(values: []const []const u8, buf: *buffer.Buffer) !void {
 		// each value has a 4 byte length prefix
 		var len = values.len * 4;
 		for (values) |value| {
@@ -750,29 +737,25 @@ pub const Types = struct {
 		}
 	}
 
-	fn reserveView(buf: *buffer.Buffer, space: usize) !buffer.View {
+	pub fn reserveView(buf: *buffer.Buffer, space: usize) !buffer.View {
 		try buf.ensureUnusedCapacity(space);
 		var view = buf.view(buf.len());
 		_ = try buf.skip(space);
 		return view;
 	}
 
-	fn variableLengthStart(buf: *buffer.Buffer) !usize {
+	pub fn variableLengthStart(buf: *buffer.Buffer) !usize {
 		try buf.write(&.{0, 0, 0, 0}); // length placeholder
 		return buf.len();
 	}
 
-	fn variableLengthFill(buf: *buffer.Buffer, pos: usize) void {
+	pub fn variableLengthFill(buf: *buffer.Buffer, pos: usize) void {
 		const len = buf.len() - pos;
 		var encoded_len: [4]u8 = undefined;
 		std.mem.writeInt(i32, &encoded_len, @intCast(len), .big);
 		buf.writeAt(&encoded_len, pos - 4);
 	}
 };
-
-// expose our Types directly so callers can do types.Int32 rather than
-// types.Types.Int32
-pub usingnamespace Types;
 
 // Writes 2 pieces of the Bind message: the parameter encoding types and
 // the parameters themselves. Assumes buf is positioned correctly, i.e. the Bind
@@ -1037,7 +1020,7 @@ pub fn resultEncoding(oids: []i32, buf: *buffer.Buffer) !void {
 
 	view.writeIntBig(u16, @intCast(oids.len));
 	for (oids) |oid| {
-		view.write(Types.encoding(oid));
+		view.write(Types.resultEncodingFor(oid));
 	}
 }
 

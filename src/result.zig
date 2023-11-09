@@ -242,6 +242,7 @@ pub const Row = struct {
 			bool => return types.Bool.decode(data, oid),
 			[]const u8 => return types.Bytea.decode(data, oid),
 			[]u8 => return @constCast(types.Bytea.decode(data, oid)),
+			lib.Numeric => return types.Numeric.decode(data, oid),
 			else => compileHaltGetError(T),
 		}
 	}

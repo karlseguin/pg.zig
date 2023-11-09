@@ -7,6 +7,8 @@ pub const Row = lib.Row;
 pub const Result = lib.Result;
 pub const QueryRow = lib.QueryRow;
 
+pub const Numeric = lib.Numeric;
+
 pub fn uuidToHex(uuid: []const u8) ![36]u8 {
 	return lib.types.UUID.toString(uuid);
 }
