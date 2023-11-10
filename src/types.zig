@@ -533,6 +533,23 @@ pub const Types = struct {
 		}
 	};
 
+	pub const NumericArray = struct {
+		pub const oid = OID.make(1231);
+		const encoding = &binary_encoding;
+		fn encode(values: anytype, buf: *buffer.Buffer, oid_pos: usize) !void {
+			buf.writeAt(&Types.Numeric.oid.encoded, oid_pos);
+
+			for (values) |value| {
+				try Types.Numeric.encodeBuf(value, buf);
+			}
+		}
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) lib.Numeric {
+			lib.assert(data_oid == NumericArray.oid.decimal);
+			return Types.Numeric.decode(data, Types.Numeric.oid.decimal);
+		}
+	};
+
 	pub const BoolArray = struct {
 		pub const oid = OID.make(1000);
 		const encoding = &binary_encoding;
@@ -961,10 +978,14 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 				}
 			}
 		},
-		.Float => |float| switch (float.bits) {
-			32 => try Types.Float32Array.encode(value, buf, oid_pos),
-			64 => try Types.Float64Array.encode(value, buf, oid_pos),
-			else => compileHaltBindError(SliceT),
+		.Float => |float| {
+			if (oid == Types.NumericArray.oid.decimal) {
+				try Types.NumericArray.encode(value, buf, oid_pos);
+			} else switch (float.bits) {
+				32 => try Types.Float32Array.encode(value, buf, oid_pos),
+				64 => try Types.Float64Array.encode(value, buf, oid_pos),
+				else => compileHaltBindError(SliceT),
+			}
 		},
 		.Bool => try Types.BoolArray.encode(value, buf, oid_pos),
 		.Pointer => |ptr| switch (ptr.size) {

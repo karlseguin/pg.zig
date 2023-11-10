@@ -52,6 +52,10 @@ pub const Numeric = struct {
 
 	pub fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
 		buf.writeAt(encoding, format_pos);
+		return encodeBuf(value, buf);
+	}
+
+	pub fn encodeBuf(value: anytype, buf: *buffer.Buffer) !void {
 		if (@TypeOf(value) != comptime_float) {
 			if (math.isNan(value)) {
 				return encodeNaN(buf);
@@ -123,6 +127,123 @@ pub const Numeric = struct {
 		}
 
 		return if (self.sign == .negative) -value else value;
+	}
+
+	pub fn estimatedStringLen(self: Numeric) usize {
+		// for the decimal point
+		var l: usize = 1;
+		switch (self.sign) {
+			.nan => return 3,
+			.inf => return 3,
+			.negativeInf => return 4,
+			.negative => l += 1,
+			.positive => {},
+		}
+
+		// max size per base-10000 digit
+		if (self.number_of_digits == 0) {
+			return l + 2; // 0.0  but we already added the decimal place
+		}
+
+		l += self.number_of_digits * 4;
+		// there's no integer in the number, but our string output will have
+		// a leading 0  (so it'll be 0.123 instead of just .123)
+		if (self.weight < 0) {
+			l += 1;
+		}
+
+		return l;
+	}
+
+	pub fn toString(self: Numeric, buf: []u8) []u8 {
+		switch (self.sign) {
+			.nan => {
+				@memcpy(buf[0..3], "nan");
+				return buf[0..3];
+			},
+			.inf => {
+				@memcpy(buf[0..3], "inf");
+				return buf[0..3];
+			},
+			.negativeInf => {
+				@memcpy(buf[0..4], "-inf");
+				return buf[0..4];
+			},
+			else => {},
+		}
+
+		var pos: usize = 0;
+		var weight = self.weight;
+		var digits: []const u8 = self.digits;
+		const number_of_digits = self.number_of_digits;
+
+		if (self.sign == .negative) {
+			buf[0] = '-';
+			pos += 1;
+		}
+
+		if (number_of_digits == 0) {
+			const end = pos+3;
+			@memcpy(buf[pos..end], "0.0");
+			return buf[0..end];
+		}
+
+		// do the integer part first
+		if (weight < 0) {
+			buf[pos] = '0';
+			pos += 1;
+		} else {
+			while (weight >= 0) {
+				if (digits.len == 0) {
+					const end = pos + 4;
+					@memcpy(buf[pos..end], "0000");
+					pos = end;
+				} else {
+					const t = std.mem.readInt(i16, digits[0..2], .big);
+					pos += std.fmt.formatIntBuf(buf[pos..], t, 10, .lower, .{});
+					digits = digits[2..];
+				}
+				weight -= 1;
+			}
+		}
+
+		buf[pos] = '.';
+		pos += 1;
+
+		// now the fraction
+		if (digits.len == 0) {
+			buf[pos] = '0';
+			pos += 1;
+		} else {
+			while (digits.len > 0) {
+				const t = std.mem.readInt(i16, digits[0..2], .big);
+				if (t < 10) {
+					buf[pos+2] = '0';
+					buf[pos+1] = '0';
+					buf[pos] = '0';
+					pos += 3;
+				} else if (t < 100) {
+					buf[pos+1] = '0';
+					buf[pos] = '0';
+					pos += 2;
+				} else if (t < 1000) {
+					buf[pos] = '0';
+					pos += 1;
+				}
+				pos += std.fmt.formatIntBuf(buf[pos..], t, 10, .lower, .{});
+				digits = digits[2..];
+			}
+		}
+
+		// we wrote the fraction in 4-digit groups, but our scale (aka display scale)
+		// might indicate that we should have less precision. For example, we might
+		// have written 0.1230, but the scale might be 3, in which case we should
+		// have written 0.123.
+		const display_scale = @mod(self.scale, 4);
+		if (display_scale > 0) {
+			pos -= 4 - display_scale;
+		}
+		return buf[0..pos];
 	}
 };
 

@@ -128,6 +128,7 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `bool` - `bool`
 * `[]const u8` - Returns the raw underlying data. Can be used for any column type to get the PG-encoded value. For `text` and `bytea` columns, this will be the expected value. For `numeric`, this will be a text representation of the number. For `UUID` this will be a 16-byte slice (use `pg.uuidToHex [36]u8` if you want a hex-encoded UUID). For `JSON` and `JSONB` this will be the serialized JSON value.
 * `[]u8` - Same as []const u8 but returns a mutable value.
+* `pg.Numeric` - See numeric section
 
 # getCol(comptime T: type, column_name: []const u8) T
 Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts`.
@@ -144,15 +145,16 @@ for (try result.next()) |row| {
 ### iterator(comptime T: type, col: usize) Iterator(T)
 Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
 
-`u8` - `char[]`
-`i16` - `smallint[]`
-`i32` - `int[]`
-`i64` - `bigint[]` or `timestamp(tz)[]` (see `get`)
-`f32` - `float4`
-`f64` - `float8` (nuremic[] is currently not supported)
-`bool` - `bool[]`
+* `u8` - `char[]`
+* `i16` - `smallint[]`
+* `i32` - `int[]`
+* `i64` - `bigint[]` or `timestamp(tz)[]` (see `get`)
+* `f32` - `float4`
+* `f64` - `float8`
+* `bool` - `bool[]`
 * `[]const u8` - More strict than `get([]u8)`). Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`
 * `[]u8` - Same as `[]const u8` but returns mutable value.
+* `pg.Numeric` - See numeric section
 
 ### iteratorCol(comptime T: typee, column_name: []const u8) Iterator(T)
 See `getCol`.
@@ -199,7 +201,7 @@ Conversely, when binding a value to an SQL parameter, the library is a little mo
 Strongly consider using `pg.Pool` rather than using `pg.Conn` directly. The pool will attempt to reconnect disconnected connections or connections which are in an invalid state. Until more real world testing is done, you should assume that connections will get into invalid states.
 
 ## Important Notice 3 - Errors
-Zig errorsets do not support arbitrary payloads. This is problematic in a database driver where most applications probably care about the details of an error. The library takes a simple approach. If `error.PG` is returned, `conn.err` should be set and it contains a PG error object:
+Zig errorsets do not support arbitrary payloads. This is problematic in a database driver where most applications probably care about the details of an error. The library takes a simple approach. If `error.PG` is returned, `conn.err` should be set and will contains a PG error object:
 
 ```zig
 _ = conn.exec("drop table x", .{}) catch |err| {
@@ -220,7 +222,7 @@ If `error.PG` is returned from a non-connection object, like a query result, the
 All implementations have to deal with things like: how to support unsigned integers, given that PostgreSQL only has signed integers. Or, how to support UUIDs when the language has no UUID type. This section documents the exact behavior.
 
 ### Arrays
-Numeric arrays aren't supported. Multi-dimensional arrays aren't supported. The array lower bound is always 0 (or 1 in PG)
+Multi-dimensional arrays aren't supported. The array lower bound is always 0 (or 1 in PG)
 
 ### text, bool, bytea, char, char(n), custom enums
 No surprises, arrays supported.
@@ -236,11 +238,20 @@ When reading a column, you must use the correct type.
 When binding, `@floatCast` is used based on the SQL parameter type. Array binding is strict. When reading a value, you must use the correct type. 
 
 ### Numeric
-Numeric (aka decimal) has limited support. When an `f32`, `f64` or `comptime_float` is bound to a numeric parameter, `std.fmt.formatFloatDecimal` is used to send the text-representation (which PG fully supports).
+Until standard support comes to Zig (either in the stdlib or a de facto standard library), numeric support is half-baked. You can `get(pg.Numeric, $COL)` to return a `pg.Numeric`. The `pg.Numeric` type only has 2 useful methods: `toFloat` and `toString`. You can also use `num.estimatedStringLen` to get the max size of the string reprentation:
 
-Arrays are not currently supported :(
+```zig
+const numeric = row.get(pg.Numeric, 0);
+var buf = allocator.alloc(u8, numeric.estimatedStringLen());
+defer allocator.free(buf)
+const str = numeric.toStirng(&buf);
+```
 
-When reading a numeric value with `[]u8` text representation will be returned. Reading with `f64` will convert this using `std.fmt.parseFloat`.
+Using `row.get(f64, 0)` on a numeric is the same as `row.get(pg.Numeric, 0).toFloat()`.
+
+You should consider simply casting the numeric to `::double` or `::text` within SQL in order to rely on PostgreSQL's own robust numeric to float/text conversion.
+
+However, `pg.Numeric` has fields for the underlying wire-format of the numeric value. So if you require precision and the text representation isn't sufficient, you can parse the fields directly. `types/numeric.zig` is relatively well documented and tries to explain the fields. Note that any non-primitive fields, e.g. the  `digits: []u8`, is only valid until the next call to `result.next`, `result.deinit`, `result.drain` or `row.deinit`.
 
 ### UUID
 When a `[]u8` is bound to a UUID column, it must either be a 16-byte slice, or a valid 36-byte hex-encoded UUID. Arrays behave the same.

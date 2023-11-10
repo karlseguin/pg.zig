@@ -273,6 +273,7 @@ pub const Row = struct {
 			bool => types.BoolArray.decodeOne,
 			[]const u8 => types.ByteaArray.decodeOne,
 			[]u8 => types.ByteaArray.decodeOneMutable,
+			lib.Numeric => types.NumericArray.decodeOne,
 			else => compileHaltGetError(T),
 		};
 

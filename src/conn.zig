@@ -878,7 +878,7 @@ test "PG: type support" {
 			[_]u8{0, 0, 2, 255, 255, 255}, &[_][]u8{&bytea1, &bytea2},
 			"val1", [_][]const u8{"val1", "val2"},
 			"b7cc282f-ec43-49be-8e09-aafab0104915", [_][]const u8{"166B4751-D702-4FB9-9A2A-CD6B69ED18D6", "ae2f475f-8070-41b7-ba33-86bba8897bde"},
-			1234.567, null,
+			1234.567, [_]f64{0, -1.1, std.math.nan(f64), std.math.inf(f32), 12345.000101},
 			169804639500713, [_]i64{169804639500713, -94668480000000},
 			"{\"count\":1.3}", [_][]const u8{"[1,2,3]", "{\"rows\":[{\"a\": true}]}"},
 			"{\"over\":9000}", [_][]const u8{"[true,false]", "{\"cols\":[{\"z\": 0.003}]}"},
@@ -906,7 +906,7 @@ test "PG: type support" {
 		\\   col_bytea, col_bytea_arr,
 		\\   col_enum, col_enum_arr,
 		\\   col_uuid, col_uuid_arr,
-		\\   col_numeric, 'numeric[] placeholder',
+		\\   col_numeric, col_numeric_arr,
 		\\   col_timestamp, col_timestamp_arr,
 		\\   col_json, col_json_arr,
 		\\   col_jsonb, col_jsonb_arr,
@@ -1000,9 +1000,15 @@ test "PG: type support" {
 	}
 
 	{
-		//decimal
+		// numeric, numeric[]
 		try t.expectEqual(1234.567, row.get(f64, 21));
-		// try t.expectString("1234.567", row.get([]u8, 21));
+		const arr = try row.iterator(lib.Numeric, 22).alloc(aa);
+		try t.expectEqual(5, arr.len);
+		try expectNumeric(arr[0], "0.0");
+		try expectNumeric(arr[1], "-1.1");
+		try expectNumeric(arr[2], "nan");
+		try expectNumeric(arr[3], "inf");
+		try expectNumeric(arr[4], "12345.000101");
 	}
 
 	{
@@ -1338,7 +1344,7 @@ test "PG: bind enums" {
 test "PG: numeric" {
 	var c = t.connect(.{});
 	defer c.deinit();
-	_ = try c.exec("insert into all_types (id, col_numeric) values (999, $1)", .{939293122.0001101});
+	// _ = try c.exec("insert into all_types (id, col_numeric) values (999, $1)", .{-});
 
 	{
 		// read
@@ -1382,40 +1388,40 @@ test "PG: numeric" {
 			1234.9876, 12345.98765, 123456.987654,
 			1234567.9876543, 12345678.98765432, 123456789.987654321,
 			@as(f64, 0), @as(f64, 1), 0,
-			1, 9999999999999999.999999999, @as(f64, 9999999999999999.999999999),
-			-9999999999999999.999999999, @as(f64, -9999999999999999.999999999)
+			1, 999999999.9999999, @as(f64, 999999999.9999999),
+			-999999999.9999999, @as(f64, -999999999.9999999)
 		})).?;
 		defer row.deinit();
 
-		try t.expectEqual(-0.00089891, row.get(f64, 0));
-		try t.expectEqual(939293122.0001101, row.get(f64, 1));
-		try t.expectEqual(-123.4560991, row.get(f64, 2));
+		try expectNumeric(row.get(lib.Numeric, 0), "-0.00089891");
+		try expectNumeric(row.get(lib.Numeric, 1), "939293122.0001101");
+		try expectNumeric(row.get(lib.Numeric, 2), "-123.4560991");
 
-		try t.expectEqual(true, std.math.isNan(row.get(f64, 3)));
-		try t.expectEqual(true, std.math.isInf(row.get(f64, 4)));
-		try t.expectEqual(true, std.math.isNegativeInf(row.get(f64, 5)));
+		try expectNumeric(row.get(lib.Numeric, 3), "nan");
+		try expectNumeric(row.get(lib.Numeric, 4), "inf");
+		try expectNumeric(row.get(lib.Numeric, 5), "-inf");
 
-		try t.expectEqual(true, std.math.isNan(row.get(f64, 6)));
-		try t.expectEqual(true, std.math.isInf(row.get(f64, 7)));
-		try t.expectEqual(true, std.math.isNegativeInf(row.get(f64, 8)));
+		try expectNumeric(row.get(lib.Numeric, 6), "nan");
+		try expectNumeric(row.get(lib.Numeric, 7), "inf");
+		try expectNumeric(row.get(lib.Numeric, 8), "-inf");
 
-		try t.expectEqual(1.1, row.get(f64, 9));
-		try t.expectEqual(12.98, row.get(f64, 10));
-		try t.expectEqual(123.987, row.get(f64, 11));
-		try t.expectEqual(1234.9876, row.get(f64, 12));
-		try t.expectDelta(12345.98765, row.get(f64, 13), 0.0000000001);
-		try t.expectDelta(123456.987654, row.get(f64, 14), 0.0000000001);
-		try t.expectDelta(1234567.9876543, row.get(f64, 15), 0.0000000001);
-		try t.expectDelta(12345678.98765432, row.get(f64, 16), 0.0000000001);
-		try t.expectDelta(123456789.987654321, row.get(f64, 17), 0.0000000001);
-		try t.expectEqual(0.0, row.get(f64, 18));
-		try t.expectEqual(1.0, row.get(f64, 19));
-		try t.expectEqual(0.0, row.get(f64, 20));
-		try t.expectEqual(1.0, row.get(f64, 21));
-		try t.expectEqual(9999999999999999.999999999, row.get(f64, 22));
-		try t.expectEqual(9999999999999999.999999999, row.get(f64, 23));
-		try t.expectEqual(-9999999999999999.999999999, row.get(f64, 24));
-		try t.expectEqual(-9999999999999999.999999999, row.get(f64, 25));
+		try expectNumeric(row.get(lib.Numeric, 9), "1.1");
+		try expectNumeric(row.get(lib.Numeric, 10), "12.98");
+		try expectNumeric(row.get(lib.Numeric, 11), "123.987");
+		try expectNumeric(row.get(lib.Numeric, 12), "1234.9876");
+		try expectNumeric(row.get(lib.Numeric, 13), "12345.98765");
+		try expectNumeric(row.get(lib.Numeric, 14), "123456.987654");
+		try expectNumeric(row.get(lib.Numeric, 15), "1234567.9876543");
+		try expectNumeric(row.get(lib.Numeric, 16), "12345678.98765432");
+		try expectNumeric(row.get(lib.Numeric, 17), "123456789.98765433");
+		try expectNumeric(row.get(lib.Numeric, 18), "0.0");
+		try expectNumeric(row.get(lib.Numeric, 19), "1.0");
+		try expectNumeric(row.get(lib.Numeric, 20), "0.0");
+		try expectNumeric(row.get(lib.Numeric, 21), "1.0");
+		try expectNumeric(row.get(lib.Numeric, 22), "999999999.9999999");
+		try expectNumeric(row.get(lib.Numeric, 23), "999999999.9999999");
+		try expectNumeric(row.get(lib.Numeric, 24), "-999999999.9999999");
+		try expectNumeric(row.get(lib.Numeric, 25), "-999999999.9999999");
 
 
 		const numeric = row.get(lib.Numeric, 1);
@@ -1424,6 +1430,25 @@ test "PG: numeric" {
 		try t.expectEqual(.positive, numeric.sign);
 		try t.expectEqual(7, numeric.scale);
 		try t.expectSlice(u8, &.{0, 9, 15, 89, 12, 50, 0, 1, 3, 242}, numeric.digits);
+	}
+}
+
+fn expectNumeric(numeric: lib.Numeric, expected: []const u8) !void {
+	var str_buf: [50]u8 = undefined;
+	try t.expectString(expected, numeric.toString(&str_buf));
+
+	var a = try t.allocator.alloc(u8, numeric.estimatedStringLen());
+	defer t.allocator.free(a);
+	try t.expectString(expected, numeric.toString(a));
+
+	if (std.mem.eql(u8, expected, "nan")) {
+		try t.expectEqual(true, std.math.isNan(numeric.toFloat()));
+	} else if (std.mem.eql(u8, expected, "inf")) {
+		try t.expectEqual(true, std.math.isInf(numeric.toFloat()));
+	} else if (std.mem.eql(u8, expected, "-inf")) {
+		try t.expectEqual(true, std.math.isNegativeInf(numeric.toFloat()));
+	} else {
+		try t.expectDelta(try std.fmt.parseFloat(f64, expected), numeric.toFloat(), 0.000001);
 	}
 }
 
