@@ -11,9 +11,15 @@ pub const allocator = std.testing.allocator;
 pub fn expectEqual(expected: anytype, actual: anytype) !void {
 	try std.testing.expectEqual(@as(@TypeOf(actual), expected), actual);
 }
-pub fn expectDelta(expected: anytype, actual: @TypeOf(expected), delta: @TypeOf(expected)) !void {
-	try expectEqual(true, expected - delta <= actual);
-	try expectEqual(true, expected + delta >= actual);
+pub fn expectDelta(expected: anytype, actual: anytype, delta: anytype) !void {
+	expectEqual(true, expected - delta <= actual) catch |err| {
+		std.debug.print("{d} !~ {d}", .{expected, actual});
+		return err;
+	};
+	expectEqual(true, expected + delta >= actual) catch |err| {
+		std.debug.print("{d} !~ {d}", .{expected, actual});
+		return err;
+	};
 }
 pub const expectError = std.testing.expectError;
 pub const expectSlice = std.testing.expectEqualSlices;

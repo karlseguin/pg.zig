@@ -821,6 +821,7 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
 				Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+				Types.Numeric.oid.decimal => return Types.Numeric.encode(@as(f64, @floatFromInt(value)), buf, format_pos),
 				Types.Char.oid.decimal => {
 					if (value > 255 or value < 0) return error.IntWontFit;
 					return Types.Char.encode(@intCast(value), buf, format_pos);
@@ -839,6 +840,7 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 					return Types.Int32.encode(@intCast(value), buf, format_pos);
 				},
 				Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+				Types.Numeric.oid.decimal => return Types.Numeric.encode(@as(f64, @floatFromInt(value)), buf, format_pos),
 				Types.Char.oid.decimal => {
 					if (value > 255 or value < 0) return error.IntWontFit;
 					return Types.Char.encode(@intCast(value), buf, format_pos);

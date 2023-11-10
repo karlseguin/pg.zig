@@ -149,7 +149,8 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
 		positive = false;
 	}
 
-	const decimal_pos = std.mem.indexOfScalarPos(u8, str, pos, '.') orelse return error.InvalidNumber;
+	// if no decimal, assume this is a whole number
+	const decimal_pos = std.mem.indexOfScalarPos(u8, str, pos, '.') orelse str.len;
 
 	// The number of 4-digit groups in our integer
 	const integer_groups = blk: {
@@ -198,30 +199,36 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
 		// the dscale (or just scale) meta parameter resolves. Our dscale will be
 		// 5, indicating that the fraction is "12345" and not "12345000"..
 
-		while (pos < str.len - 4) {
-			const end = pos + 4;
-			try buf.writeIntBig(u16, generateGroup(str[pos..end]));
-			pos = end;
+		if (str.len > decimal_pos + 4) {
+			const loop_end = str.len - 4;
+			while (pos < loop_end) {
+				const end = pos + 4;
+				try buf.writeIntBig(u16, generateGroup(str[pos..end]));
+				pos = end;
+			}
 		}
 
-		const leftover = str.len - pos;
-		if (leftover > 0) {
-			// we have an incomplete group left over, read comment above for why
-			// we're multiplying this
-			var group_value = generateGroup(str[pos..]);
-			group_value *= switch (leftover) {
-				3 => 10,
-				2 => 100,
-				1 => 1000,
-				else => 1,
-			};
-			try buf.writeIntBig(u16, group_value);
+		if (pos < str.len) {
+			const leftover = str.len - pos;
+			if (leftover > 0) {
+				// we have an incomplete group left over, read comment above for why
+				// we're multiplying this
+				var group_value = generateGroup(str[pos..]);
+				group_value *= switch (leftover) {
+					3 => 10,
+					2 => 100,
+					1 => 1000,
+					else => 1,
+				};
+				try buf.writeIntBig(u16, group_value);
+			}
 		}
 	}
 
 	{
 		// -1 to exclude the decimal point itself
-		const display_scale: u16 = @intCast(str.len - decimal_pos - 1);
+		const display_scale: u16 = if (decimal_pos == str.len) 0 else @intCast(str.len - decimal_pos - 1);
+
 		// Fill in our meta
 		// Number of base-10000 digits that we wrote.
 		meta_view.writeIntBig(u16, @intCast(integer_groups + try std.math.divCeil(u16, display_scale, 4)));

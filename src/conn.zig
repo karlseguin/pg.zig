@@ -1367,11 +1367,23 @@ test "PG: numeric" {
 			\\ select
 			\\   $1::numeric, $2::numeric, $3::numeric,
 			\\   $4::numeric, $5::numeric, $6::numeric,
-			\\   $7::numeric, $8::numeric, $9::numeric
+			\\   $7::numeric, $8::numeric, $9::numeric,
+			\\   $10::numeric, $11::numeric, $12::numeric,
+			\\   $13::numeric, $14::numeric, $15::numeric,
+			\\   $16::numeric, $17::numeric, $18::numeric,
+			\\   $19::numeric, $20::numeric, $21::numeric,
+			\\   $22::numeric, $23::numeric, $24::numeric,
+			\\   $25::numeric, $26::numeric
 		, .{
 			-0.00089891, 939293122.0001101, "-123.4560991",
 			std.math.nan(f64), std.math.inf(f64), -std.math.inf(f64),
 			std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32),
+			1.1, 12.98, 123.987,
+			1234.9876, 12345.98765, 123456.987654,
+			1234567.9876543, 12345678.98765432, 123456789.987654321,
+			@as(f64, 0), @as(f64, 1), 0,
+			1, 9999999999999999.999999999, @as(f64, 9999999999999999.999999999),
+			-9999999999999999.999999999, @as(f64, -9999999999999999.999999999)
 		})).?;
 		defer row.deinit();
 
@@ -1386,6 +1398,24 @@ test "PG: numeric" {
 		try t.expectEqual(true, std.math.isNan(row.get(f64, 6)));
 		try t.expectEqual(true, std.math.isInf(row.get(f64, 7)));
 		try t.expectEqual(true, std.math.isNegativeInf(row.get(f64, 8)));
+
+		try t.expectEqual(1.1, row.get(f64, 9));
+		try t.expectEqual(12.98, row.get(f64, 10));
+		try t.expectEqual(123.987, row.get(f64, 11));
+		try t.expectEqual(1234.9876, row.get(f64, 12));
+		try t.expectDelta(12345.98765, row.get(f64, 13), 0.0000000001);
+		try t.expectDelta(123456.987654, row.get(f64, 14), 0.0000000001);
+		try t.expectDelta(1234567.9876543, row.get(f64, 15), 0.0000000001);
+		try t.expectDelta(12345678.98765432, row.get(f64, 16), 0.0000000001);
+		try t.expectDelta(123456789.987654321, row.get(f64, 17), 0.0000000001);
+		try t.expectEqual(0.0, row.get(f64, 18));
+		try t.expectEqual(1.0, row.get(f64, 19));
+		try t.expectEqual(0.0, row.get(f64, 20));
+		try t.expectEqual(1.0, row.get(f64, 21));
+		try t.expectEqual(9999999999999999.999999999, row.get(f64, 22));
+		try t.expectEqual(9999999999999999.999999999, row.get(f64, 23));
+		try t.expectEqual(-9999999999999999.999999999, row.get(f64, 24));
+		try t.expectEqual(-9999999999999999.999999999, row.get(f64, 25));
 
 
 		const numeric = row.get(lib.Numeric, 1);
