@@ -40,6 +40,9 @@ pub const Numeric = struct {
 	weight: i16,
 	sign: Sign,
 	scale: u16,
+	// this is tied to the current row and is only valid while the row is valid
+	// calling `next()`, `deinit()` `drain()` on there result, or `deinit()` on
+	// a QueryRow will invalidate this.
 	digits: []const u8,
 
 	const Sign = enum {
