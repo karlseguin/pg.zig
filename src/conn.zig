@@ -209,6 +209,10 @@ pub const Conn = struct {
 	}
 
 	pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !Result {
+		if (self.canQuery() == false) {
+			return error.ConnectionBusy;
+		}
+
 		var dyn_state = false;
 		var number_of_columns: u16 = 0;
 		var state = self._result_state;
@@ -447,6 +451,10 @@ pub const Conn = struct {
 	}
 
 	pub fn rowOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !?QueryRow {
+		if (self.canQuery() == false) {
+			return error.ConnectionBusy;
+		}
+
 		var result = try self.queryOpts(sql, values, opts);
 		errdefer result.deinit();
 
@@ -473,6 +481,9 @@ pub const Conn = struct {
 	}
 
 	pub fn execOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !?i64 {
+		if (self.canQuery() == false) {
+			return error.ConnectionBusy;
+		}
 		var buf = &self._buf;
 		buf.reset();
 
@@ -676,6 +687,14 @@ pub const Conn = struct {
 		return error.UnexpectedDBMessage;
 	}
 
+	fn canQuery(self: *const Conn) bool {
+		const state = self._state;
+		if (state == .Idle or state == .Transaction) {
+			return true;
+		}
+		return false;
+	}
+
 	// should not be called directly
 	pub fn readyForQuery(self: *Conn) !void {
 		const msg = try self.read();
@@ -817,6 +836,16 @@ test "Conn: bind error" {
 
 	// connection is still usable
 	try t.expectEqual(4, t.scalar(&c, "select 4"));
+}
+
+test "Conn: Query within Query error" {
+	var c = t.connect(.{});
+	defer c.deinit();
+	var rows = try c.query("select 1", .{});
+	defer rows.deinit();
+
+	try t.expectError(error.ConnectionBusy, c.row("select 2", .{}));
+	try t.expectEqual(1, (try rows.next()).?.get(i32 ,0));
 }
 
 test "PG: type support" {
