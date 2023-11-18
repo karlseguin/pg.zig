@@ -81,7 +81,10 @@ pub const Numeric = struct {
 
 	pub fn decode(data: []const u8, data_oid: i32) Numeric {
 		lib.assert(data_oid == Numeric.oid.decimal and data.len >= 8);
+		return decodeKnown(data);
+	}
 
+	pub fn decodeKnown(data: []const u8) Numeric {
 		return .{
 			.number_of_digits = std.mem.readInt(u16, data[0..2], .big),
 			.weight = std.mem.readInt(i16, data[2..4], .big),

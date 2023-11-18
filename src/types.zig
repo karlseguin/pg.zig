@@ -44,7 +44,11 @@ pub const Types = struct {
 		}
 
 		pub fn decode(data: []const u8, data_oid: i32) u8 {
-			lib.assert(data.len == 1 and data_oid == Char.oid.decimal);
+			lib.assert(data_oid == Char.oid.decimal);
+			return data[0];
+		}
+
+		pub fn decodeKnown(data: []const u8) u8 {
 			return data[0];
 		}
 	};
@@ -69,8 +73,7 @@ pub const Types = struct {
 			return Int16.decodeKnown(data);
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) i16 {
-			lib.assert(data.len == 2);
+		pub fn decodeKnown(data: []const u8) i16 {
 			return std.mem.readInt(i16, data[0..2], .big);
 		}
 	};
@@ -95,8 +98,7 @@ pub const Types = struct {
 			return Int32.decodeKnown(data);
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) i32 {
-			lib.assert(data.len == 4);
+		pub fn decodeKnown(data: []const u8) i32 {
 			return std.mem.readInt(i32, data[0..4], .big);
 		}
 	};
@@ -126,8 +128,7 @@ pub const Types = struct {
 			}
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) i64 {
-			lib.assert(data.len == 8);
+		pub fn decodeKnown(data: []const u8) i64 {
 			return std.mem.readInt(i64, data[0..8], .big);
 		}
 	};
@@ -148,8 +149,7 @@ pub const Types = struct {
 			return std.mem.readInt(i64, data[0..8], .big) + us_from_epoch_to_y2k;
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) i64 {
-			lib.assert(data.len == 8);
+		pub fn decodeKnown(data: []const u8) i64 {
 			return std.mem.readInt(i64, data[0..8], .big) + us_from_epoch_to_y2k;
 		}
 	};
@@ -175,8 +175,7 @@ pub const Types = struct {
 			return Float32.decodeKnown(data);
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) f32 {
-			lib.assert(data.len == 4);
+		pub fn decodeKnown(data: []const u8) f32 {
 			const n = std.mem.readInt(i32, data[0..4], .big);
 			const tmp: *f32 = @constCast(@ptrCast(&n));
 			return tmp.*;
@@ -206,8 +205,7 @@ pub const Types = struct {
 			}
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) f64 {
-			lib.assert(data.len == 8);
+		pub fn decodeKnown(data: []const u8) f64 {
 			const n = std.mem.readInt(i64, data[0..8], .big);
 			const tmp: *f64 = @constCast(@ptrCast(&n));
 			return tmp.*;
@@ -229,8 +227,7 @@ pub const Types = struct {
 			return decodeKnown(data);
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) bool {
-			lib.assert(data.len == 1);
+		pub fn decodeKnown(data: []const u8) bool {
 			return data[0] == 1;
 		}
 	};
@@ -267,6 +264,15 @@ pub const Types = struct {
 				JSONB.oid.decimal => return JSONB.decodeKnown(data),
 				else => return data,
 			}
+		}
+
+		pub fn decodeKnown(data: []const u8) []const u8 {
+			return data;
+		}
+
+		pub fn decodeKnownMutable(data: []const u8) []u8 {
+			// we know the underlying []u8 is mutable, it comes from our Reader
+			return @constCast(data);
 		}
 	};
 
@@ -408,9 +414,13 @@ pub const Types = struct {
 			return JSONB.decodeKnown(data);
 		}
 
-		pub fn decodeKnown(data: []const u8) callconv(.Inline) []const u8 {
-			lib.assert(data.len > 0);
+		pub fn decodeKnown(data: []const u8) []const u8 {
 			return data[1..];
+		}
+
+		pub fn decodeKnownMutable(data: []const u8) []u8 {
+			// we know the underlying []u8 is mutable, it comes from our Reader
+			return @constCast(data[1..]);
 		}
 	};
 
@@ -430,11 +440,6 @@ pub const Types = struct {
 			buf.writeAt(&Int16.oid, oid_pos);
 			return Encode.writeIntArray(i16, 2, values, buf);
 		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) i16 {
-			lib.assert(data_oid == Int16Array.oid.decimal);
-			return Int16.decodeKnown(data);
-		}
 	};
 
 	pub const Int32Array = struct {
@@ -452,11 +457,6 @@ pub const Types = struct {
 			}
 			buf.writeAt(&Int32.oid, oid_pos);
 			return Encode.writeIntArray(i32, 4, values, buf);
-		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) i32 {
-			lib.assert(data_oid == Int32Array.oid.decimal);
-			return Int32.decodeKnown(data);
 		}
 	};
 
@@ -476,17 +476,6 @@ pub const Types = struct {
 			buf.writeAt(&Int64.oid, oid_pos);
 			return Encode.writeIntArray(i64, 8, values, buf);
 		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
-			switch (data_oid) {
-				TimestampArray.oid.decimal => return TimestampArray.decodeOne(data, data_oid),
-				TimestampTzArray.oid.decimal => return TimestampTzArray.decodeOne(data, data_oid),
-				else => {
-					lib.assert(data_oid == Int64Array.oid.decimal);
-					return Int64.decodeKnown(data);
-				},
-			}
-		}
 	};
 
 	pub const TimestampArray = struct {
@@ -503,11 +492,6 @@ pub const Types = struct {
 				view.write(&.{0, 0, 0, 8}); // length of value
 				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
 			}
-		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
-			lib.assert(data_oid == TimestampArray.oid.decimal);
-			return Timestamp.decodeKnown(data);
 		}
 	};
 
@@ -527,11 +511,6 @@ pub const Types = struct {
 				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
 			}
 		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) i64 {
-			lib.assert(data_oid == TimestampTzArray.oid.decimal);
-			return Timestamp.decodeKnown(data);
-		}
 	};
 
 	pub const Float32Array = struct {
@@ -549,11 +528,6 @@ pub const Types = struct {
 				view.writeIntBig(i32, tmp.*);
 			}
 		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) f32 {
-			lib.assert(data_oid == Float32Array.oid.decimal);
-			return Float32.decodeKnown(data);
-		}
 	};
 
 	pub const Float64Array = struct {
@@ -570,11 +544,6 @@ pub const Types = struct {
 				const tmp: *i64 = @constCast(@ptrCast(&value));
 				view.writeIntBig(i64, tmp.*);
 			}
-		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) f64 {
-			lib.assert(data_oid == Float64Array.oid.decimal);
-			return Float64.decodeKnown(data);
 		}
 	};
 
@@ -596,11 +565,6 @@ pub const Types = struct {
 				}
 			}
 		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) bool {
-			lib.assert(data_oid == BoolArray.oid.decimal);
-			return Bool.decodeKnown(data);
-		}
 	};
 
 	pub const NumericArray = struct {
@@ -613,23 +577,12 @@ pub const Types = struct {
 				try Types.Numeric.encodeBuf(value, buf);
 			}
 		}
-
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) lib.Numeric {
-			lib.assert(data_oid == NumericArray.oid.decimal);
-			return Types.Numeric.decode(data, Types.Numeric.oid.decimal);
-		}
 	};
 
 	pub const CidrArray = struct {
 		pub const oid = OID.make(651);
 		pub const inet_oid = OID.make(1041);
 		const encoding = &binary_encoding;
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) lib.Cidr {
-			lib.assert(data_oid == CidrArray.oid.decimal or data_oid == CidrArray.inet_oid.decimal );
-			return Types.Cidr.decode(data, Types.Cidr.oid.decimal);
-		}
 	};
 
 	pub const ByteaArray = struct {
@@ -639,20 +592,6 @@ pub const Types = struct {
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Bytea.oid.encoded, oid_pos);
 			return Encode.writeByteArray(values, buf);
-		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) []const u8 {
-			switch (data_oid) {
-				JSONBArray.oid.decimal => return JSONBArray.decodeOne(data),
-				else => return data,
-			}
-		}
-
-		pub fn decodeOneMutable(data: []const u8, data_oid: i32) []u8 {
-			switch (data_oid) {
-				JSONBArray.oid.decimal => return @constCast(JSONBArray.decodeOne(data)),
-				else => return @constCast(data),
-			}
 		}
 	};
 
@@ -693,11 +632,6 @@ pub const Types = struct {
 				}
 			}
 		}
-
-		pub fn decodeOne(data: []const u8, data_oid: i32) []u8 {
-			lib.assert(data_oid == UUIDArray.oid.decimal);
-			return UUID.decode(data, UUID.oid.decimal);
-		}
 	};
 
 	pub const JSONArray = struct {
@@ -731,11 +665,6 @@ pub const Types = struct {
 				view.write(value);
 			}
 		}
-
-		fn decodeOne(value: []const u8) []const u8 {
-			lib.assert(value.len > 0 and value[0] == 1); // the version
-			return value[1..];
-		}
 	};
 
 	pub const CharArray = struct {
@@ -759,11 +688,6 @@ pub const Types = struct {
 		fn encode(values: []const []const u8, buf: *buffer.Buffer, oid_pos: usize) !void {
 			buf.writeAt(&Char.oid.encoded, oid_pos);
 			return Encode.writeByteArray(values, buf);
-		}
-
-		pub fn decodeOne(value: []const u8, data_oid: i32) u8 {
-			lib.assert(value.len == 1 and data_oid == CharArray.oid.decimal);
-			return value[0];
 		}
 	};
 

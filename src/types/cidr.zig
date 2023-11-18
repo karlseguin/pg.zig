@@ -23,11 +23,14 @@ pub const Cidr = struct {
 			(data.len == 8 or data.len == 20)
 		);
 
+		return decodeKnown(data);
+	}
+
+	pub fn decodeKnown(data: []const u8) Cidr {
 		// data[0] is 2 for v4 and 3 for v6, but we can infer this from the length
 		// data[1] is the netmask
 		// data[2] is an is_cidr flag, don't think we need to care about that?
 		// data[3] is the length of the address, which we can ignore since the rest of the payload is the address
-
 		return .{
 			.address = data[4..],
 			.netmask = data[1],

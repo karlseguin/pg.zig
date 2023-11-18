@@ -264,18 +264,55 @@ pub const Row = struct {
 			else => T,
 		};
 
-		const decoder = switch (TT) {
-			u8 => types.CharArray.decodeOne,
-			i16 => types.Int16Array.decodeOne,
-			i32 => types.Int32Array.decodeOne,
-			i64 => types.Int64Array.decodeOne,
-			f32 => types.Float32Array.decodeOne,
-			f64 => types.Float64Array.decodeOne,
-			bool => types.BoolArray.decodeOne,
-			[]const u8 => types.ByteaArray.decodeOne,
-			[]u8 => types.ByteaArray.decodeOneMutable,
-			lib.Numeric => types.NumericArray.decodeOne,
-			lib.Cidr => types.CidrArray.decodeOne,
+		const data_oid = self.oids[col];
+
+		var decoder = switch (TT) {
+			u8 => blk: {
+				lib.assert(data_oid == types.CharArray.oid.decimal);
+				break :blk &types.Char.decodeKnown;
+			},
+			i16 => blk: {
+				lib.assert(data_oid == types.Int16Array.oid.decimal);
+				break :blk &types.Int16.decodeKnown;
+			},
+			i32 => blk: {
+				lib.assert(data_oid == types.Int32Array.oid.decimal);
+				break :blk &types.Int32.decodeKnown;
+			},
+			i64 => switch (data_oid) {
+				types.TimestampArray.oid.decimal => &types.Timestamp.decodeKnown,
+				types.TimestampTzArray.oid.decimal => &types.Timestamp.decodeKnown,
+				types.Int64Array.oid.decimal => &types.Int64.decodeKnown,
+				else => std.debug.panic("{d} oid cannot target i64 iterator", .{data_oid}),
+			},
+			f32 => blk: {
+				lib.assert(data_oid == types.Float32Array.oid.decimal);
+				break :blk &types.Float32.decodeKnown;
+			},
+			f64 => blk: {
+				lib.assert(data_oid == types.Float64Array.oid.decimal);
+				break :blk &types.Float64.decodeKnown;
+			},
+			bool =>  blk: {
+				lib.assert(data_oid == types.BoolArray.oid.decimal);
+				break :blk &types.Bool.decodeKnown;
+			},
+			[]const u8 => switch (data_oid) {
+				types.JSONBArray.oid.decimal => &types.JSONB.decodeKnown,
+				else => &types.Bytea.decodeKnown,
+			},
+			[]u8 => switch (data_oid) {
+				types.JSONBArray.oid.decimal => &types.JSONB.decodeKnownMutable,
+				else => &types.Bytea.decodeKnownMutable,
+			},
+			lib.Numeric => blk: {
+				lib.assert(data_oid == types.NumericArray.oid.decimal);
+				break :blk &types.Numeric.decodeKnown;
+			},
+			lib.Cidr => blk: {
+				lib.assert(data_oid == types.CidrArray.oid.decimal or data_oid == types.CidrArray.inet_oid.decimal );
+				break :blk &types.Cidr.decodeKnown;
+			},
 			else => compileHaltGetError(T),
 		};
 
@@ -285,7 +322,6 @@ pub const Row = struct {
 			return .{
 				._len = 0,
 				._pos = 0,
-				._oid = 0,
 				._data = &[_]u8{},
 				._decoder = decoder,
 			};
@@ -308,7 +344,6 @@ pub const Row = struct {
 			._pos = 0,
 			._data = data[20..],
 			._decoder = decoder,
-			._oid = self.oids[col],
 		};
 	}
 
@@ -354,10 +389,9 @@ fn IteratorReturnType(comptime T: type) type {
 fn Iterator(comptime T: type) type {
 	return struct {
 		_len: usize,
-		_oid: i32,
 		_pos: usize,
 		_data: []const u8,
-		_decoder: *const fn(data: []const u8, data_oid: i32) ItemType(),
+		_decoder: *const fn(data: []const u8) ItemType(),
 
 		fn ItemType() type {
 			return switch (@typeInfo(T)) {
@@ -387,7 +421,7 @@ fn Iterator(comptime T: type) type {
 			lib.assert(data.len >= data_end);
 
 			self._pos = data_end;
-			return self._decoder(data[len_end..data_end], self._oid);
+			return self._decoder(data[len_end..data_end]);
 		}
 
 		pub fn alloc(self: Self, allocator: Allocator) ![]T {
@@ -401,14 +435,13 @@ fn Iterator(comptime T: type) type {
 			const decoder = self._decoder;
 
 			var pos: usize = 0;
-			const oid = self._oid;
 			const limit = @min(into.len, self._len);
 			for (0..limit) |i| {
 				// TODO: for fixed length types, we don't need to decode the length
 				const len_end = pos + 4;
 				const data_len = std.mem.readInt(i32, data[pos..len_end][0..4], .big);
 				pos = len_end + @as(usize, @intCast(data_len));
-				into[i] = decoder(data[len_end..pos], oid);
+				into[i] = decoder(data[len_end..pos]);
 			}
 		}
 	};

@@ -131,7 +131,7 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `pg.Numeric` - See numeric section
 * `pg.Cidr` - See CIDR/INET section
 
-# getCol(comptime T: type, column_name: []const u8) T
+### getCol(comptime T: type, column_name: []const u8) T
 Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts`.
 
 This relies on calling `result.columnIndex` which iterates through `result.column_names` fields. In some cases, this is more efficient than `StringHashMap` lookup, in others, it is worse. For performance-sensitive code, prefer using `get`, or cache the column index in a local variables outside of the `next()` loop:
@@ -240,7 +240,9 @@ When reading a column, you must use the correct type.
 When binding, `@floatCast` is used based on the SQL parameter type. Array binding is strict. When reading a value, you must use the correct type. 
 
 ### Numeric
-Until standard support comes to Zig (either in the stdlib or a de facto standard library), numeric support is half-baked. You can `get(pg.Numeric, $COL)` to return a `pg.Numeric`. The `pg.Numeric` type only has 2 useful methods: `toFloat` and `toString`. You can also use `num.estimatedStringLen` to get the max size of the string reprentation:
+Until standard support comes to Zig (either in the stdlib or a de facto standard library), numeric support is half-baked. When binding a value to a parameter, you can use a f32, f64, comptime_float or string. The same applies to bindin got a numeric array.
+
+You can `get(pg.Numeric, $COL)` to return a `pg.Numeric`. The `pg.Numeric` type only has 2 useful methods: `toFloat` and `toString`. You can also use `num.estimatedStringLen` to get the max size of the string reprentation:
 
 ```zig
 const numeric = row.get(pg.Numeric, 0);
@@ -263,7 +265,6 @@ When reading a value, via `row.get` or `row.iterator` you should use `pg.Cidr`. 
 * `address: []u8` - Will be a 4 or 16 byte slice depending on the family
 * `family: Family` - An enum, either `Family.v4` of `Family.v6`
 * `netmask: u8` - The network mask
-
 
 ### UUID
 When a `[]u8` is bound to a UUID column, it must either be a 16-byte slice, or a valid 36-byte hex-encoded UUID. Arrays behave the same.
