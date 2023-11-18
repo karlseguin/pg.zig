@@ -52,16 +52,16 @@ pub const Conn = struct {
 	_param_oids: []i32,
 
 	const State = enum {
-		Idle,
+		idle,
 
 		// something bad happened
-		Fail,
+		fail,
 
 		// we're doing a query
-		Query,
+		query,
 
 		// we're in a transaction
-		Transaction,
+		transaction,
 	};
 
 	pub const ConnectOpts = struct {
@@ -111,7 +111,7 @@ pub const Conn = struct {
 			._reader = reader,
 			._stream = stream,
 			._err_data = null,
-			._state = .Idle,
+			._state = .idle,
 			._allocator = allocator,
 			._param_oids = param_oids,
 			._result_state = result_state,
@@ -150,7 +150,7 @@ pub const Conn = struct {
 			// this can only fail in extreme conditions (OOM) and it will only impact
 			// the next query (and if the app is using the pool, the pool will try to
 			// recover from this anyways)
-			self._state = .Fail;
+			self._state = .fail;
 		};
 
 		{
@@ -244,7 +244,7 @@ pub const Conn = struct {
 			// this can only fail in extreme conditions (OOM) and it will only impact
 			// the next query (and if the app is using the pool, the pool will try to
 			// recover from this anyways)
-				self._state = .Fail;
+				self._state = .fail;
 		};
 
 		// Step 1: Parse, Describe, Sync
@@ -298,7 +298,7 @@ pub const Conn = struct {
 			}
 
 			// no longer idle, we're now in a query
-			self._state = .Query;
+			self._state = .query;
 
 			// First message we expect back is a ParseComplete, which has no data.
 			{
@@ -432,7 +432,7 @@ pub const Conn = struct {
 
 		// our call to readyForQuery above changed the state, but as far as we're
 		// concerned, we're still doing the query.
-		self._state = .Query;
+		self._state = .query;
 
 		return .{
 			._conn = self,
@@ -492,14 +492,14 @@ pub const Conn = struct {
 			// this can only fail in extreme conditions (OOM) and it will only impact
 			// the next query (and if the app is using the pool, the pool will try to
 			// recover from this anyways)
-			self._state = .Fail;
+			self._state = .fail;
 		};
 
 		if (values.len == 0) {
 			const simple_query = proto.Query{.sql = sql};
 			try simple_query.write(buf);
 			// no longer idle, we're now in a query
-			self._state = .Query;
+			self._state = .query;
 			try self.write(buf.string());
 		} else {
 			// TODO: there's some optimization opportunities here, since we know
@@ -537,7 +537,7 @@ pub const Conn = struct {
 	}
 
 	pub fn begin(self: *Conn) !void {
-		self._state = .Transaction;
+		self._state = .transaction;
 		_ = try self.execOpts("begin", .{}, .{});
 	}
 
@@ -636,15 +636,15 @@ pub const Conn = struct {
 		var reader = &self._reader;
 		while (true) {
 			const msg = reader.next() catch |err| {
-				self._state = .Fail;
+				self._state = .fail;
 				return err;
 			};
 			switch (msg.type) {
 				'Z' => {
 					self._state = switch (msg.data[0]) {
-						'I' => .Idle,
-						'T' => .Transaction,
-						'E' => .Fail,
+						'I' => .idle,
+						'T' => .transaction,
+						'E' => .fail,
 						else => unreachable,
 					};
 					return msg;
@@ -658,7 +658,7 @@ pub const Conn = struct {
 
 	fn write(self: *Conn, data: []const u8) !void {
 		self._stream.writeAll(data) catch |err| {
-			self._state = .Fail;
+			self._state = .fail;
 			return err;
 		};
 	}
@@ -683,13 +683,13 @@ pub const Conn = struct {
 	}
 
 	fn unexpectedMessage(self: *Conn) error{UnexpectedDBMessage} {
-		self._state = .Fail;
+		self._state = .fail;
 		return error.UnexpectedDBMessage;
 	}
 
 	fn canQuery(self: *const Conn) bool {
 		const state = self._state;
-		if (state == .Idle or state == .Transaction) {
+		if (state == .idle or state == .transaction) {
 			return true;
 		}
 		return false;

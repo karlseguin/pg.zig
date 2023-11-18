@@ -106,7 +106,7 @@ Iterates to the next row of the result, or returns null if there are no more row
 Returns the index of the column with the given name. This is only valid when the query is executed with the `column_names = true` option.
 
 ## Row
-The `row` represents a single row from a result. Any non-primitive value that you get from the `row` are valid only until the next call to the resul'ts `next`, `deinit` or `drain` methods.
+The `row` represents a single row from a result. Any non-primitive value that you get from the `row` are valid only until the next call to `next`, `deinit` or `drain`.
 
 ### Fields
 Only advance usage will need access to the row fields:
@@ -254,6 +254,16 @@ Using `row.get(f64, 0)` on a numeric is the same as `row.get(pg.Numeric, 0).toFl
 You should consider simply casting the numeric to `::double` or `::text` within SQL in order to rely on PostgreSQL's own robust numeric to float/text conversion.
 
 However, `pg.Numeric` has fields for the underlying wire-format of the numeric value. So if you require precision and the text representation isn't sufficient, you can parse the fields directly. `types/numeric.zig` is relatively well documented and tries to explain the fields. Note that any non-primitive fields, e.g. the  `digits: []u8`, is only valid until the next call to `result.next`, `result.deinit`, `result.drain` or `row.deinit`.
+
+### INET/CIDR
+You can bind a string value to a `cidr`, `inet`, `cidr[]` or `inet[]` parameter.
+
+When reading a value, via `row.get` or `row.iterator` you should use `pg.Cidr`. It exposes 3 fields:
+
+* `address: []u8` - Will be a 4 or 16 byte slice depending on the family
+* `family: Family` - An enum, either `Family.v4` of `Family.v6`
+* `netmask: u8` - The network mask
+
 
 ### UUID
 When a `[]u8` is bound to a UUID column, it must either be a 16-byte slice, or a valid 36-byte hex-encoded UUID. Arrays behave the same.

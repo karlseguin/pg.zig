@@ -90,7 +90,7 @@ pub const Pool = struct {
 	pub fn release(self: *Pool, conn: *Conn) void {
 		var conn_to_add = conn;
 
-		if (conn._state != .Idle) {
+		if (conn._state != .idle) {
 			// conn should always be idle when being released. It's possible we can
 			// recover from this (e.g. maybe we just need to read until we get a
 			// ReadyForQuery), but we wouldn't want to block for too long. For now,
@@ -264,7 +264,7 @@ test "Pool: Release" {
 	defer pool.deinit();
 
 	const c1 = try pool.acquire();
-	c1._state = .Query;
+	c1._state = .query;
 	pool.release(c1);
 }
 

@@ -47,7 +47,7 @@ pub const Result = struct {
 			// this can only fail in extreme conditions (OOM) and it will only impact
 			// the next query (and if the app is using the pool, the pool will try to
 			// recover from this anyways)
-			self._conn._state = .Fail;
+			self._conn._state = .fail;
 			return;
 		};
 	}
@@ -59,7 +59,7 @@ pub const Result = struct {
 	// and returning an error union in deinit is a pain for the caller.
 	pub fn drain(self: *Result) !void {
 		var conn = self._conn;
-		if (conn._state == .Idle) {
+		if (conn._state == .idle) {
 			return;
 		}
 
@@ -75,7 +75,7 @@ pub const Result = struct {
 	}
 
 	pub fn next(self: *Result) !?Row {
-		if (self._conn._state != .Query) {
+		if (self._conn._state != .query) {
 			// Possibly weird state. Most likely cause if calling next() multiple times
 			// despite null being returned.
 			return null;
