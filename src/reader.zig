@@ -639,12 +639,10 @@ test "Reader: start/endFlow large overread" {
 }
 
 test "Reader: start/endFlow large overread with flow-specific allocator" {
+	defer t.reset();
 	const R = ReaderT(*t.Stream);
 	var s = t.Stream.init();
 	defer s.deinit();
-
-	var arena = std.heap.ArenaAllocator.init(t.allocator);
-	defer arena.deinit();
 
 	// 1st message is bigge than static
 	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
@@ -661,7 +659,7 @@ test "Reader: start/endFlow large overread with flow-specific allocator" {
 	var reader = R.init(t.allocator, 7, s) catch unreachable;
 	defer reader.deinit();
 
-	try reader.startFlow(arena.allocator(), null);
+	try reader.startFlow(t.arena.allocator(), null);
 	const msg1 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
 

@@ -79,20 +79,6 @@ pub const Numeric = struct {
 		return encodeValidString(stream.getWritten(), buf);
 	}
 
-	pub fn encodeString(str: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
-		buf.writeAt(encoding, format_pos);
-		if (std.mem.eql(u8, str, "nan")) {
-			return encodeNaN(buf);
-		}
-		if (std.mem.eql(u8, str, "inf") orelse std.mem.eql(u8, str, "+inf")) {
-			return encodeInf(buf);
-		}
-		if (std.mem.eql(u8, str, "-inf")) {
-			return encodeNegativeInf(buf);
-		}
-		return encodeValidString(str, buf);
-	}
-
 	pub fn decode(data: []const u8, data_oid: i32) Numeric {
 		lib.assert(data_oid == Numeric.oid.decimal and data.len >= 8);
 

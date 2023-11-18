@@ -5,6 +5,12 @@ const Conn = @import("conn.zig").Conn;
 
 pub const allocator = std.testing.allocator;
 
+pub var arena = std.heap.ArenaAllocator.init(allocator);
+
+pub fn reset() void {
+	_ = arena.reset(.free_all);
+}
+
 // std.testing.expectEqual won't coerce expected to actual, which is a problem
 // when expected is frequently a comptime.
 // https://github.com/ziglang/zig/issues/4437
@@ -90,7 +96,11 @@ pub fn setup() !void {
 		\\   col_charn char(3),
 		\\   col_charn_arr char(2)[],
 		\\   col_timestamptz timestamptz,
-		\\   col_timestamptz_arr timestamptz[]
+		\\   col_timestamptz_arr timestamptz[],
+		\\   col_cidr cidr,
+		\\   col_cidr_arr cidr[],
+		\\   col_inet inet,
+		\\   col_inet_arr inet[]
 		\\ );
 	, .{}) catch |err| try fail(c, err);
 }

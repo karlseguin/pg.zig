@@ -243,6 +243,7 @@ pub const Row = struct {
 			[]const u8 => return types.Bytea.decode(data, oid),
 			[]u8 => return @constCast(types.Bytea.decode(data, oid)),
 			lib.Numeric => return types.Numeric.decode(data, oid),
+			lib.Cidr => return types.Cidr.decode(data, oid),
 			else => compileHaltGetError(T),
 		}
 	}
@@ -274,6 +275,7 @@ pub const Row = struct {
 			[]const u8 => types.ByteaArray.decodeOne,
 			[]u8 => types.ByteaArray.decodeOneMutable,
 			lib.Numeric => types.NumericArray.decodeOne,
+			lib.Cidr => types.CidrArray.decodeOne,
 			else => compileHaltGetError(T),
 		};
 
@@ -564,7 +566,7 @@ test "Result: bool" {
 	}
 }
 
-test "Result: test and bytea" {
+test "Result: text and bytea" {
 	var c = t.connect(.{});
 	defer c.deinit();
 	const sql = "select $1::text, $2::bytea";

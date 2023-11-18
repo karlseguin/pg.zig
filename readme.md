@@ -129,6 +129,7 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `[]const u8` - Returns the raw underlying data. Can be used for any column type to get the PG-encoded value. For `text` and `bytea` columns, this will be the expected value. For `numeric`, this will be a text representation of the number. For `UUID` this will be a 16-byte slice (use `pg.uuidToHex [36]u8` if you want a hex-encoded UUID). For `JSON` and `JSONB` this will be the serialized JSON value.
 * `[]u8` - Same as []const u8 but returns a mutable value.
 * `pg.Numeric` - See numeric section
+* `pg.Cidr` - See CIDR/INET section
 
 # getCol(comptime T: type, column_name: []const u8) T
 Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts`.
@@ -155,6 +156,7 @@ Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
 * `[]const u8` - More strict than `get([]u8)`). Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`
 * `[]u8` - Same as `[]const u8` but returns mutable value.
 * `pg.Numeric` - See numeric section
+* `pg.Cidr` - See CIDR/INET section
 
 ### iteratorCol(comptime T: typee, column_name: []const u8) Iterator(T)
 See `getCol`.

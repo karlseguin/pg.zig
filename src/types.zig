@@ -25,6 +25,7 @@ pub const Types = struct {
 	// Every supported type is here. This includes the format we want to
 	// encode/decode (text or binary), and the logic for encoding and decoding.
 
+	pub usingnamespace @import("types/cidr.zig");
 	pub usingnamespace @import("types/numeric.zig");
 
 	pub const Char = struct {
@@ -544,9 +545,21 @@ pub const Types = struct {
 			}
 		}
 
+
 		pub fn decodeOne(data: []const u8, data_oid: i32) lib.Numeric {
 			lib.assert(data_oid == NumericArray.oid.decimal);
 			return Types.Numeric.decode(data, Types.Numeric.oid.decimal);
+		}
+	};
+
+	pub const CidrArray = struct {
+		pub const oid = OID.make(651);
+		pub const inet_oid = OID.make(1041);
+		const encoding = &binary_encoding;
+
+		pub fn decodeOne(data: []const u8, data_oid: i32) lib.Cidr {
+			lib.assert(data_oid == CidrArray.oid.decimal or data_oid == CidrArray.inet_oid.decimal );
+			return Types.Cidr.decode(data, Types.Cidr.oid.decimal);
 		}
 	};
 
@@ -927,6 +940,18 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 		}
 	}
 
+	// For now, a few types are text-encoded. This largely has to do with the fact
+	// that there's no native Zig type, so a text representation lets us use PG's
+	// own text->type conversion.
+	if (comptime isStringArray(T)) {
+		switch (oid) {
+			Types.NumericArray.oid.decimal,
+			Types.CidrArray.oid.decimal => return encodeTextArray(value, buf, format_pos),
+			Types.CidrArray.inet_oid.decimal => return encodeTextArray(value, buf, format_pos),
+			else => {}, // fallthrough to binary encoding
+		}
+	}
+
 	const SliceT = []T;
 
 	// We have an array. All arrays have the same header. We'll write this into
@@ -940,7 +965,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	const start_pos = buf.len();
 
 	try buf.write(&.{
-		0, 0, 0, 0, // placeholder for the lenght of this parameter
+		0, 0, 0, 0, // placeholder for the length of this parameter
 		0, 0, 0, 1, // number of dimensions, for now, we only support one
 		0, 0, 0, 0, // bitmask of null, currently, with a single dimension, we don't have null arrays
 		0, 0, 0, 0, // placeholder for the oid of each value
@@ -1005,19 +1030,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 			else => compileHaltBindError(SliceT),
 		},
 		.Enum, .EnumLiteral => try Types.StringArray.encodeEnum(&value, buf, oid_pos),
-		.Array => |arr| switch (arr.child) {
-			u8 => switch (oid) {
-				Types.StringArray.oid.decimal => try Types.StringArray.encode(&value, buf, oid_pos),
-				Types.UUIDArray.oid.decimal => try Types.UUIDArray.encode(&value, buf, oid_pos),
-				Types.JSONBArray.oid.decimal => try Types.JSONBArray.encode(&value, buf, oid_pos),
-				Types.JSONArray.oid.decimal => try Types.JSONArray.encode(&value, buf, oid_pos),
-				Types.CharArray.oid.decimal => try Types.CharArray.encode(value, buf, oid_pos),
-				// we try this as a default to support user defined types with unknown oids
-				// (like an array of enums)
-				else => try Types.ByteaArray.encode(&value, buf, oid_pos),
-			},
-			else => compileHaltBindError(SliceT),
-		},
+		.Array => try bindSlice(*T, oid, &value, buf, format_pos),
 		else => compileHaltBindError(SliceT),
 	}
 
@@ -1026,6 +1039,49 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	// prefix itself isn't included.
 	std.mem.writeInt(i32, &param_len, @intCast(buf.len() - start_pos - 4), .big);
 	buf.writeAt(&param_len, start_pos);
+}
+
+fn isStringArray(comptime T: type) bool {
+	switch (@typeInfo(T)) {
+		.Pointer => |ptr| switch (ptr.size) {
+			.Slice => switch (ptr.child) {
+				u8 => return true,
+				else => return false,
+			},
+			else => return false,
+		},
+		else => return false,
+	}
+}
+
+// currently only used for types which have values that should never need escaping
+fn encodeTextArray(values: []const []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+	buf.writeAt(&text_encoding, format_pos);
+	if (values.len == 0) {
+		// empty array, with length prefix
+		return buf.write(&.{0, 0, 0, 2, '{', '}'});
+	}
+
+	// 4-byte length + opening brace
+	var l: usize = 5;
+	for (values) |v| {
+		// value + delimiter, for the last value, there is no delimiter
+		// but there is a closing brace
+		l += v.len + 1;
+	}
+
+	var view = try Encode.reserveView(buf, l);
+
+	// the length prefix doesn't include itself
+	view.writeIntBig(i32, @intCast(l - 4));
+
+	view.writeByte('{');
+	view.write(values[0]);
+	for (values[1..]) |v| {
+		view.writeByte(',');
+		view.write(v);
+	}
+	view.writeByte('}');
 }
 
 // Write the last part of the Bind message: telling postgresql how it should

@@ -849,6 +849,8 @@ test "Conn: Query within Query error" {
 }
 
 test "PG: type support" {
+	defer t.reset();
+
 	var c = t.connect(.{});
 	defer c.deinit();
 	var bytea1 = [_]u8{0, 1};
@@ -874,7 +876,9 @@ test "PG: type support" {
 		\\   col_jsonb, col_jsonb_arr,
 		\\   col_char, col_char_arr,
 		\\   col_charn, col_charn_arr,
-		\\   col_timestamptz, col_timestamptz_arr
+		\\   col_timestamptz, col_timestamptz_arr,
+		\\   col_cidr, col_cidr_arr,
+		\\   col_inet, col_inet_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -893,7 +897,9 @@ test "PG: type support" {
 		\\   $28, $29,
 		\\   $30, $31,
 		\\   $32, $33,
-		\\   $34, $35
+		\\   $34, $35,
+		\\   $36, $37,
+		\\   $38, $39
 		\\ )
 		, .{
 			1,
@@ -914,6 +920,8 @@ test "PG: type support" {
 			79, [_]u8{'1', 'z', '!'},
 			"Teg", [_][]const u8{&.{78, 82}, "hi"},
 			169804639500713, [_]i64{169804639500713, -94668480000000},
+			"192.168.100.128/25", [_][]const u8{"10.1.2", "2001:4f8:3:ba::/64"},
+			"::ffff:1.2.3.0/120", [_][]const u8{"127.0.0.1/32", "2001:4f8:3:ba:2e0:81ff:fe22:d1f1/128"},
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -941,16 +949,15 @@ test "PG: type support" {
 		\\   col_jsonb, col_jsonb_arr,
 		\\   col_char, col_char_arr,
 		\\   col_charn, col_charn_arr,
-		\\   col_timestamptz, col_timestamptz_arr
+		\\   col_timestamptz, col_timestamptz_arr,
+		\\   col_cidr, col_cidr_arr,
+		\\   col_inet, col_inet_arr
 		\\ from all_types where id = $1
 	, .{1});
 	defer result.deinit();
 
 	// used for our arrays
-	var arena = std.heap.ArenaAllocator.init(t.allocator);
-	defer arena.deinit();
-
-	const aa = arena.allocator();
+	const aa = t.arena.allocator();
 
 	const row = (try result.next()) orelse unreachable;
 	try t.expectEqual(1, row.get(i32, 0));
@@ -1084,9 +1091,47 @@ test "PG: type support" {
 	}
 
 	{
-		//timestamp
+		//timestamp, timestamp[]
 		try t.expectEqual(169804639500713, row.get(i64, 33));
 		try t.expectSlice(i64, &.{169804639500713, -94668480000000}, try row.iterator(i64, 34).alloc(aa));
+	}
+
+	{
+		// cidr, cidr[]
+		const cidr = row.get(lib.Cidr, 35);
+		try t.expectEqual(25, cidr.netmask);
+		try t.expectEqual(.v4, cidr.family);
+		try t.expectString(&.{192, 168, 100, 128}, cidr.address);
+
+		const arr = try row.iterator(lib.Cidr, 36).alloc(aa);
+		try t.expectEqual(2, arr.len);
+
+		try t.expectEqual(24, arr[0].netmask);
+		try t.expectEqual(.v4, arr[0].family);
+		try t.expectString(&.{10, 1, 2, 0}, arr[0].address);
+
+		try t.expectEqual(64, arr[1].netmask);
+		try t.expectEqual(.v6, arr[1].family);
+		try t.expectSlice(u8, &.{32, 1, 4, 248, 0, 3, 0, 186, 0, 0, 0, 0, 0, 0, 0, 0}, arr[1].address);
+	}
+
+	{
+		// inet, inet[]
+		const inet = row.get(lib.Cidr, 37);
+		try t.expectEqual(120, inet.netmask);
+		try t.expectEqual(.v6, inet.family);
+		try t.expectString(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 1, 2, 3, 0}, inet.address);
+
+		const arr = try row.iterator(lib.Cidr, 38).alloc(aa);
+		try t.expectEqual(2, arr.len);
+
+		try t.expectEqual(32, arr[0].netmask);
+		try t.expectEqual(.v4, arr[0].family);
+		try t.expectString(&.{127, 0, 0, 1}, arr[0].address);
+
+		try t.expectEqual(128, arr[1].netmask);
+		try t.expectEqual(.v6, arr[1].family);
+		try t.expectSlice(u8, &.{32, 1, 4, 248, 0, 3, 0, 186, 2, 224, 129, 255, 254, 34, 209, 241}, arr[1].address);
 	}
 
 	try t.expectEqual(null, try result.next());
@@ -1371,6 +1416,8 @@ test "PG: bind enums" {
 }
 
 test "PG: numeric" {
+	defer t.reset();
+
 	var c = t.connect(.{});
 	defer c.deinit();
 	// _ = try c.exec("insert into all_types (id, col_numeric) values (999, $1)", .{-});
@@ -1408,7 +1455,7 @@ test "PG: numeric" {
 			\\   $16::numeric, $17::numeric, $18::numeric,
 			\\   $19::numeric, $20::numeric, $21::numeric,
 			\\   $22::numeric, $23::numeric, $24::numeric,
-			\\   $25::numeric, $26::numeric
+			\\   $25::numeric, $26::numeric, $27::numeric[]
 		, .{
 			-0.00089891, 939293122.0001101, "-123.4560991",
 			std.math.nan(f64), std.math.inf(f64), -std.math.inf(f64),
@@ -1418,9 +1465,20 @@ test "PG: numeric" {
 			1234567.9876543, 12345678.98765432, 123456789.987654321,
 			@as(f64, 0), @as(f64, 1), 0,
 			1, 999999999.9999999, @as(f64, 999999999.9999999),
-			-999999999.9999999, @as(f64, -999999999.9999999)
+			-999999999.9999999, @as(f64, -999999999.9999999),
+			&[_][]const u8{"1.1", "-0.0034"}
 		})).?;
 		defer row.deinit();
+
+		{
+			// test the pg.Numeric fields
+			const numeric = row.get(lib.Numeric, 1);
+			try t.expectEqual(939293122.0001101, numeric.toFloat());
+			try t.expectEqual(2, numeric.weight);
+			try t.expectEqual(.positive, numeric.sign);
+			try t.expectEqual(7, numeric.scale);
+			try t.expectSlice(u8, &.{0, 9, 15, 89, 12, 50, 0, 1, 3, 242}, numeric.digits);
+		}
 
 		try expectNumeric(row.get(lib.Numeric, 0), "-0.00089891");
 		try expectNumeric(row.get(lib.Numeric, 1), "939293122.0001101");
@@ -1453,12 +1511,10 @@ test "PG: numeric" {
 		try expectNumeric(row.get(lib.Numeric, 25), "-999999999.9999999");
 
 
-		const numeric = row.get(lib.Numeric, 1);
-		try t.expectEqual(939293122.0001101, numeric.toFloat());
-		try t.expectEqual(2, numeric.weight);
-		try t.expectEqual(.positive, numeric.sign);
-		try t.expectEqual(7, numeric.scale);
-		try t.expectSlice(u8, &.{0, 9, 15, 89, 12, 50, 0, 1, 3, 242}, numeric.digits);
+		const arr = try row.iterator(lib.Numeric, 26).alloc(t.arena.allocator());
+		try t.expectEqual(2, arr.len);
+		try t.expectEqual(1.1, arr[0].toFloat());
+		try t.expectDelta(-0.0034, arr[1].toFloat(), 0.00000001);
 	}
 }
 
