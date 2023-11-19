@@ -24,7 +24,7 @@ pub fn write(self: Describe, buf: *proto.Buffer) !void {
 	_ = buf.skip(total_length) catch unreachable;
 	var view = buf.view(0);
 	view.writeByte('D');
-	view.writeIntBig(u32, @intCast(payload_len));
+	view.writeIntBig(u32, @as(u32, @intCast(payload_len)));
 	view.writeByte(switch (self.type) {
 		.portal => 'P',
 		.prepared_statement => 'S',

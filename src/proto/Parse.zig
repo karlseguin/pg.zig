@@ -19,7 +19,7 @@ pub fn write(self: Parse, buf: *proto.Buffer) !void {
 	_ = buf.skip(total_length) catch unreachable;
 	var view = buf.view(0);
 	view.writeByte('P');
-	view.writeIntBig(u32, @intCast(payload_len));
+	view.writeIntBig(u32, @as(u32, @intCast(payload_len)));
 	view.write(self.prepared_statement);
 	view.writeByte(0);
 	view.write(self.sql);

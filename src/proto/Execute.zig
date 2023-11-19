@@ -21,7 +21,7 @@ pub fn write(self: Execute, buf: *proto.Buffer) !void {
 	_ = buf.skip(total_length) catch unreachable;
 	var view = buf.view(0);
 	view.writeByte('E');
-	view.writeIntBig(u32, @intCast(payload_len));
+	view.writeIntBig(u32, @as(u32, @intCast(payload_len)));
 	view.write(self.portal);
 	view.writeByte(0);
 	view.writeIntBig(u32, self.max_rows);

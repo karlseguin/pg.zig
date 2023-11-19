@@ -21,7 +21,7 @@ pub fn write(self: SASLResponse, buf: *proto.Buffer) !void {
 	_ = buf.skip(total_length) catch unreachable;
 	var view = buf.view(0);
 	view.writeByte('p');
-	view.writeIntBig(u32, @intCast(payload_len));
+	view.writeIntBig(u32, @as(u32, @intCast(payload_len)));
 	view.write(self.data);
 }
 

@@ -86,16 +86,16 @@ pub const Numeric = struct {
 
 	pub fn decodeKnown(data: []const u8) Numeric {
 		return .{
-			.number_of_digits = std.mem.readInt(u16, data[0..2], .big),
-			.weight = std.mem.readInt(i16, data[2..4], .big),
-			.sign = switch (std.mem.readInt(u16, data[4..6], .big)) {
+			.number_of_digits = std.mem.readIntBig(u16, data[0..2]),
+			.weight = std.mem.readIntBig(i16, data[2..4]),
+			.sign = switch (std.mem.readIntBig(u16, data[4..6])) {
 				0x0000 => .positive,
 				0x4000 => .negative,
 				0xd000 => .inf,
 				0xf000 => .negativeInf,
 				else => .nan,  // 0xc000
 			},
-			.scale = std.mem.readInt(u16, data[6..8], .big),
+			.scale = std.mem.readIntBig(u16, data[6..8]),
 			.digits = data[8..],
 		};
 	}
@@ -112,8 +112,8 @@ pub const Numeric = struct {
 		var weight = self.weight;
 		var digits: []const u8 = self.digits;
 		for (0..self.number_of_digits) |_| {
-			const t = std.mem.readInt(i16, digits[0..2], .big);
-			value += @as(f64, @floatFromInt(t)) * math.pow(f64, 10_000, @floatFromInt(weight));
+			const t = std.mem.readIntBig(i16, digits[0..2]);
+			value += @as(f64, @floatFromInt(t)) * math.pow(f64, 10_000, @as(f64, @floatFromInt(weight)));
 			digits = digits[2..];
 			weight -= 1;
 		}
@@ -191,7 +191,7 @@ pub const Numeric = struct {
 					@memcpy(buf[pos..end], "0000");
 					pos = end;
 				} else {
-					const t = std.mem.readInt(i16, digits[0..2], .big);
+					const t = std.mem.readIntBig(i16, digits[0..2]);
 					pos += std.fmt.formatIntBuf(buf[pos..], t, 10, .lower, .{});
 					digits = digits[2..];
 				}
@@ -208,7 +208,7 @@ pub const Numeric = struct {
 			pos += 1;
 		} else {
 			while (digits.len > 0) {
-				const t = std.mem.readInt(i16, digits[0..2], .big);
+				const t = std.mem.readIntBig(i16, digits[0..2]);
 				if (t < 10) {
 					buf[pos+2] = '0';
 					buf[pos+1] = '0';
@@ -344,7 +344,7 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
 
 		// Fill in our meta
 		// Number of base-10000 digits that we wrote.
-		meta_view.writeIntBig(u16, @intCast(integer_groups + try std.math.divCeil(u16, display_scale, 4)));
+		meta_view.writeIntBig(u16, @as(u16, @intCast(integer_groups + try std.math.divCeil(u16, display_scale, 4))));
 
 		// weight is the number of integer groups - 1;
 		if (integer_groups == 0 or integer_groups == 1) {

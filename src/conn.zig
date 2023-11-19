@@ -273,7 +273,7 @@ pub const Conn = struct {
 				var view = buf.view(0);
 
 				view.writeByte('P');
-				view.writeIntBig(u32, @intCast(bind_payload_len));
+				view.writeIntBig(u32, @as(u32, @intCast(bind_payload_len)));
 				view.writeByte(0); // unnamed stored procedure
 				view.write(sql);
 				// null terminate sql string, and we'll be specifying 0 parameter types
@@ -322,7 +322,7 @@ pub const Conn = struct {
 				}
 
 				const data = msg.data;
-				if (std.mem.readInt(i16, data[0..2], .big) != param_oids.len) {
+				if (std.mem.readIntBig(i16, data[0..2]) != param_oids.len) {
 					// We weren't given the correct # of parameters. We need to return an
 					// error, but the server doesn't know that we're bailing. We still
 					// need to read the rest of its messages
@@ -337,7 +337,7 @@ pub const Conn = struct {
 					var pos: usize = 2;
 					for (0..param_oids.len) |i| {
 						const end = pos + 4;
-						param_oids[i] = std.mem.readInt(i32, data[pos..end][0..4], .big);
+						param_oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
 						pos = end;
 					}
 				}
@@ -353,7 +353,7 @@ pub const Conn = struct {
 					'n' => {}, // no data, number_of_columns = 0
 					'T' => {
 						const data = msg.data;
-						number_of_columns = std.mem.readInt(u16, data[0..2], .big);
+						number_of_columns = std.mem.readIntBig(u16, data[0..2]);
 						if (number_of_columns > state.oids.len) {
 							// we have more columns than our self._result_state can handle, we
 							// need to create a new Result.State specifically for this
@@ -399,7 +399,7 @@ pub const Conn = struct {
 				// fill in the length of our Bind message
 				var view = buf.view(1);
 				// don't include the 'B' type
-				view.writeIntBig(u32, @intCast(buf.len() - 1));
+				view.writeIntBig(u32, @as(u32, @intCast(buf.len() - 1)));
 			}
 
 			try buf.write(&.{

@@ -8,11 +8,11 @@ pub fn build(b: *std.Build) !void {
 	const optimize = b.standardOptimizeOption(.{});
 
 	// setup our dependencies
-	const dep_opts = .{.target = target,.optimize = optimize};
 	const allocator = gpa.allocator();
 
 	var modules = ModuleMap.init(allocator);
 	defer modules.deinit();
+	const dep_opts = .{.target = target,.optimize = optimize};
 	try modules.put("buffer", b.dependency("buffer", dep_opts).module("buffer"));
 
 		// Expose this as a module that others can import

@@ -163,7 +163,7 @@ fn ReaderT(comptime T: type) type {
 					// we have enough data to figure the message length
 					if (current_length > 4) {
 						// + 1 for the type byte
-						message_length = std.mem.readInt(u32, buf[start+1..start+5][0..4], .big) + 1;
+						message_length = std.mem.readIntBig(u32, buf[start+1..start+5][0..4]) + 1;
 
 						if (message_length > buf.len) {
 							// our buffer is too small
@@ -233,7 +233,7 @@ fn ReaderT(comptime T: type) type {
 			const buf = self.buf;
 
 			const len_end = start+5;
-			const len = std.mem.readInt(u32, buf[start+1..len_end][0..4], .big);
+			const len = std.mem.readIntBig(u32, buf[start+1..len_end][0..4]);
 
 			// +1 because the first byte, the message type, isn't included in the length
 			if (available < len+1) {

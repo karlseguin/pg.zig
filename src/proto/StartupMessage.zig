@@ -17,7 +17,7 @@ pub fn write(self: StartupMessage, buf: *proto.Buffer) !void {
 	// ensured the available capacity
 	_ = buf.skip(payload_len) catch unreachable;
 	var view = buf.view(0);
-	view.writeIntBig(u32, @intCast(payload_len));
+	view.writeIntBig(u32, @as(u32, @intCast(payload_len)));
 	view.write(self.protocol);
 	view.write(&[_]u8{'u', 's', 'e', 'r', 0});
 	view.write(self.username);

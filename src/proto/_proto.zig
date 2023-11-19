@@ -50,7 +50,7 @@ pub const Reader = struct {
 		}
 		const pos = self.pos;
 		const end = pos + 2;
-		const value = std.mem.readInt(u16, self.data[pos..end][0..2], .big);
+		const value = std.mem.readIntBig(u16, self.data[pos..end][0..2]);
 		self.pos = end;
 		return value;
 	}
@@ -61,7 +61,7 @@ pub const Reader = struct {
 		}
 		const pos = self.pos;
 		const end = pos + 4;
-		const value = std.mem.readInt(u32, self.data[pos..end][0..4], .big);
+		const value = std.mem.readIntBig(u32, self.data[pos..end][0..4]);
 		self.pos = end;
 		return value;
 	}
