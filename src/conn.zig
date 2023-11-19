@@ -878,7 +878,9 @@ test "PG: type support" {
 		\\   col_charn, col_charn_arr,
 		\\   col_timestamptz, col_timestamptz_arr,
 		\\   col_cidr, col_cidr_arr,
-		\\   col_inet, col_inet_arr
+		\\   col_inet, col_inet_arr,
+		\\   col_macaddr, col_macaddr_arr,
+		\\   col_macaddr8, col_macaddr8_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -899,7 +901,9 @@ test "PG: type support" {
 		\\   $32, $33,
 		\\   $34, $35,
 		\\   $36, $37,
-		\\   $38, $39
+		\\   $38, $39,
+		\\   $40, $41,
+		\\   $42, $43
 		\\ )
 		, .{
 			1,
@@ -922,6 +926,8 @@ test "PG: type support" {
 			169804639500713, [_]i64{169804639500713, -94668480000000},
 			"192.168.100.128/25", [_][]const u8{"10.1.2", "2001:4f8:3:ba::/64"},
 			"::ffff:1.2.3.0/120", [_][]const u8{"127.0.0.1/32", "2001:4f8:3:ba:2e0:81ff:fe22:d1f1/128"},
+			"08:00:2b:01:02:03", [_][]const u8{"08002b:010203", "0800-2b01-0204"},
+			"09:01:3b:21:21:03:04:05", [_][]const u8{"ffeeddccbbaa9988", "01-02-03-04-05-06-07-09"},
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -951,7 +957,9 @@ test "PG: type support" {
 		\\   col_charn, col_charn_arr,
 		\\   col_timestamptz, col_timestamptz_arr,
 		\\   col_cidr, col_cidr_arr,
-		\\   col_inet, col_inet_arr
+		\\   col_inet, col_inet_arr,
+		\\   col_macaddr, col_macaddr_arr,
+		\\   col_macaddr8, col_macaddr8_arr
 		\\ from all_types where id = $1
 	, .{1});
 	defer result.deinit();
@@ -1132,6 +1140,26 @@ test "PG: type support" {
 		try t.expectEqual(128, arr[1].netmask);
 		try t.expectEqual(.v6, arr[1].family);
 		try t.expectSlice(u8, &.{32, 1, 4, 248, 0, 3, 0, 186, 2, 224, 129, 255, 254, 34, 209, 241}, arr[1].address);
+	}
+
+	{
+		// macaddr, macaddr[]
+		try t.expectSlice(u8, &.{8, 0, 43, 1, 2, 3}, row.get([]u8, 39));
+
+		const arr = try row.iterator([]u8, 40).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectSlice(u8, &.{8, 0, 43, 1, 2, 3}, arr[0]);
+		try t.expectSlice(u8, &.{8, 0, 43, 1, 2, 4}, arr[1]);
+	}
+
+	{
+		// macaddr8, macaddr8[]
+		try t.expectSlice(u8, &.{9, 1, 59, 33, 33, 3, 4, 5}, row.get([]u8, 41));
+
+		const arr = try row.iterator([]u8, 42).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectSlice(u8, &.{255, 238, 221, 204, 187, 170, 153, 136}, arr[0]);
+		try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6, 7, 9}, arr[1]);
 	}
 
 	try t.expectEqual(null, try result.next());

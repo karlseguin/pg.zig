@@ -100,7 +100,11 @@ pub fn setup() !void {
 		\\   col_cidr cidr,
 		\\   col_cidr_arr cidr[],
 		\\   col_inet inet,
-		\\   col_inet_arr inet[]
+		\\   col_inet_arr inet[],
+		\\   col_macaddr macaddr,
+		\\   col_macaddr_arr macaddr[],
+		\\   col_macaddr8 macaddr8,
+		\\   col_macaddr8_arr macaddr8[]
 		\\ );
 	, .{}) catch |err| try fail(c, err);
 }

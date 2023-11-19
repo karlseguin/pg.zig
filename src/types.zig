@@ -585,6 +585,16 @@ pub const Types = struct {
 		const encoding = &binary_encoding;
 	};
 
+	pub const MacAddrArray = struct {
+		pub const oid = OID.make(1040);
+		const encoding = &binary_encoding;
+	};
+
+	pub const MacAddr8Array = struct {
+		pub const oid = OID.make(775);
+		const encoding = &binary_encoding;
+	};
+
 	pub const ByteaArray = struct {
 		pub const oid = OID.make(1001);
 		const encoding = &binary_encoding;
@@ -914,8 +924,10 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	if (comptime isStringArray(T)) {
 		switch (oid) {
 			Types.NumericArray.oid.decimal,
-			Types.CidrArray.oid.decimal => return encodeTextArray(value, buf, format_pos),
-			Types.CidrArray.inet_oid.decimal => return encodeTextArray(value, buf, format_pos),
+			Types.CidrArray.oid.decimal,
+			Types.CidrArray.inet_oid.decimal,
+			Types.MacAddrArray.oid.decimal,
+			Types.MacAddr8Array.oid.decimal => return encodeTextArray(value, buf, format_pos),
 			else => {}, // fallthrough to binary encoding
 		}
 	}
