@@ -89,8 +89,7 @@ pub const Conn = struct {
 		const host = opts.host orelse "127.0.0.1";
 		const port = opts.port orelse 5432;
 
-		const address = try std.net.Address.parseIp(host, port);
-		const stream = try std.net.tcpConnectToAddress(address);
+		const stream = try std.net.tcpConnectToHost(allocator, host, port);
 		errdefer stream.close();
 
 		const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
