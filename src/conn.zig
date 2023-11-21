@@ -871,13 +871,15 @@ test "PG: type support" {
 		\\   col_uuid, col_uuid_arr,
 		\\   col_numeric, col_numeric_arr,
 		\\   col_timestamp, col_timestamp_arr,
+		\\   col_timestamptz, col_timestamptz_arr,
 		\\   col_json, col_json_arr,
 		\\   col_jsonb, col_jsonb_arr,
 		\\   col_char, col_char_arr,
 		\\   col_charn, col_charn_arr,
-		\\   col_timestamptz, col_timestamptz_arr,
 		\\   col_cidr, col_cidr_arr,
-		\\   col_inet, col_inet_arr
+		\\   col_inet, col_inet_arr,
+		\\   col_macaddr, col_macaddr_arr,
+		\\   col_macaddr8, col_macaddr8_arr
 		\\ ) values (
 		\\   $1,
 		\\   $2, $3,
@@ -898,7 +900,9 @@ test "PG: type support" {
 		\\   $32, $33,
 		\\   $34, $35,
 		\\   $36, $37,
-		\\   $38, $39
+		\\   $38, $39,
+		\\   $40, $41,
+		\\   $42, $43
 		\\ )
 		, .{
 			1,
@@ -913,14 +917,16 @@ test "PG: type support" {
 			"val1", [_][]const u8{"val1", "val2"},
 			"b7cc282f-ec43-49be-8e09-aafab0104915", [_][]const u8{"166B4751-D702-4FB9-9A2A-CD6B69ED18D6", "ae2f475f-8070-41b7-ba33-86bba8897bde"},
 			1234.567, [_]f64{0, -1.1, std.math.nan(f64), std.math.inf(f32), 12345.000101},
-			169804639500713, [_]i64{169804639500713, -94668480000000},
+			"2023-10-23T15:33:13Z", [_][]const u8{"2010-02-10T08:22:07Z", "0003-04-05T06:07:08.123456"},
+			"2024-11-23T16:34:14Z", [_][]const u8{"2011-03-11T09:23:05Z", "0002-03-04T05:06:02.0000991"},
 			"{\"count\":1.3}", [_][]const u8{"[1,2,3]", "{\"rows\":[{\"a\": true}]}"},
 			"{\"over\":9000}", [_][]const u8{"[true,false]", "{\"cols\":[{\"z\": 0.003}]}"},
 			79, [_]u8{'1', 'z', '!'},
 			"Teg", [_][]const u8{&.{78, 82}, "hi"},
-			169804639500713, [_]i64{169804639500713, -94668480000000},
 			"192.168.100.128/25", [_][]const u8{"10.1.2", "2001:4f8:3:ba::/64"},
 			"::ffff:1.2.3.0/120", [_][]const u8{"127.0.0.1/32", "2001:4f8:3:ba:2e0:81ff:fe22:d1f1/128"},
+			"08:00:2b:01:02:03", [_][]const u8{"08002b:010203", "0800-2b01-0204"},
+			"09:01:3b:21:21:03:04:05", [_][]const u8{"ffeeddccbbaa9988", "01-02-03-04-05-06-07-09"},
 		});
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -944,13 +950,15 @@ test "PG: type support" {
 		\\   col_uuid, col_uuid_arr,
 		\\   col_numeric, col_numeric_arr,
 		\\   col_timestamp, col_timestamp_arr,
+		\\   col_timestamptz, col_timestamptz_arr,
 		\\   col_json, col_json_arr,
 		\\   col_jsonb, col_jsonb_arr,
 		\\   col_char, col_char_arr,
 		\\   col_charn, col_charn_arr,
-		\\   col_timestamptz, col_timestamptz_arr,
 		\\   col_cidr, col_cidr_arr,
-		\\   col_inet, col_inet_arr
+		\\   col_inet, col_inet_arr,
+		\\   col_macaddr, col_macaddr_arr,
+		\\   col_macaddr8, col_macaddr8_arr
 		\\ from all_types where id = $1
 	, .{1});
 	defer result.deinit();
@@ -1047,15 +1055,21 @@ test "PG: type support" {
 	}
 
 	{
-		//timestamp
-		try t.expectEqual(169804639500713, row.get(i64, 23));
-		try t.expectSlice(i64, &.{169804639500713, -94668480000000}, try row.iterator(i64, 24).alloc(aa));
+		//timestamp, timestamp[]
+		try t.expectEqual(1698075193000000, row.get(i64, 23));
+		try t.expectSlice(i64, &.{1265790127000000, -62064381171876544}, try row.iterator(i64, 24).alloc(aa));
+	}
+
+	{
+		//timestamptz, timestamptz[]
+		try t.expectEqual(1732379654000000, row.get(i64, 25));
+		try t.expectSlice(i64, &.{1299835385000000, -62098685637999901}, try row.iterator(i64, 26).alloc(aa));
 	}
 
 	{
 		// json, json[]
-		try t.expectString("{\"count\":1.3}", row.get([]u8, 25));
-		const arr = try row.iterator([]const u8, 26).alloc(aa);
+		try t.expectString("{\"count\":1.3}", row.get([]u8, 27));
+		const arr = try row.iterator([]const u8, 28).alloc(aa);
 		try t.expectEqual(2, arr.len);
 		try t.expectString("[1,2,3]", arr[0]);
 		try t.expectString("{\"rows\":[{\"a\": true}]}", arr[1]);
@@ -1063,8 +1077,8 @@ test "PG: type support" {
 
 	{
 		// jsonb, jsonb[]
-		try t.expectString("{\"over\": 9000}", row.get([]u8, 27));
-		const arr = try row.iterator([]const u8, 28).alloc(aa);
+		try t.expectString("{\"over\": 9000}", row.get([]u8, 29));
+		const arr = try row.iterator([]const u8, 30).alloc(aa);
 		try t.expectEqual(2, arr.len);
 		try t.expectString("[true, false]", arr[0]);
 		try t.expectString("{\"cols\": [{\"z\": 0.003}]}", arr[1]);
@@ -1072,8 +1086,8 @@ test "PG: type support" {
 
 	{
 		// char, char[]
-		try t.expectEqual(79, row.get(u8, 29));
-		const arr = try row.iterator(u8, 30).alloc(aa);
+		try t.expectEqual(79, row.get(u8, 31));
+		const arr = try row.iterator(u8, 32).alloc(aa);
 		try t.expectEqual(3, arr.len);
 		try t.expectEqual('1', arr[0]);
 		try t.expectEqual('z', arr[1]);
@@ -1082,17 +1096,11 @@ test "PG: type support" {
 
 	{
 		// charn, charn[]
-		try t.expectString("Teg", row.get([]u8, 31));
-		const arr = try row.iterator([]u8, 32).alloc(aa);
+		try t.expectString("Teg", row.get([]u8, 33));
+		const arr = try row.iterator([]u8, 34).alloc(aa);
 		try t.expectEqual(2, arr.len);
 		try t.expectString("NR", arr[0]);
 		try t.expectString("hi", arr[1]);
-	}
-
-	{
-		//timestamp, timestamp[]
-		try t.expectEqual(169804639500713, row.get(i64, 33));
-		try t.expectSlice(i64, &.{169804639500713, -94668480000000}, try row.iterator(i64, 34).alloc(aa));
 	}
 
 	{
@@ -1131,6 +1139,133 @@ test "PG: type support" {
 		try t.expectEqual(128, arr[1].netmask);
 		try t.expectEqual(.v6, arr[1].family);
 		try t.expectSlice(u8, &.{32, 1, 4, 248, 0, 3, 0, 186, 2, 224, 129, 255, 254, 34, 209, 241}, arr[1].address);
+	}
+
+	{
+		// macaddr, macaddr[]
+		try t.expectSlice(u8, &.{8, 0, 43, 1, 2, 3}, row.get([]u8, 39));
+
+		const arr = try row.iterator([]u8, 40).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectSlice(u8, &.{8, 0, 43, 1, 2, 3}, arr[0]);
+		try t.expectSlice(u8, &.{8, 0, 43, 1, 2, 4}, arr[1]);
+	}
+
+	{
+		// macaddr8, macaddr8[]
+		try t.expectSlice(u8, &.{9, 1, 59, 33, 33, 3, 4, 5}, row.get([]u8, 41));
+
+		const arr = try row.iterator([]u8, 42).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectSlice(u8, &.{255, 238, 221, 204, 187, 170, 153, 136}, arr[0]);
+		try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6, 7, 9}, arr[1]);
+	}
+
+	try t.expectEqual(null, try result.next());
+}
+
+// For ambiguous types, the above "type support" test is using the text-representation
+// This test will use the binary representation of each of the ambiguous types
+test "PG: binary support" {
+	defer t.reset();
+
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		const result = c.exec(\\
+		\\ insert into all_types (
+		\\   id,
+		\\   col_uuid, col_uuid_arr,
+		\\   col_timestamp, col_timestamp_arr,
+		\\   col_timestamptz, col_timestamptz_arr,
+		\\   col_numeric, col_numeric_arr,
+		\\   col_macaddr, col_macaddr_arr,
+		\\   col_macaddr8, col_macaddr8_arr
+		\\ ) values (
+		\\   $1,
+		\\   $2, $3,
+		\\   $4, $5,
+		\\   $6, $7,
+		\\   $8, $9,
+		\\   $10, $11,
+		\\   $12, $13
+		\\ )
+		, .{
+			2,
+			&[_]u8{142, 243, 93, 100, 249, 159, 77, 126, 167, 54, 150, 204, 170, 222, 98, 124}, [_][]const u8{&.{53, 140, 59, 37, 1, 148, 72, 139, 130, 197, 181, 40, 44, 109, 127, 165}, &.{57, 203, 218, 97, 37, 38, 70, 107, 182, 116, 24, 125, 236, 123, 117, 247}},
+			169804639500713, [_]i64{169804639500713, -94668480000000},
+			169804639500714, [_]i64{169804639500714, -94668480000001},
+			"-394956.2221", [_][]const u8{"1.0008", "-987.110", "-inf"},
+			&[_]u8{1,2,3,4,5,6}, [_][]const u8{&.{0, 1, 0, 2, 0, 3}, &.{255, 0, 254, 1, 253, 2}},
+			&[_]u8{1,2,3,4,5,6,7,8}, [_][]const u8{&.{0, 1, 0, 2, 0, 3, 4, 0}, &.{255, 0, 254, 1, 253, 2, 3, 252}},
+		});
+		if (result) |affected| {
+			try t.expectEqual(1, affected);
+		} else |err| {
+			try t.fail(c, err);
+		}
+	}
+
+	var result = try c.query(
+		\\ select
+		\\   col_uuid, col_uuid_arr,
+		\\   col_timestamp, col_timestamp_arr,
+		\\   col_timestamptz, col_timestamptz_arr,
+		\\   col_numeric, col_numeric_arr,
+		\\   col_macaddr, col_macaddr_arr,
+		\\   col_macaddr8, col_macaddr8_arr
+		\\ from all_types where id = $1
+	, .{2});
+	defer result.deinit();
+
+	// used for our arrays
+	const aa = t.arena.allocator();
+
+	const row = (try result.next()) orelse unreachable;
+
+	{
+		//uuid, uuid[]
+		try t.expectString("8ef35d64-f99f-4d7e-a736-96ccaade627c", &(try types.UUID.toString(row.get([]u8, 0))));
+
+		const arr = try row.iterator([]const u8, 1).alloc(aa);
+		try t.expectEqual(2, arr.len);
+		try t.expectString("358c3b25-0194-488b-82c5-b5282c6d7fa5", &(try types.UUID.toString(arr[0])));
+		try t.expectString("39cbda61-2526-466b-b674-187dec7b75f7", &(try types.UUID.toString(arr[1])));
+	}
+
+	{
+		//timestamp, timestamp[]
+		try t.expectEqual(169804639500713, row.get(i64, 2));
+		try t.expectSlice(i64, &.{169804639500713, -94668480000000}, try row.iterator(i64, 3).alloc(aa));
+	}
+
+	{
+		//timestamptz, timestamptz[]
+		try t.expectEqual(169804639500714, row.get(i64, 4));
+		try t.expectSlice(i64, &.{169804639500714, -94668480000001}, try row.iterator(i64, 5).alloc(aa));
+	}
+
+	{
+		//numeric, numeric[]
+		try t.expectEqual(-394956.2221, row.get(f64, 6));
+		try t.expectSlice(f64, &.{1.0008, -987.110, -std.math.inf(f64)}, try row.iterator(f64, 7).alloc(aa));
+	}
+
+	{
+		//macaddr, macaddr[]
+		try t.expectSlice(u8, &.{1,2,3,4,5,6}, row.get([]u8, 8));
+		const arr = try row.iterator([]u8, 9).alloc(aa);
+		try t.expectSlice(u8, &.{0, 1, 0, 2, 0, 3}, arr[0]);
+		try t.expectSlice(u8, &.{255, 0, 254, 1, 253, 2}, arr[1]);
+	}
+
+	{
+		//macaddr8, macaddr8[]
+		try t.expectSlice(u8, &.{1,2,3,4,5,6,7,8}, row.get([]u8, 10));
+		const arr = try row.iterator([]u8, 11).alloc(aa);
+		try t.expectSlice(u8, &.{0, 1, 0, 2, 0, 3, 4, 0}, arr[0]);
+		try t.expectSlice(u8, &.{255, 0, 254, 1, 253, 2, 3, 252}, arr[1]);
 	}
 
 	try t.expectEqual(null, try result.next());
@@ -1179,7 +1314,7 @@ test "PG: null support" {
 		\\   $32, $33
 		\\ )
 		, .{
-			2,
+			3,
 			null, null,
 			null, null,
 			null, null,
@@ -1224,7 +1359,7 @@ test "PG: null support" {
 		\\   col_char, col_char_arr,
 		\\   col_charn, col_charn_arr
 		\\ from all_types where id = $1
-	, .{2});
+	, .{3});
 	defer result.deinit();
 
 	const row = (try result.next()) orelse unreachable;
@@ -1306,7 +1441,7 @@ test "PG: JSON struct" {
 		const result = c.exec(\\
 		\\ insert into all_types (id, col_json, col_jsonb)
 		\\ values ($1, $2, $3)
-		, .{3, DummyStruct{.id = 1, .name = "Leto"}, &DummyStruct{.id = 2, .name = "Ghanima"}});
+		, .{4, DummyStruct{.id = 1, .name = "Leto"}, &DummyStruct{.id = 2, .name = "Ghanima"}});
 
 		if (result) |affected| {
 			try t.expectEqual(1, affected);
@@ -1315,7 +1450,7 @@ test "PG: JSON struct" {
 		}
 	}
 
-	var result = try c.query("select col_json, col_jsonb from all_types where id = $1", .{3});
+	var result = try c.query("select col_json, col_jsonb from all_types where id = $1", .{4});
 	defer result.deinit();
 
 	const row = (try result.next()) orelse unreachable;
@@ -1382,13 +1517,13 @@ test "PG: bind enums" {
 
 	_ = try c.exec(
 		\\ insert into all_types (id, col_enum, col_enum_arr, col_text, col_text_arr)
-		\\ values (4, $1, $2, $3, $4)
+		\\ values (5, $1, $2, $3, $4)
 	, .{DummyEnum.val1, &[_]DummyEnum{DummyEnum.val1, DummyEnum.val2}, DummyEnum.val2, [_]DummyEnum{DummyEnum.val2, DummyEnum.val1}});
 
 	const row = (try c.row(
 		\\ select col_enum, col_text, col_enum_arr, col_text_arr
 		\\ from all_types
-		\\ where id = 4
+		\\ where id = 5
 	, .{})) orelse unreachable;
 	defer row.deinit();
 
@@ -1419,7 +1554,6 @@ test "PG: numeric" {
 
 	var c = t.connect(.{});
 	defer c.deinit();
-	// _ = try c.exec("insert into all_types (id, col_numeric) values (999, $1)", .{-});
 
 	{
 		// read
@@ -1515,6 +1649,28 @@ test "PG: numeric" {
 		try t.expectEqual(1.1, arr[0].toFloat());
 		try t.expectDelta(-0.0034, arr[1].toFloat(), 0.00000001);
 	}
+}
+
+// char array encoding is a little special, so let's test variants
+test "PG: char" {
+	defer t.reset();
+
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	// read
+	const row = (try c.row(
+		\\ select $1::char[], $2::char[], $3::char[], $4::char[]
+	, .{&[_]u8{','}, &[_]u8{',', '"'}, &[_]u8{'\\', 'a', ' '}, &[_]u8{'z', '@'}})).?;
+	defer row.deinit();
+
+	// used for our arrays
+	const aa = t.arena.allocator();
+
+	try t.expectSlice(u8, &.{','}, try row.iterator(u8, 0).alloc(aa));
+	try t.expectSlice(u8, &.{',', '"'}, try row.iterator(u8, 1).alloc(aa));
+	try t.expectSlice(u8, &.{'\\', 'a', ' '}, try row.iterator(u8, 2).alloc(aa));
+	try t.expectSlice(u8, &.{'z', '@'}, try row.iterator(u8, 3).alloc(aa));
 }
 
 fn expectNumeric(numeric: lib.Numeric, expected: []const u8) !void {

@@ -100,7 +100,11 @@ pub fn setup() !void {
 		\\   col_cidr cidr,
 		\\   col_cidr_arr cidr[],
 		\\   col_inet inet,
-		\\   col_inet_arr inet[]
+		\\   col_inet_arr inet[],
+		\\   col_macaddr macaddr,
+		\\   col_macaddr_arr macaddr[],
+		\\   col_macaddr8 macaddr8,
+		\\   col_macaddr8_arr macaddr8[]
 		\\ );
 	, .{}) catch |err| try fail(c, err);
 }
@@ -190,7 +194,7 @@ pub const Stream = struct {
 pub fn connect(opts: anytype) Conn {
 	const T = @TypeOf(opts);
 
-	var c = Conn.open(allocator, .{}) catch unreachable;
+	var c = Conn.open(allocator, .{.host = "localhost"}) catch unreachable;
 	c.auth(.{
 		.database = if (@hasField(T, "database")) opts.database else "postgres",
 		.username = if (@hasField(T, "username")) opts.username else "postgres",

@@ -369,6 +369,38 @@ pub const Types = struct {
 		}
 	};
 
+	pub const MacAddr = struct {
+		pub const oid = OID.make(829);
+		const encoding = &binary_encoding;
+
+		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			if (value.len != 6) {
+				// assume this is a text representation
+				return String.encode(value, buf, format_pos);
+			}
+			buf.writeAt(MacAddr.encoding, format_pos);
+			var view = try Encode.reserveView(buf, 4 + value.len);
+			view.writeIntBig(i32, @as(i32, @intCast(value.len)));
+			view.write(value);
+		}
+	};
+
+	pub const MacAddr8 = struct {
+		pub const oid = OID.make(774);
+		const encoding = &binary_encoding;
+
+		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			if (value.len != 8) {
+				// assume this is a text representation
+				return String.encode(value, buf, format_pos);
+			}
+			buf.writeAt(MacAddr8.encoding, format_pos);
+			var view = try Encode.reserveView(buf, 4 + value.len);
+			view.writeIntBig(i32, @as(i32, @intCast(value.len)));
+			view.write(value);
+		}
+	};
+
 	pub const JSON = struct {
 		pub const oid = OID.make(114);
 		const encoding = &binary_encoding;
@@ -585,6 +617,70 @@ pub const Types = struct {
 		const encoding = &binary_encoding;
 	};
 
+	pub const MacAddrArray = struct {
+		pub const oid = OID.make(1040);
+		const encoding = &binary_encoding;
+
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			// This has challenges. Do we have a binary representation or a text representation?
+			// Or maybe we have a mix (maybe we shouldn't support that)?
+			// We handle this with UUID by converting the text representation to binary
+			// but it's harder wit MacAddr because it supports 7 different text representations
+			// and I don't really want this library to become a text parsing library which attempts
+			// to mimic what PostgreSQL does.
+			// So we're going to send a text-encoded array with text values, which emans
+			// we need to convert any binary representation to text (which is a lot easier).
+
+			// The worst-case scenario is that each value takes 17 bytes. This is the
+			// most verbose text-encoded value. When we encode a binary value as text
+			// we'll use the most compact (12 bytes), but we might be given a 17-byte
+			// text-encoded value, which we'll write as-is
+			var l: usize = 0;
+			for (values) |v| {
+				// binary values will be encoded in a 12-byte text representation
+				l += if (v.len == 6) 12 else v.len;
+			}
+
+			return Encode.writeTextEncodedArray(values, l, buf, format_pos, MacAddrArray.writeOneAsText);
+		}
+
+		fn writeOneAsText(value: []const u8, view: *buffer.View) void {
+			if (value.len == 6) {
+				var buf: [12]u8 = undefined;
+				const formatted = std.fmt.bufPrint(&buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{value[0], value[1], value[2], value[3], value[4], value[5]}) catch unreachable;
+				view.write(formatted);
+				return;
+			}
+			view.write(value);
+		}
+	};
+
+	pub const MacAddr8Array = struct {
+		pub const oid = OID.make(775);
+		const encoding = &binary_encoding;
+
+		fn encode(values: []const []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+			// See comments in MacAddrArray.encode
+			var l: usize = 0;
+			for (values) |v| {
+				// binary values will be encoded in a 16-byte text representation
+				l += if (v.len == 8) 16 else v.len;
+			}
+
+			return Encode.writeTextEncodedArray(values, l, buf, format_pos, MacAddr8Array.writeOneAsText);
+		}
+
+		fn writeOneAsText(value: []const u8, view: *buffer.View) void {
+			if (value.len == 8) {
+				var buf: [16]u8 = undefined;
+				const formatted = std.fmt.bufPrint(&buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7]}) catch unreachable;
+				view.write(formatted);
+				return;
+			}
+			view.write(value);
+		}
+	};
+
 	pub const ByteaArray = struct {
 		pub const oid = OID.make(1001);
 		const encoding = &binary_encoding;
@@ -753,6 +849,109 @@ pub const Encode = struct {
 		std.mem.writeIntBig(i32, &encoded_len, @as(i32, @intCast(len)));
 		buf.writeAt(&encoded_len, pos - 4);
 	}
+
+	pub fn writeTextEncodedArray(values: []const []const u8, values_len: usize, buf: *buffer.Buffer, format_pos: usize, writeFn: *const fn([]const u8, *buffer.View) void) !void {
+		buf.writeAt(&text_encoding, format_pos);
+		if (values.len == 0) {
+			// empty array, with length prefix
+			return buf.write(&.{0, 0, 0, 2, '{', '}'});
+		}
+
+		// We're relying one our caller to give us an accurate values_len
+		// The total value length will be:
+		//  2             + values_len    + values.len
+		//  {} delimiter  + given to us   + ',' delimiter between values
+		const max_len = 2 + values_len + values.len;
+		try buf.ensureUnusedCapacity(max_len);
+
+		// our max_len is just an estimate, we'll get the actual length and fill
+		// it in later, for now, we skip the length
+		var view = buf.view(buf.len() + 4);
+		view.writeByte('{');
+		for (values) |value| {
+			writeFn(value, &view);
+			view.writeByte(',');
+		}
+
+		// strip out last comma
+		view.truncate(1);
+		view.writeByte('}');
+		try buf.writeIntBig(i32, @as(i32, @intCast(view.pos)));
+		_ = try buf.skip(view.pos);
+	}
+
+	// Fairly special case for text-encoded arrays where we _always_ want to quote the value
+	// but don't need to escape. This idea is taken from Java's PostgreSQL JDBC driver
+	// specificallly for dealing with possible scientific notation in float/numeric text values
+	pub fn writeTextEncodedEscapedArray(values: []const []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+		var l: usize = 0;
+		for (values) |v| {
+			// +2 for the quotes around the value we'll need
+			l += v.len + 2;
+		}
+		return Encode.writeTextEncodedArray(values, l, buf, format_pos, writeQuotedValue);
+	}
+
+	fn writeQuotedValue(value: []const u8, view: *buffer.View) void {
+		view.writeByte('"');
+		view.write(value);
+		view.writeByte('"');
+	}
+
+	// Fairly special case for text-encoded arrays where we _always_ want to quote the value
+	// but don't need to escape. This idea is taken from Java's PostgreSQL JDBC driver
+	// specificallly for dealing with possible scientific notation in float/numeric text values
+	pub fn writeTextEncodedRawArray(values: []const []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+		var l: usize = 0;
+		for (values) |v| {
+			l += v.len;
+		}
+		return Encode.writeTextEncodedArray(values, l, buf, format_pos, writeRawValue);
+	}
+
+	fn writeRawValue(value: []const u8, view: *buffer.View) void {
+		view.write(value);
+	}
+
+	pub fn writeTextEncodedCharArray(values: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
+		buf.writeAt(&text_encoding, format_pos);
+		if (values.len == 0) {
+			// empty array, with length prefix
+			return buf.write(&.{0, 0, 0, 2, '{', '}'});
+		}
+
+		// 6 = 4-byte length + opening brace + closing brace
+		// v.len * 5 is the max guess about how much room we'll need. 1 byte
+		// per character, delimiter + double quotes + escape
+		var estimated_len: usize = 6 + values.len * 5;
+		try buf.ensureUnusedCapacity(estimated_len);
+
+		// skip the length, which we'll fill later
+		var view = buf.view(buf.len() + 4);
+
+			// https://www.postgresql.org/docs/current/arrays.html#ARRAYS-IO
+		view.writeByte('{');
+		for (values) |c| {
+			if (c == '"' or c == '\\') {
+				view.write("\"\\");
+				view.writeByte(c);
+				view.writeByte('"');
+			} else if (std.ascii.isWhitespace(c) or c == ',' or c == '{' or c == '}' or c == '\\') {
+				view.writeByte('"');
+				view.writeByte(c);
+				view.writeByte('"');
+			} else {
+				view.writeByte(c);
+			}
+			view.writeByte(',');
+		}
+
+		// strip out last comma
+		view.truncate(1);
+		view.writeByte('}');
+		try buf.writeIntBig(i32, @as(i32, @intCast(view.pos)));
+		_ = try buf.skip(view.pos);
+	}
 };
 
 // Writes 2 pieces of the Bind message: the parameter encoding types and
@@ -866,11 +1065,11 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 		.Bool => return Types.Bool.encode(value, buf, format_pos),
 		.Pointer => |ptr| {
 			switch (ptr.size) {
-				.Slice => return bindSlice(ptr.child, oid, value, buf, format_pos),
+				.Slice => return bindSlice(oid, @as([]ptr.child, value), buf, format_pos),
 				.One => switch (@typeInfo(ptr.child)) {
 					.Array => {
-						const E = std.meta.Elem(ptr.child);
-						return bindSlice(E, oid, @as([]const E, value), buf, format_pos);
+						const Slice = []const std.meta.Elem(ptr.child);
+						return bindSlice(oid, @as(Slice, value), buf, format_pos);
 					},
 					.Struct => switch (oid) {
 						Types.JSON.oid.decimal => return Types.JSON.encode(value, buf, format_pos),
@@ -891,19 +1090,29 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 			// null
 			return buf.write(&.{255, 255, 255, 255});
 		},
-		.Enum, .EnumLiteral => return bindSlice(u8, oid, @tagName(value), buf, format_pos),
+		.Enum, .EnumLiteral => return Types.String.encode(@tagName(value), buf, format_pos),
 		else => compileHaltBindError(T),
 	}
 }
 
-fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, format_pos: usize) !void {
-	if (T == u8) {
+fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
+	const T = @TypeOf(value);
+	if (T == []u8 or T == []const u8) {
 		switch (oid) {
 			Types.Bytea.oid.decimal => return Types.Bytea.encode(value, buf, format_pos),
 			Types.UUID.oid.decimal => return Types.UUID.encode(value, buf, format_pos),
 			Types.JSONB.oid.decimal => return Types.JSONB.encodeBytes(value, buf, format_pos),
 			Types.JSON.oid.decimal => return Types.JSON.encodeBytes(value, buf, format_pos),
-			Types.CharArray.oid.decimal => {}, // this is an array of chars, fallthrough to array logic
+			Types.MacAddr.oid.decimal => return Types.MacAddr.encode(value, buf, format_pos),
+			Types.MacAddr8.oid.decimal => return Types.MacAddr8.encode(value, buf, format_pos),
+			Types.CharArray.oid.decimal => {
+				// This is actually an array, and in theory we could let it fallthrough
+				// to the binary-array handling. BUT, if we do that, the code won't compile
+				// because it would mean T can be []u8 or []const u8, and that makes parts
+				// of the code invalid. Also, encoding a char array using the text protocol
+				// is going to be more efficient than encoding it using the binary protocol.
+				return Encode.writeTextEncodedCharArray(value, buf, format_pos);
+			},
 			else => return Types.String.encode(value, buf, format_pos),
 		}
 	}
@@ -913,14 +1122,16 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	// own text->type conversion.
 	if (comptime isStringArray(T)) {
 		switch (oid) {
-			Types.NumericArray.oid.decimal,
-			Types.CidrArray.oid.decimal => return encodeTextArray(value, buf, format_pos),
-			Types.CidrArray.inet_oid.decimal => return encodeTextArray(value, buf, format_pos),
+			Types.TimestampArray.oid.decimal,
+			Types.NumericArray.oid.decimal => return Encode.writeTextEncodedEscapedArray(value, buf, format_pos),
+			Types.TimestampTzArray.oid.decimal,
+			Types.CidrArray.oid.decimal,
+			Types.CidrArray.inet_oid.decimal => return Encode.writeTextEncodedRawArray(value, buf, format_pos),
+			Types.MacAddrArray.oid.decimal => return Types.MacAddrArray.encode(value, buf, format_pos),
+			Types.MacAddr8Array.oid.decimal => return Types.MacAddr8Array.encode(value, buf, format_pos),
 			else => {}, // fallthrough to binary encoding
 		}
 	}
-
-	const SliceT = []T;
 
 	// We have an array. All arrays have the same header. We'll write this into
 	// buf now. It's possible we don't support the array type, so this can still
@@ -946,7 +1157,8 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 	try buf.writeIntBig(i32, @as(i32, @intCast(value.len)));
 	try buf.write(&.{0, 0, 0, 1}); // lower bound of this demension
 
-	switch (@typeInfo(T)) {
+	const ElemT = @typeInfo(T).Pointer.child;
+	switch (@typeInfo(ElemT)) {
 		.Int => |int| {
 			if (int.signedness == .signed) {
 				switch (int.bits) {
@@ -959,7 +1171,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 							else => try Types.Int64Array.encode(value, buf, oid_pos),
 						}
 					},
-					else => compileHaltBindError(SliceT),
+					else => compileHaltBindError(T),
 				}
 			} else {
 				switch (int.bits) {
@@ -967,7 +1179,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 					16 => try Types.Int16Array.encodeUnsigned(value, buf, oid_pos),
 					32 => try Types.Int32Array.encodeUnsigned(value, buf, oid_pos),
 					64 => try Types.Int64Array.encodeUnsigned(value, buf, oid_pos),
-					else => compileHaltBindError(SliceT),
+					else => compileHaltBindError(T),
 				}
 			}
 		},
@@ -977,7 +1189,7 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 			} else switch (float.bits) {
 				32 => try Types.Float32Array.encode(value, buf, oid_pos),
 				64 => try Types.Float64Array.encode(value, buf, oid_pos),
-				else => compileHaltBindError(SliceT),
+				else => compileHaltBindError(T),
 			}
 		},
 		.Bool => try Types.BoolArray.encode(value, buf, oid_pos),
@@ -993,13 +1205,13 @@ fn bindSlice(comptime T: type, oid: i32, value: []const T, buf: *buffer.Buffer, 
 					// (like an array of enums)
 					else => try Types.ByteaArray.encode(value, buf, oid_pos),
 				},
-				else => compileHaltBindError(SliceT),
+				else => compileHaltBindError(T),
 			},
-			else => compileHaltBindError(SliceT),
+			else => compileHaltBindError(T),
 		},
 		.Enum, .EnumLiteral => try Types.StringArray.encodeEnum(&value, buf, oid_pos),
-		.Array => try bindSlice(*T, oid, &value, buf, format_pos),
-		else => compileHaltBindError(SliceT),
+		.Array => try bindSlice(oid, &value, buf, format_pos),
+		else => compileHaltBindError(T),
 	}
 
 	var param_len: [4]u8 = undefined;
@@ -1013,43 +1225,13 @@ fn isStringArray(comptime T: type) bool {
 	switch (@typeInfo(T)) {
 		.Pointer => |ptr| switch (ptr.size) {
 			.Slice => switch (ptr.child) {
-				u8 => return true,
+				[]u8, []const u8 => return true,
 				else => return false,
 			},
 			else => return false,
 		},
 		else => return false,
 	}
-}
-
-// currently only used for types which have values that should never need escaping
-fn encodeTextArray(values: []const []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
-	buf.writeAt(&text_encoding, format_pos);
-	if (values.len == 0) {
-		// empty array, with length prefix
-		return buf.write(&.{0, 0, 0, 2, '{', '}'});
-	}
-
-	// 4-byte length + opening brace
-	var l: usize = 5;
-	for (values) |v| {
-		// value + delimiter, for the last value, there is no delimiter
-		// but there is a closing brace
-		l += v.len + 1;
-	}
-
-	var view = try Encode.reserveView(buf, l);
-
-	// the length prefix doesn't include itself
-	view.writeIntBig(i32, @as(i32, @intCast(l - 4)));
-
-	view.writeByte('{');
-	view.write(values[0]);
-	for (values[1..]) |v| {
-		view.writeByte(',');
-		view.write(v);
-	}
-	view.writeByte('}');
 }
 
 // Write the last part of the Bind message: telling postgresql how it should
