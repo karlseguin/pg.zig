@@ -833,7 +833,7 @@ pub const Encode = struct {
 
 	pub fn reserveView(buf: *buffer.Buffer, space: usize) !buffer.View {
 		try buf.ensureUnusedCapacity(space);
-		var view = buf.view(buf.len());
+		const view = buf.view(buf.len());
 		_ = try buf.skip(space);
 		return view;
 	}
@@ -923,7 +923,7 @@ pub const Encode = struct {
 		// 6 = 4-byte length + opening brace + closing brace
 		// v.len * 5 is the max guess about how much room we'll need. 1 byte
 		// per character, delimiter + double quotes + escape
-		var estimated_len: usize = 6 + values.len * 5;
+		const estimated_len: usize = 6 + values.len * 5;
 		try buf.ensureUnusedCapacity(estimated_len);
 
 		// skip the length, which we'll fill later

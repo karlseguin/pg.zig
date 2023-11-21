@@ -13,7 +13,7 @@ pub const SASL = struct {
 	const Base64Decoder = std.base64.standard.Decoder;
 
 	pub fn init(allocator: Allocator) !SASL {
-		var buf = try allocator.alloc(u8, 1024);
+		const buf = try allocator.alloc(u8, 1024);
 		errdefer allocator.free(buf);
 
 		var fba = std.heap.FixedBufferAllocator.init(buf);

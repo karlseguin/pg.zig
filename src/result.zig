@@ -93,7 +93,7 @@ pub const Result = struct {
 
 				// first column starts at position 2
 				var offset: usize = 2;
-				var values = self._values;
+				const values = self._values;
 				for (values) |*value| {
 					const data_start = offset + 4;
 					const length = std.mem.readInt(i32, data[offset..data_start][0..4], .big);
@@ -266,7 +266,7 @@ pub const Row = struct {
 
 		const data_oid = self.oids[col];
 
-		var decoder = switch (TT) {
+		const decoder = switch (TT) {
 			u8 => blk: {
 				lib.assert(data_oid == types.CharArray.oid.decimal);
 				break :blk &types.Char.decodeKnown;
@@ -426,7 +426,7 @@ fn Iterator(comptime T: type) type {
 		}
 
 		pub fn alloc(self: Self, allocator: Allocator) ![]T {
-			var into = try allocator.alloc(T, self._len);
+			const into = try allocator.alloc(T, self._len);
 			self.fill(into);
 			return into;
 		}
@@ -643,13 +643,14 @@ test "Result: text and bytea" {
 
 	{
 		// as a slice
-		var s1 = try t.allocator.alloc(u8, 4);
+		const s1 = try t.allocator.alloc(u8, 4);
 		defer t.allocator.free(s1);
 		@memcpy(s1, "Leto");
 
-		var s2 = try t.allocator.alloc(u8, 7);
+		const s2 = try t.allocator.alloc(u8, 7);
 		defer t.allocator.free(s2);
 		@memcpy(s2, "Ghanima");
+
 		var result = try c.query(sql, .{s1, s2});
 		defer result.deinit();
 		const row = (try result.next()).?;

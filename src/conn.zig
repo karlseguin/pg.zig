@@ -1677,7 +1677,7 @@ fn expectNumeric(numeric: lib.Numeric, expected: []const u8) !void {
 	var str_buf: [50]u8 = undefined;
 	try t.expectString(expected, numeric.toString(&str_buf));
 
-	var a = try t.allocator.alloc(u8, numeric.estimatedStringLen());
+	const a = try t.allocator.alloc(u8, numeric.estimatedStringLen());
 	defer t.allocator.free(a);
 	try t.expectString(expected, numeric.toString(a));
 
