@@ -199,6 +199,8 @@ pub fm main() !void {
 
 Conversely, when binding a value to an SQL parameter, the library is a little more generous. For example, an `u64` will bind to an `i32` provided the value is within range.
 
+This is particularly relevant for types which are expressed as `[]u8`. For example a UUID can be a raw binary `[16]u8` or a hex-encoded `[36]u8`. Where possible (e.g. UUID, MacAddr, MacAddr8), the library will support binding either the raw binary data or text-representation. When reading, the raw binary value is always returned.
+
 ## Important Notice 2 - Invalid Connections
 Strongly consider using `pg.Pool` rather than using `pg.Conn` directly. The pool will attempt to reconnect disconnected connections or connections which are in an invalid state. Until more real world testing is done, you should assume that connections will get into invalid states.
 
@@ -216,9 +218,9 @@ _ = conn.exec("drop table x", .{}) catch |err| {
 };
 ```
 
-In the above snippet, it's possible to skip the `if (err == error.PG)` check, but in that case `conn.err` could be set from some previous command.
+In the above snippet, it's possible to skip the `if (err == error.PG)` check, but in that case `conn.err` could be set from some previous command (`conn.err` is always reset when acquired from the pool).
 
-If `error.PG` is returned from a non-connection object, like a query result, the associated connection will have it's `conn.err` set. In other words, `conn.err` is the only thing you ever have to check.
+If `error.PG` is returned from a non-connection object, like a query result, the associated connection will have its `conn.err` set. In other words, `conn.err` is the only thing you ever have to check.
 
 ## Type Support
 All implementations have to deal with things like: how to support unsigned integers, given that PostgreSQL only has signed integers. Or, how to support UUIDs when the language has no UUID type. This section documents the exact behavior.
@@ -227,7 +229,9 @@ All implementations have to deal with things like: how to support unsigned integ
 Multi-dimensional arrays aren't supported. The array lower bound is always 0 (or 1 in PG)
 
 ### text, bool, bytea, char, char(n), custom enums
-No surprises, arrays supported.
+No surprises, arrays supported. 
+
+When reading a `char[]`, it's tempting to use `row.get([]u8, 0)`, but this is incorrect. A `char[]` is an array, and thus `row.iterator(u8, 0`) must be used.
 
 ### smallint, int, bigint
 When binding an integer, the library will coerce the Zig value to the parameter type, as long as it fits. Thus, a `u64` can be bound to a `smallint`, if the value fits, else an error will be returned.
@@ -240,15 +244,15 @@ When reading a column, you must use the correct type.
 When binding, `@floatCast` is used based on the SQL parameter type. Array binding is strict. When reading a value, you must use the correct type. 
 
 ### Numeric
-Until standard support comes to Zig (either in the stdlib or a de facto standard library), numeric support is half-baked. When binding a value to a parameter, you can use a f32, f64, comptime_float or string. The same applies to bindin got a numeric array.
+Until standard support comes to Zig (either in the stdlib or a de facto standard library), numeric support is half-baked. When binding a value to a parameter, you can use a f32, f64, comptime_float or string. The same applies to binding to a numeric array.
 
-You can `get(pg.Numeric, $COL)` to return a `pg.Numeric`. The `pg.Numeric` type only has 2 useful methods: `toFloat` and `toString`. You can also use `num.estimatedStringLen` to get the max size of the string reprentation:
+You can `get(pg.Numeric, $COL)` to return a `pg.Numeric`. The `pg.Numeric` type only has 2 useful methods: `toFloat` and `toString`. You can also use `num.estimatedStringLen` to get the max size of the string representation:
 
 ```zig
 const numeric = row.get(pg.Numeric, 0);
 var buf = allocator.alloc(u8, numeric.estimatedStringLen());
 defer allocator.free(buf)
-const str = numeric.toStirng(&buf);
+const str = numeric.toString(&buf);
 ```
 
 Using `row.get(f64, 0)` on a numeric is the same as `row.get(pg.Numeric, 0).toFloat()`.
@@ -256,6 +260,11 @@ Using `row.get(f64, 0)` on a numeric is the same as `row.get(pg.Numeric, 0).toFl
 You should consider simply casting the numeric to `::double` or `::text` within SQL in order to rely on PostgreSQL's own robust numeric to float/text conversion.
 
 However, `pg.Numeric` has fields for the underlying wire-format of the numeric value. So if you require precision and the text representation isn't sufficient, you can parse the fields directly. `types/numeric.zig` is relatively well documented and tries to explain the fields. Note that any non-primitive fields, e.g. the  `digits: []u8`, is only valid until the next call to `result.next`, `result.deinit`, `result.drain` or `row.deinit`.
+
+### UUID
+When a `[]u8` is bound to a UUID column, it must either be a 16-byte slice, or a valid 36-byte hex-encoded UUID. Arrays behave the same.
+
+When reading a `uuid` column with `[]u8` a 16-byte slice will be returned. Use the `pg.uuidToHex() ![36]u8` helper if you need it hex-encoded.
 
 ### INET/CIDR
 You can bind a string value to a `cidr`, `inet`, `cidr[]` or `inet[]` parameter.
@@ -266,13 +275,13 @@ When reading a value, via `row.get` or `row.iterator` you should use `pg.Cidr`. 
 * `family: Family` - An enum, either `Family.v4` of `Family.v6`
 * `netmask: u8` - The network mask
 
-### UUID
-When a `[]u8` is bound to a UUID column, it must either be a 16-byte slice, or a valid 36-byte hex-encoded UUID. Arrays behave the same.
+### MacAddr/MacAddr8
+You can bind a `[]u8` to either a `macaddr` or a `macaddr8`. These can be either binary representation (6-bytes for `macaddr` or 8 bytes for `macaddr8`) or a text-representation supported by PostgreSQL. This works, like UUID, because there's no ambiguity in the length. The same applied for array variants - it's even possible to mix and match formats within the array.
 
-When reading a `uuid` column with `[]u8` a 16-byte slice will be returned. Use the `pg.uuidToHex() ![36]u8` helper if you need it hex-encoded.
+When reading a value, via `row.get` or `row.iterator` using `[]u8`, the binary representation is always returned.
 
 ### Timestamp(tz)
-When you bind an `i64` to a timestamp(tz) parameter, the value is assumed to be the number of microseconds since unix epoch (e.g. `std.time.microTimestamp()`). Array binding works the same.
+When you bind an `i64` to a timestamp(tz) parameter, the value is assumed to be the number of microseconds since unix epoch (e.g. `std.time.microTimestamp()`). Array binding works the same. You can also bind a string, which will pass the string as-is and depend on PostgreSQL to do the conversion. This is true for arrays as well.
 
 When reading a `timestamp` column with `i64`, the number of microseconds since unix epoch will be returned
 

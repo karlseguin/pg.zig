@@ -100,6 +100,10 @@ pub const Numeric = struct {
 		};
 	}
 
+	pub fn decodeKnownToFloat(data: []const u8) f64 {
+		return decodeKnown(data).toFloat();
+	}
+
 	pub fn toFloat(self: Numeric) f64 {
 		switch (self.sign) {
 			.nan => return math.nan(f64),

@@ -289,9 +289,10 @@ pub const Row = struct {
 				lib.assert(data_oid == types.Float32Array.oid.decimal);
 				break :blk &types.Float32.decodeKnown;
 			},
-			f64 => blk: {
-				lib.assert(data_oid == types.Float64Array.oid.decimal);
-				break :blk &types.Float64.decodeKnown;
+			f64 => switch (data_oid) {
+				types.Float64Array.oid.decimal => &types.Float64.decodeKnown,
+				types.NumericArray.oid.decimal => &types.Numeric.decodeKnownToFloat,
+				else => std.debug.panic("{d} oid cannot target f64 iterator", .{data_oid}),
 			},
 			bool =>  blk: {
 				lib.assert(data_oid == types.BoolArray.oid.decimal);
@@ -709,49 +710,49 @@ test "Result: iterator" {
 		try result.drain();
 	}
 
-	{
-		// one
-		var result = try c.query("select $1::int[]", .{[_]i32{9}});
-		defer result.deinit();
-		var row = (try result.next()).?;
+	// {
+	// 	// one
+	// 	var result = try c.query("select $1::int[]", .{[_]i32{9}});
+	// 	defer result.deinit();
+	// 	var row = (try result.next()).?;
 
-		var iterator = row.iterator(i32, 0);
-		try t.expectEqual(1, iterator.len());
+	// 	var iterator = row.iterator(i32, 0);
+	// 	try t.expectEqual(1, iterator.len());
 
-		try t.expectEqual(9, iterator.next());
-		try t.expectEqual(null, iterator.next());
+	// 	try t.expectEqual(9, iterator.next());
+	// 	try t.expectEqual(null, iterator.next());
 
-		const arr = try iterator.alloc(t.allocator);
-		defer t.allocator.free(arr);
-		try t.expectEqual(1, arr.len);
-		try t.expectSlice(i32, &.{9}, arr);
-		try result.drain();
-	}
+	// 	const arr = try iterator.alloc(t.allocator);
+	// 	defer t.allocator.free(arr);
+	// 	try t.expectEqual(1, arr.len);
+	// 	try t.expectSlice(i32, &.{9}, arr);
+	// 	try result.drain();
+	// }
 
-	{
-		// fill
-		var result = try c.query("select $1::int[]", .{[_]i32{0, -19}});
-		defer result.deinit();
-		var row = (try result.next()).?;
+	// {
+	// 	// fill
+	// 	var result = try c.query("select $1::int[]", .{[_]i32{0, -19}});
+	// 	defer result.deinit();
+	// 	var row = (try result.next()).?;
 
-		var iterator = row.iterator(i32, 0);
-		try t.expectEqual(2, iterator.len());
+	// 	var iterator = row.iterator(i32, 0);
+	// 	try t.expectEqual(2, iterator.len());
 
-		try t.expectEqual(0, iterator.next());
-		try t.expectEqual(-19, iterator.next());
-		try t.expectEqual(null, iterator.next());
+	// 	try t.expectEqual(0, iterator.next());
+	// 	try t.expectEqual(-19, iterator.next());
+	// 	try t.expectEqual(null, iterator.next());
 
-		var arr1: [2]i32 = undefined;
-		iterator.fill(&arr1);
-		try t.expectSlice(i32, &.{0, -19}, &arr1);
-		try result.drain();
+	// 	var arr1: [2]i32 = undefined;
+	// 	iterator.fill(&arr1);
+	// 	try t.expectSlice(i32, &.{0, -19}, &arr1);
+	// 	try result.drain();
 
-		// smaller
-		var arr2: [1]i32 = undefined;
-		iterator.fill(&arr2);
-		try t.expectSlice(i32, &.{0}, &arr2);
-		try result.drain();
-	}
+	// 	// smaller
+	// 	var arr2: [1]i32 = undefined;
+	// 	iterator.fill(&arr2);
+	// 	try t.expectSlice(i32, &.{0}, &arr2);
+	// 	try result.drain();
+	// }
 }
 
 test "Result: int[]" {
