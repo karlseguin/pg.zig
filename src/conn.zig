@@ -67,6 +67,7 @@ pub const Conn = struct {
 	pub const ConnectOpts = struct {
 		host: ?[]const u8 = null,
 		port: ?u16 = null,
+		unix_socket: ?[]const u8 = null,
 		write_buffer: ?u16 = null,
 		read_buffer: ?u16 = null,
 		result_state_size: u16 = 32,
@@ -86,10 +87,15 @@ pub const Conn = struct {
 	};
 
 	pub fn open(allocator: Allocator, opts: ConnectOpts) !Conn {
-		const host = opts.host orelse "127.0.0.1";
-		const port = opts.port orelse 5432;
-
-		const stream = try std.net.tcpConnectToHost(allocator, host, port);
+		const stream = blk: {
+			if (opts.unix_socket) |path| {
+				break :blk try std.net.connectUnixSocket(path);
+			} else {
+				const host = opts.host orelse "127.0.0.1";
+				const port = opts.port orelse 5432;
+				break :blk try std.net.tcpConnectToHost(allocator, host, port);
+			}
+		};
 		errdefer stream.close();
 
 		const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
