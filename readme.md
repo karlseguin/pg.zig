@@ -112,7 +112,7 @@ The `row` represents a single row from a result. Any non-primitive value that yo
 Only advance usage will need access to the row fields:
 
 * `oids: []i32` - The PG OID value for each column in the row. See `result.number_of_columns` for the length of this slice. Might be useful if you're trying to read a non-natively supported type.
-* values: []Value - The underlying byte value for each column in the row.  See `result.number_of_columns` for the length of this slice. Might be useful if you're trying to read a non-natively supported type. Has two fields, `is_null: bool` and `data: []const u8`.
+* `values: []Value` - The underlying byte value for each column in the row.  See `result.number_of_columns` for the length of this slice. Might be useful if you're trying to read a non-natively supported type. Has two fields, `is_null: bool` and `data: []const u8`.
 
 ### get(comptime T: type, col: usize) T
 Gets a single value from the row at the specified column index (0-based). **Type mapping is strict.** For example, you **cannot** use `i32` to read an `smallint` column.
@@ -138,7 +138,7 @@ This relies on calling `result.columnIndex` which iterates through `result.colum
 
 ```zig
 const id_idx = result.columnIndex("id").?
-for (try result.next()) |row| {
+while (try result.next()) |row| {
   // row.get(i32, id_idx)
 }
 ```
@@ -165,7 +165,7 @@ See `getCol`.
 A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed.
 
 ## Iterator(T)
-The iterator returns from `row.iterator(T, col)` can be iterated using the `next() ?T` call:
+The iterator returned from `row.iterator(T, col)` can be iterated using the `next() ?T` call:
 
 ```zig
 var names = row.iterator([]u8, 0);
