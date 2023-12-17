@@ -6,6 +6,7 @@ t:
 
 .PHONY: .d
 d:
+	# docker build tests/ -f tests/Dockerfile -t "pgzig:pg"
 	docker run -p 5432:5432 -it --rm \
 		-v $(shell pwd)/tests/pg_hba.conf:/etc/postgresql/pg_hba.conf \
 		-e POSTGRES_PASSWORD=root_pw \

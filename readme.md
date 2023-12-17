@@ -47,8 +47,8 @@ Opens a connection, or returns an error. Prefer creating connections through the
 * `host`: Defaults to `"127.0.0.1"`
 * `port`: Defaults to `5432`
 * `write_buffer` - Size of the write buffer, used when sending messages to the server. Will temporarily allocate more space as needed. If you're writing large SQL or have large parameters (e.g. long text values), making this larger might improve performance a little. Defaults to `2048`.
-* `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Detauls to `4096`.
-* `result_state_size`: Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. The Default to `32`. 
+* `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Defaults to `4096`.
+* `result_state_size`: Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. Defaults to `32`. 
 
 ### deinit(conn: \*Conn) void
 Closes the connection and releases its resources. This method should not be used when the connection comes from the pool.
@@ -70,9 +70,9 @@ Same as `query` but takes options:
 - `allocator` - The allocator to use for any allocations needed when executing the query and reading the results. When `null` this will default to the connection's allocator. If you were executing a query in a web-request and each web-request had its own arena tied to the lifetime of the request, it might make sense to use that arena. Defaults to `null`.
 
 ### row(sql: []const u8, args: anytype) !?QueryRow
-Executes the query with arguments, returns a single row. Returns an error if the query returns more than one row. Returns null if the query returns no row. `deinit` must be called on the returned `Row`.
+Executes the query with arguments, returns a single row. Returns an error if the query returns more than one row. Returns null if the query returns no row. `deinit` must be called on the returned `QueryRow`.
 
-### row(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
+### rowOpts(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
 Same as `row` but takes the same options as `queryOpts`
 
 ### begin() !void
@@ -89,7 +89,7 @@ The `conn.query` and `conn.queryOpts` methods return a `pg.Result` which is used
 
 ### Fields
 * `number_of_columns: usize` - Number of columns in the result
-* `column_names: [][]const u8` - Names of the column, empty unless the query was executed withteh `column_names = true` option.
+* `column_names: [][]const u8` - Names of the column, empty unless the query was executed with the `column_names = true` option.
 
 ### deinit(result: \*Result) void
 Releases resources associated with the result.
