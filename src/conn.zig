@@ -1679,6 +1679,30 @@ test "PG: char" {
 	try t.expectSlice(u8, &.{'z', '@'}, try row.iterator(u8, 3).alloc(aa));
 }
 
+test "PG: bind []const u8" {
+	defer t.reset();
+
+	var c = t.connect(.{});
+	defer c.deinit();
+	const value: []const u8 = "hello";
+
+	{
+		const result = c.exec("insert into all_types (id, col_text) values ($1, $2)", .{6, value});
+		if (result) |affected| {
+			try t.expectEqual(1, affected);
+		} else |err| {
+			try t.fail(c, err);
+		}
+	}
+
+	var result = try c.query("select id, col_text from all_types where id = $1", .{6});
+	defer result.deinit();
+
+	const row = (try result.next()) orelse unreachable;
+	try t.expectEqual(6, row.get(i32, 0));
+	try t.expectString("hello", row.get([]u8, 1));
+}
+
 fn expectNumeric(numeric: lib.Numeric, expected: []const u8) !void {
 	var str_buf: [50]u8 = undefined;
 	try t.expectString(expected, numeric.toString(&str_buf));

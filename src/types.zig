@@ -1065,7 +1065,13 @@ fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, fo
 		.Bool => return Types.Bool.encode(value, buf, format_pos),
 		.Pointer => |ptr| {
 			switch (ptr.size) {
-				.Slice => return bindSlice(oid, @as([]ptr.child, value), buf, format_pos),
+				.Slice => {
+					if (ptr.is_const) {
+						return bindSlice(oid, @as([]const ptr.child, value), buf, format_pos);
+					} else {
+						return bindSlice(oid, @as([]ptr.child, value), buf, format_pos);
+					}
+				},
 				.One => switch (@typeInfo(ptr.child)) {
 					.Array => {
 						const Slice = []const std.meta.Elem(ptr.child);
