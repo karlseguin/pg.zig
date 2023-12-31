@@ -6,6 +6,7 @@ pub const Pool = lib.Pool;
 pub const Row = lib.Row;
 pub const Result = lib.Result;
 pub const QueryRow = lib.QueryRow;
+pub const types = lib.types;
 
 pub const Cidr = lib.Cidr;
 pub const Numeric = lib.Numeric;
