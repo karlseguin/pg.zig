@@ -1703,6 +1703,24 @@ test "PG: bind []const u8" {
 	try t.expectString("hello", row.get([]u8, 1));
 }
 
+test "PG: isUnique" {
+	defer t.reset();
+
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		try t.expectError(error.PG, c.exec("insert into all_types (id, id) values ($1)", .{7, null}));
+		try t.expectEqual(false, c.err.?.isUnique());
+	}
+
+	{
+		_ = try c.exec("insert into all_types (id) values ($1)", .{7});
+		_ = try t.expectError(error.PG, c.exec("insert into all_types (id) values ($1)", .{7}));
+		try t.expectEqual(true, c.err.?.isUnique());
+	}
+}
+
 fn expectNumeric(numeric: lib.Numeric, expected: []const u8) !void {
 	var str_buf: [50]u8 = undefined;
 	try t.expectString(expected, numeric.toString(&str_buf));

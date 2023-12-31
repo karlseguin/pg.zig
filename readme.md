@@ -222,6 +222,30 @@ In the above snippet, it's possible to skip the `if (err == error.PG)` check, bu
 
 If `error.PG` is returned from a non-connection object, like a query result, the associated connection will have its `conn.err` set. In other words, `conn.err` is the only thing you ever have to check.
 
+A PG error always exposes the following fields:
+* `code: []const u8` - https://www.postgresql.org/docs/current/errcodes-appendix.html
+* `message: []const u8`
+* `severity: []const u8`
+
+And optionally (depending on the error and the version of the server):
+* `column: ?[]const u8 = null`
+* `constraint: ?[]const u8 = null`
+* `data_type_name: ?[]const u8 = null`
+* `detail: ?[]const u8 = null`
+* `file: ?[]const u8 = null`
+* `hint: ?[]const u8 = null`
+* `internal_position: ?[]const u8 = null`
+* `internal_query: ?[]const u8 = null`
+* `line: ?[]const u8 = null`
+* `position: ?[]const u8 = null`
+* `routine: ?[]const u8 = null`
+* `schema: ?[]const u8 = null`
+* `severity2: ?[]const u8 = null`
+* `table: ?[]const u8 = null`
+* `where: ?[]const u8 = null`
+
+The `isUnique() bool` method can be called on the error to determine whether or not the error was a unique violation (i.e. error code `23505`).
+
 ## Type Support
 All implementations have to deal with things like: how to support unsigned integers, given that PostgreSQL only has signed integers. Or, how to support UUIDs when the language has no UUID type. This section documents the exact behavior.
 

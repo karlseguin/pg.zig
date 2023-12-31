@@ -23,6 +23,10 @@ severity2: ?[]const u8 = null,
 table: ?[]const u8 = null,
 where: ?[]const u8 = null,
 
+pub fn isUnique(self: Error) bool {
+	return std.mem.eql(u8, self.code, "23505");
+}
+
 pub fn parse(data: []const u8) Error {
 	var err = Error{
 		.code = "",
