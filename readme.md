@@ -1,6 +1,6 @@
 # Native PostgreSQL driver for Zig
 
-The driver is early in development and you should consider using libpq, either directly or with a wrapper. If you do decide to use this driver, please read this readme in full to understand various caveats.
+A native PostgresSQL driver / client for Zig.
 
 ## Example
 ```zig
@@ -44,14 +44,23 @@ while (try result.next()) |row| {
 ### open(allocator: std.mem.Allocator, opts: Conn.ConnectOpts) !Conn
 Opens a connection, or returns an error. Prefer creating connections through the pool. Connection options are:
 
-* `host`: Defaults to `"127.0.0.1"`
-* `port`: Defaults to `5432`
+* `host` - Defaults to `"127.0.0.1"`
+* `port` - Defaults to `5432`
 * `write_buffer` - Size of the write buffer, used when sending messages to the server. Will temporarily allocate more space as needed. If you're writing large SQL or have large parameters (e.g. long text values), making this larger might improve performance a little. Defaults to `2048`.
 * `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Defaults to `4096`.
-* `result_state_size`: Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. Defaults to `32`. 
+* `result_state_size` - Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. Defaults to `32`. 
 
 ### deinit(conn: \*Conn) void
 Closes the connection and releases its resources. This method should not be used when the connection comes from the pool.
+
+### auth(opts: Conn.AuthOpts) !Conn
+Authentications the request. Prefer creating connections through the pool. Auth options are:
+
+* `username`: Default to  `"postgres"`
+* `password`: Default to  `null`
+* `database`: Default to  `null`
+* `timeout` : Default to `10_000` (milliseconds)
+
 
 ### release(conn: \*Conn) void
 Releases the connection back to the pool. The pool might decide to close the connection and open a new one.
@@ -315,3 +324,43 @@ When binding a value to a JSON or JSONB parameter, you can either supply a seria
 When binding to an array of JSON or JSONB, automatic serialization is not support and thus an array of serialized values must be provided.
 
 When reading a `JSON` or `JSONB` column with `[]u8`, the serialized JSON will be returned.
+
+## Listen / Notify
+You can create a `pg.Listener` either from an existing `Pool` or directly. When using the pool, a new connection/session is created. It *does not* use a connection from the pool:
+
+```zig
+var listener = try pool.newListener();
+defer listener.deinit();
+
+// listen to 1 or more channels
+try listener.listen("chan_1");
+try listener.listen("chan_2");
+
+// .next() blocks until there's a notification or an error
+while (listener.next()) |notification| {
+  std.debug.print("Channel: {s}\nPayload: {s}", .{notification.channel, notification.payload});
+}
+
+// Yes, this API is annoying. I hope Zig adds error payloads soon.
+
+// can only be here if an error occurred.
+switch (listener.err.?) {
+  error.PG => std.debug.print("{s}\n", .{listener.conn.err.?.message}),
+  else => |err| std.debug.print("{s}\n", .{@errorName(err)}),
+}
+```
+
+Creating a new Listener directly is a lot like creating a new connection. See [Conn.open](#openallocator-stdmemallocator-opts-connconnectopts-conn) and [Conn.auth](#authopts-connauthopts-void).
+
+```zig
+// see the Conn.ConnectOpts
+var l = try pg.Listener.open(allocator, .{});
+defer l.deinit();
+
+try l.auth(.{})
+
+// same as above
+try listener.listen("chan_1");
+...
+```
+

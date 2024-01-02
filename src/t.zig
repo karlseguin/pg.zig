@@ -192,14 +192,8 @@ pub const Stream = struct {
 };
 
 pub fn connect(opts: anytype) Conn {
-	const T = @TypeOf(opts);
-
 	var c = Conn.open(allocator, .{.host = "localhost"}) catch unreachable;
-	c.auth(.{
-		.database = if (@hasField(T, "database")) opts.database else "postgres",
-		.username = if (@hasField(T, "username")) opts.username else "postgres",
-		.password = if (@hasField(T, "password")) opts.password else "root_pw",
-	}) catch |err| {
+	c.auth(authOpts(opts)) catch |err| {
 		if (c.err) |pg| {
 			@panic(pg.message);
 		}
@@ -207,6 +201,16 @@ pub fn connect(opts: anytype) Conn {
 	};
 	return c;
 }
+
+pub fn authOpts(opts: anytype) Conn.AuthOpts {
+	const T = @TypeOf(opts);
+	return .{
+		.database = if (@hasField(T, "database")) opts.database else "postgres",
+		.username = if (@hasField(T, "username")) opts.username else "postgres",
+		.password = if (@hasField(T, "password")) opts.password else "root_pw",
+	};
+}
+
 
 pub fn fail(c: Conn, err: anyerror) !void {
 	if (c.err) |pg_err| {

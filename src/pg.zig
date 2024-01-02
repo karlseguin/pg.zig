@@ -5,6 +5,7 @@ pub const Conn = lib.Conn;
 pub const Pool = lib.Pool;
 pub const Row = lib.Row;
 pub const Result = lib.Result;
+pub const Listener = lib.Listener;
 pub const QueryRow = lib.QueryRow;
 pub const types = lib.types;
 

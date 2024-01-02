@@ -8,6 +8,7 @@ pub const proto = @import("proto.zig");
 pub const Conn = @import("conn.zig").Conn;
 pub const Pool = @import("pool.zig").Pool;
 pub const SASL = @import("sasl.zig").SASL;
+pub const Listener = @import("listener.zig").Listener;
 
 const result = @import("result.zig");
 pub const Row = result.Row;

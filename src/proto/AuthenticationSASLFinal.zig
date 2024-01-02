@@ -1,6 +1,8 @@
 const std = @import("std");
 const proto = @import("_proto.zig");
 
+const Reader = proto.Reader;
+
 // #4 - Server finalizes with this
 const AuthenticationSASLFinal = @This();
 
@@ -21,7 +23,6 @@ pub fn parse(data: []const u8) !AuthenticationSASLFinal {
 }
 
 const t = proto.testing;
-const Reader = proto.Reader;
 test "AuthenticationSASLFinal: parse" {
 	var buf = try proto.Buffer.init(t.allocator, 128);
 	defer buf.deinit();

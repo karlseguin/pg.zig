@@ -5,6 +5,7 @@ pub const CommandComplete = @import("proto/CommandComplete.zig");
 pub const Describe = @import("proto/Describe.zig");
 pub const Error = @import("proto/Error.zig");
 pub const Execute = @import("proto/Execute.zig");
+pub const NotificationResponse = @import("proto/NotificationResponse.zig");
 pub const Parse = @import("proto/Parse.zig");
 pub const PasswordMessage = @import("proto/PasswordMessage.zig");
 pub const Query = @import("proto/Query.zig");

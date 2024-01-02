@@ -213,7 +213,7 @@ const Env = struct {
 		return .{
 			.verbose = readEnvBool(allocator, "TEST_VERBOSE", true),
 			.fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
-			.filter = readEnv(allocator, "TEST_VERBOSE"),
+			.filter = readEnv(allocator, "TEST_FILTER"),
 		};
 	}
 

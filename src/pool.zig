@@ -3,6 +3,8 @@ const lib = @import("lib.zig");
 
 const log = lib.log;
 const Conn = lib.Conn;
+const Listener = lib.Listener;
+
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
@@ -114,6 +116,12 @@ pub const Pool = struct {
 		self._mutex.unlock();
 		self._cond.signal();
 	}
+
+	pub fn newListener(self: *Pool) !Listener {
+		var listener = try Listener.open(self._allocator, self._opts.connect);
+		try listener.auth(self._opts.auth);
+		return listener;
+	}
 };
 
 const Reconnector = struct {
@@ -220,11 +228,7 @@ const t = lib.testing;
 test "Pool" {
 	var pool = try Pool.init(t.allocator, .{
 		.size = 2,
-		.auth = .{
-			.database = "postgres",
-			.username = "postgres",
-			.password = "root_pw",
-		},
+		.auth = t.authOpts(.{}),
 	});
 	defer pool.deinit();
 
