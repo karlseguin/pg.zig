@@ -56,10 +56,10 @@ Closes the connection and releases its resources. This method should not be used
 ### auth(opts: Conn.AuthOpts) !void
 Authentications the request. Prefer creating connections through the pool. Auth options are:
 
-* `username`: Default to  `"postgres"`
-* `password`: Default to  `null`
-* `database`: Default to  `null`
-* `timeout` : Default to `10_000` (milliseconds)
+* `username`: Defaults to `"postgres"`
+* `password`: Defaults to `null`
+* `database`: Defaults to `null`
+* `timeout` : Defaults to `10_000` (milliseconds)
 
 
 ### release(conn: \*Conn) void
