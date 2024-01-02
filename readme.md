@@ -53,7 +53,7 @@ Opens a connection, or returns an error. Prefer creating connections through the
 ### deinit(conn: \*Conn) void
 Closes the connection and releases its resources. This method should not be used when the connection comes from the pool.
 
-### auth(opts: Conn.AuthOpts) !Conn
+### auth(opts: Conn.AuthOpts) !void
 Authentications the request. Prefer creating connections through the pool. Auth options are:
 
 * `username`: Default to  `"postgres"`
@@ -363,4 +363,3 @@ try l.auth(.{})
 try listener.listen("chan_1");
 ...
 ```
-
