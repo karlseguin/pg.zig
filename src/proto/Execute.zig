@@ -18,8 +18,7 @@ pub fn write(self: Execute, buf: *proto.Buffer) !void {
 
 	try buf.ensureTotalCapacity(total_length);
 
-	_ = buf.skip(total_length) catch unreachable;
-	var view = buf.view(0);
+	var view = buf.skip(total_length) catch unreachable;
 	view.writeByte('E');
 	view.writeIntBig(u32, @intCast(payload_len));
 	view.write(self.portal);

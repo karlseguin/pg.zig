@@ -4,8 +4,8 @@
 	.version = "0.0.0",
 	.dependencies = .{
 		.buffer = .{
-			.url = "https://github.com/karlseguin/buffer.zig/archive/56e4931270e28dba7a250484bf1994a6a45ae167.tar.gz",
-			.hash = "1220da1ce16a9dbc4cb246e0d62988736c3891b9320fa9c98e358e06128561f02a1f"
+			.url = "https://github.com/karlseguin/buffer.zig/archive/b1eb9a2a5bc73bd9121d9751ce7d389dee907190.tar.gz",
+			.hash = "1220c007b6883784a0d7c637309082abde40a9f56a62a0026a9a9ac0807926e0c6c5"
 		},
 	},
 }

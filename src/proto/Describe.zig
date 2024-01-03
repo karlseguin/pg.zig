@@ -21,8 +21,7 @@ pub fn write(self: Describe, buf: *proto.Buffer) !void {
 
 	try buf.ensureTotalCapacity(total_length);
 
-	_ = buf.skip(total_length) catch unreachable;
-	var view = buf.view(0);
+	var view = buf.skip(total_length) catch unreachable;
 	view.writeByte('D');
 	view.writeIntBig(u32, @intCast(payload_len));
 	view.writeByte(switch (self.type) {

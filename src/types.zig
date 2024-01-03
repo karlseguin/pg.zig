@@ -242,7 +242,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(String.encoding, format_pos);
-			var view = try Encode.reserveView(buf, 4 + value.len);
+			var view = try buf.skip(4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -254,7 +254,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(Bytea.encoding, format_pos);
-			var view = try Encode.reserveView(buf, 4 + value.len);
+			var view = try buf.skip(4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -282,7 +282,7 @@ pub const Types = struct {
 
 		fn encode(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(UUID.encoding, format_pos);
-			var view = try Encode.reserveView(buf, 20);
+			var view = try buf.skip( 20);
 			view.write(&.{0, 0, 0, 16});
 			switch (value.len) {
 				16 => view.write(value),
@@ -379,7 +379,7 @@ pub const Types = struct {
 				return String.encode(value, buf, format_pos);
 			}
 			buf.writeAt(MacAddr.encoding, format_pos);
-			var view = try Encode.reserveView(buf, 4 + value.len);
+			var view = try buf.skip(4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -395,7 +395,7 @@ pub const Types = struct {
 				return String.encode(value, buf, format_pos);
 			}
 			buf.writeAt(MacAddr8.encoding, format_pos);
-			var view = try Encode.reserveView(buf, 4 + value.len);
+			var view = try buf.skip(4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -407,7 +407,7 @@ pub const Types = struct {
 
 		fn encodeBytes(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(JSON.encoding, format_pos);
-			var view = try Encode.reserveView(buf, 4 + value.len);
+			var view = try buf.skip(4 + value.len);
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
@@ -426,7 +426,7 @@ pub const Types = struct {
 
 		fn encodeBytes(value: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
 			buf.writeAt(JSONB.encoding, format_pos);
-			var view = try Encode.reserveView(buf, 5 + value.len);
+			var view = try buf.skip( 5 + value.len);
 			// + 1 for the version
 			view.writeIntBig(i32, @intCast(value.len + 1));
 			view.writeByte(1); // jsonb version
@@ -519,7 +519,7 @@ pub const Types = struct {
 			buf.writeAt(&Timestamp.oid.encoded, oid_pos);
 
 			// every value is 12 bytes, 4 byte length + 8 byte value
-			var view = try Encode.reserveView(buf, 12 * values.len);
+			var view = try buf.skip(12 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 8}); // length of value
 				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
@@ -537,7 +537,7 @@ pub const Types = struct {
 			buf.writeAt(&TimestampTz.oid.encoded, oid_pos);
 
 			// every value is 12 bytes, 4 byte length + 8 byte value
-			var view = try Encode.reserveView(buf, 12 * values.len);
+			var view = try buf.skip(12 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 8}); // length of value
 				view.writeIntBig(i64, value - us_from_epoch_to_y2k);
@@ -553,7 +553,7 @@ pub const Types = struct {
 			buf.writeAt(&Float32.oid.encoded, oid_pos);
 
 			// every value takes 8 bytes, 4 for the length, 4 for the value
-			var view = try Encode.reserveView(buf, 8 * values.len);
+			var view = try buf.skip(8 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 4}); //length
 				const tmp: *i32 = @constCast(@ptrCast(&value));
@@ -570,7 +570,7 @@ pub const Types = struct {
 			buf.writeAt(&Float64.oid.encoded, oid_pos);
 
 			// every value takes 12 bytes, 4 for the length, 8 for the value
-			var view = try Encode.reserveView(buf, 12 * values.len);
+			var view = try buf.skip(12 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 8}); //length
 				const tmp: *i64 = @constCast(@ptrCast(&value));
@@ -587,7 +587,7 @@ pub const Types = struct {
 			buf.writeAt(&Bool.oid.encoded, oid_pos);
 
 			// every value takes 5 bytes, 4 for the length, 1 for the value
-			var view = try Encode.reserveView(buf, 5 * values.len);
+			var view = try buf.skip(5 * values.len);
 			for (values) |value| {
 				// each value is prefixed with a 4 byte length
 				if (value) {
@@ -644,14 +644,12 @@ pub const Types = struct {
 			return Encode.writeTextEncodedArray(values, l, buf, format_pos, MacAddrArray.writeOneAsText);
 		}
 
-		fn writeOneAsText(value: []const u8, view: *buffer.View) void {
+		fn writeOneAsText(value: []const u8, buf: *buffer.Buffer) void {
 			if (value.len == 6) {
-				var buf: [12]u8 = undefined;
-				const formatted = std.fmt.bufPrint(&buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{value[0], value[1], value[2], value[3], value[4], value[5]}) catch unreachable;
-				view.write(formatted);
-				return;
+				std.fmt.format(buf.writer(), "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{value[0], value[1], value[2], value[3], value[4], value[5]}) catch unreachable;
+			} else {
+				buf.writeAssumeCapacity(value);
 			}
-			view.write(value);
 		}
 	};
 
@@ -670,14 +668,12 @@ pub const Types = struct {
 			return Encode.writeTextEncodedArray(values, l, buf, format_pos, MacAddr8Array.writeOneAsText);
 		}
 
-		fn writeOneAsText(value: []const u8, view: *buffer.View) void {
+		fn writeOneAsText(value: []const u8, buf: *buffer.Buffer) void {
 			if (value.len == 8) {
-				var buf: [16]u8 = undefined;
-				const formatted = std.fmt.bufPrint(&buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7]}) catch unreachable;
-				view.write(formatted);
-				return;
+				std.fmt.format(buf.writer(), "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7]}) catch unreachable;
+			} else {
+				buf.writeAssumeCapacity(value);
 			}
-			view.write(value);
 		}
 	};
 
@@ -718,7 +714,7 @@ pub const Types = struct {
 			buf.writeAt(&UUID.oid.encoded, oid_pos);
 
 			// every value is 20 bytes, 4 byte length + 16 byte value
-			var view = try Encode.reserveView(buf, 20 * values.len);
+			var view = try buf.skip(20 * values.len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 16}); // length of value
 				switch (value.len) {
@@ -753,7 +749,7 @@ pub const Types = struct {
 				len += value.len;
 			}
 
-			var view = try Encode.reserveView(buf, len);
+			var view = try buf.skip(len);
 			for (values) |value| {
 				// + 1 for the version
 				view.writeIntBig(i32, @intCast(value.len + 1));
@@ -773,7 +769,7 @@ pub const Types = struct {
 
 			// every value has a 5 byte prefix, a 4 byte length and a 1 byte char
 			const len = values.len * 5;
-			var view = try Encode.reserveView(buf, len);
+			var view = try buf.skip(len);
 			for (values) |value| {
 				view.write(&.{0, 0, 0, 1});
 				view.writeByte(value);
@@ -807,7 +803,7 @@ pub usingnamespace Types;
 pub const Encode = struct {
 	// helpers for encoding data (or part of the data)
 	pub fn writeIntArray(comptime T: type, size: usize, values: []const T, buf: *buffer.Buffer) !void {
-		var view = try reserveView(buf, (size + 4) * values.len);
+		var view = try buf.skip((size + 4) * values.len);
 
 		var value_len: [4]u8 = undefined;
 		std.mem.writeInt(i32, &value_len, @intCast(size), .big);
@@ -824,18 +820,11 @@ pub const Encode = struct {
 			len += value.len;
 		}
 
-		var view = try reserveView(buf, len);
+		var view = try buf.skip(len);
 		for (values) |value| {
 			view.writeIntBig(i32, @intCast(value.len));
 			view.write(value);
 		}
-	}
-
-	pub fn reserveView(buf: *buffer.Buffer, space: usize) !buffer.View {
-		try buf.ensureUnusedCapacity(space);
-		const view = buf.view(buf.len());
-		_ = try buf.skip(space);
-		return view;
 	}
 
 	pub fn variableLengthStart(buf: *buffer.Buffer) !usize {
@@ -850,7 +839,7 @@ pub const Encode = struct {
 		buf.writeAt(&encoded_len, pos - 4);
 	}
 
-	pub fn writeTextEncodedArray(values: []const []const u8, values_len: usize, buf: *buffer.Buffer, format_pos: usize, writeFn: *const fn([]const u8, *buffer.View) void) !void {
+	pub fn writeTextEncodedArray(values: []const []const u8, values_len: usize, buf: *buffer.Buffer, format_pos: usize, writeFn: *const fn([]const u8, *buffer.Buffer) void) !void {
 		buf.writeAt(&text_encoding, format_pos);
 		if (values.len == 0) {
 			// empty array, with length prefix
@@ -866,18 +855,19 @@ pub const Encode = struct {
 
 		// our max_len is just an estimate, we'll get the actual length and fill
 		// it in later, for now, we skip the length
-		var view = buf.view(buf.len() + 4);
-		view.writeByte('{');
+		var view = try buf.skip(4);
+		const start = buf.len();
+		buf.writeByteAssumeCapacity('{');
 		for (values) |value| {
-			writeFn(value, &view);
-			view.writeByte(',');
+			writeFn(value, buf);
+			buf.writeByteAssumeCapacity(',');
 		}
 
 		// strip out last comma
-		view.truncate(1);
-		view.writeByte('}');
-		try buf.writeIntBig(i32, @intCast(view.pos));
-		_ = try buf.skip(view.pos);
+		buf.truncate(1);
+		buf.writeByteAssumeCapacity('}');
+		// -6 since the oid and the
+		view.writeIntBig(i32, @intCast(buf.len() - start));
 	}
 
 	// Fairly special case for text-encoded arrays where we _always_ want to quote the value
@@ -892,10 +882,10 @@ pub const Encode = struct {
 		return Encode.writeTextEncodedArray(values, l, buf, format_pos, writeQuotedValue);
 	}
 
-	fn writeQuotedValue(value: []const u8, view: *buffer.View) void {
-		view.writeByte('"');
-		view.write(value);
-		view.writeByte('"');
+	fn writeQuotedValue(value: []const u8, buf: *buffer.Buffer) void {
+		buf.writeByteAssumeCapacity('"');
+		buf.writeAssumeCapacity(value);
+		buf.writeByteAssumeCapacity('"');
 	}
 
 	// Fairly special case for text-encoded arrays where we _always_ want to quote the value
@@ -909,8 +899,8 @@ pub const Encode = struct {
 		return Encode.writeTextEncodedArray(values, l, buf, format_pos, writeRawValue);
 	}
 
-	fn writeRawValue(value: []const u8, view: *buffer.View) void {
-		view.write(value);
+	fn writeRawValue(value: []const u8, buf: *buffer.Buffer) void {
+		buf.writeAssumeCapacity(value);
 	}
 
 	pub fn writeTextEncodedCharArray(values: []const u8, buf: *buffer.Buffer, format_pos: usize) !void {
@@ -927,30 +917,30 @@ pub const Encode = struct {
 		try buf.ensureUnusedCapacity(estimated_len);
 
 		// skip the length, which we'll fill later
-		var view = buf.view(buf.len() + 4);
+		var view = try buf.skip(4);
+		const start = buf.len();
 
 			// https://www.postgresql.org/docs/current/arrays.html#ARRAYS-IO
-		view.writeByte('{');
+		buf.writeByteAssumeCapacity('{');
 		for (values) |c| {
 			if (c == '"' or c == '\\') {
-				view.write("\"\\");
-				view.writeByte(c);
-				view.writeByte('"');
+				buf.writeAssumeCapacity("\"\\");
+				buf.writeByteAssumeCapacity(c);
+				buf.writeByteAssumeCapacity('"');
 			} else if (std.ascii.isWhitespace(c) or c == ',' or c == '{' or c == '}' or c == '\\') {
-				view.writeByte('"');
-				view.writeByte(c);
-				view.writeByte('"');
+				buf.writeByteAssumeCapacity('"');
+				buf.writeByteAssumeCapacity(c);
+				buf.writeByteAssumeCapacity('"');
 			} else {
-				view.writeByte(c);
+				buf.writeByteAssumeCapacity(c);
 			}
-			view.writeByte(',');
+			buf.writeByteAssumeCapacity(',');
 		}
 
 		// strip out last comma
-		view.truncate(1);
-		view.writeByte('}');
-		try buf.writeIntBig(i32, @intCast(view.pos));
-		_ = try buf.skip(view.pos);
+		buf.truncate(1);
+		buf.writeByteAssumeCapacity('}');
+		view.writeIntBig(i32, @intCast(buf.len() - start));
 	}
 };
 
@@ -1249,9 +1239,7 @@ pub fn resultEncoding(oids: []i32, buf: *buffer.Buffer) !void {
 
 	// 2 bytes for the # of columns we're specifying + 2 bytes per column
 	const space_needed = 2 + oids.len * 2;
-	try buf.ensureUnusedCapacity(space_needed);
-	var view = buf.view(buf.len());
-	_ = try buf.skip(space_needed);
+	var view = try buf.skip(space_needed);
 
 	view.writeIntBig(u16, @intCast(oids.len));
 	for (oids) |oid| {

@@ -251,7 +251,7 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
 
 	// we have 8 bytes of meta (# of digits, weight, sign and scale) that we
 	// don't yet know how to fill up, reserve the space.
-	var meta_view = try Encode.reserveView(buf, 8);
+	var meta_view = try buf.skip(8);
 
 	// buf now points to 12 bytes ahead of where we started. 4 bytes for the
 	// length and 8 bytes for the meta. This is the position where we fill in

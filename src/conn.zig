@@ -272,10 +272,7 @@ pub const Conn = struct {
 				const total_length = bind_payload_len + 13;
 
 				try buf.ensureTotalCapacity(total_length);
-				_ = buf.skip(total_length) catch unreachable;
-
-				// we're sure our buffer is big enough now, views avoid some bound checking
-				var view = buf.view(0);
+				var view = buf.skip(total_length) catch unreachable;
 
 				view.writeByte('P');
 				view.writeIntBig(u32, @intCast(bind_payload_len));
@@ -384,7 +381,7 @@ pub const Conn = struct {
 			try buf.writeByte('B');
 
 			// length, we'll fill this up once we know
-			_ = try buf.skip(4);
+			var len_view = try buf.skip(4);
 
 			// name of portal and name of prepared statement, we're using an unnamed
 			// portal and statement, so these are both empty string, so 2 null terminators
@@ -399,13 +396,7 @@ pub const Conn = struct {
 			// the server what format it should use for each column that it's sending
 			// back (if any).
 			try types.resultEncoding(state.oids[0..number_of_columns], buf);
-
-			{
-				// fill in the length of our Bind message
-				var view = buf.view(1);
-				// don't include the 'B' type
-				view.writeIntBig(u32, @intCast(buf.len() - 1));
-			}
+			len_view.writeIntBig(u32, @intCast(buf.len() - 1));
 
 			try buf.write(&.{
 				'E',

@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) !void {
 
 	var modules = ModuleMap.init(allocator);
 	defer modules.deinit();
+
 	try modules.put("buffer", b.dependency("buffer", dep_opts).module("buffer"));
 
 		// Expose this as a module that others can import

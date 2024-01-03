@@ -4,8 +4,7 @@ const proto = @import("_proto.zig");
 const Sync = @This();
 pub fn write(_: Sync, buf: *proto.Buffer) !void {
 	try buf.ensureTotalCapacity(5);
-	_ = buf.skip(5) catch unreachable;
-	var view = buf.view(0);
+	var view = buf.skip(5) catch unreachable;
 	view.write(&.{'S', 0, 0, 0, 4});
 }
 

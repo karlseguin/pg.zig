@@ -18,8 +18,7 @@ pub fn write(self: SASLResponse, buf: *proto.Buffer) !void {
 
 	// this nonsense is to skip the buffers bound checking, since we've already
 	// ensured the available capacity
-	_ = buf.skip(total_length) catch unreachable;
-	var view = buf.view(0);
+	var view = buf.skip(total_length) catch unreachable;
 	view.writeByte('p');
 	view.writeIntBig(u32, @intCast(payload_len));
 	view.write(self.data);

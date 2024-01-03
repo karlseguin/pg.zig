@@ -42,7 +42,7 @@ pub const Listener = struct {
 		try buf.ensureTotalCapacity(136);
 		buf.writeByteAssumeCapacity('Q');
 
-		const len_pos = try buf.skip(4);
+		var len_view = try buf.skip(4);
 
 		buf.writeAssumeCapacity("LISTEN \"");
 
@@ -63,8 +63,7 @@ pub const Listener = struct {
 		buf.writeByteAssumeCapacity(0);
 
 		// fill in the length
-		var view = buf.view(len_pos);
-		view.writeIntBig(u32, @intCast(len));
+		len_view.writeIntBig(u32, @intCast(len));
 
 		try self.conn._stream.writeAll(buf.string());
 

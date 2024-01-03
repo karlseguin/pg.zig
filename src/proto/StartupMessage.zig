@@ -15,8 +15,7 @@ pub fn write(self: StartupMessage, buf: *proto.Buffer) !void {
 
 	// this nonsense is to skip the buffers bound checking, since we've already
 	// ensured the available capacity
-	_ = buf.skip(payload_len) catch unreachable;
-	var view = buf.view(0);
+	var view = buf.skip(payload_len) catch unreachable;
 	view.writeIntBig(u32, @intCast(payload_len));
 	view.write(self.protocol);
 	view.write(&[_]u8{'u', 's', 'e', 'r', 0});
