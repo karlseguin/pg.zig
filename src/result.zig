@@ -242,8 +242,8 @@ pub const Row = struct {
 			bool => return types.Bool.decode(data, oid),
 			[]const u8 => return types.Bytea.decode(data, oid),
 			[]u8 => return @constCast(types.Bytea.decode(data, oid)),
-			lib.Numeric => return types.Numeric.decode(data, oid),
-			lib.Cidr => return types.Cidr.decode(data, oid),
+			types.Numeric => return types.Numeric.decode(data, oid),
+			types.Cidr => return types.Cidr.decode(data, oid),
 			else => compileHaltGetError(T),
 		}
 	}
@@ -306,11 +306,11 @@ pub const Row = struct {
 				types.JSONBArray.oid.decimal => &types.JSONB.decodeKnownMutable,
 				else => &types.Bytea.decodeKnownMutable,
 			},
-			lib.Numeric => blk: {
+			types.Numeric => blk: {
 				lib.assert(data_oid == types.NumericArray.oid.decimal);
 				break :blk &types.Numeric.decodeKnown;
 			},
-			lib.Cidr => blk: {
+			types.Cidr => blk: {
 				lib.assert(data_oid == types.CidrArray.oid.decimal or data_oid == types.CidrArray.inet_oid.decimal );
 				break :blk &types.Cidr.decodeKnown;
 			},

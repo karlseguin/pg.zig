@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const SASL = @import("sasl.zig").SASL;
 const Buffer = @import("buffer").Buffer;
 
 const proto = lib.proto;
@@ -19,10 +18,10 @@ pub const Conn = struct {
 	// If we get a postgreSQL error, this will be set.
 	err: ?proto.Error,
 
-	_stream: Stream,
-
-	// The underlying data for err
+// The underlying data for err
 	_err_data: ?[]const u8,
+
+	_stream: Stream,
 
 	_pool: ?*Pool = null,
 
@@ -64,7 +63,7 @@ pub const Conn = struct {
 		transaction,
 	};
 
-	pub const ConnectOpts = struct {
+	pub const Opts = struct {
 		host: ?[]const u8 = null,
 		port: ?u16 = null,
 		unix_socket: ?[]const u8 = null,
@@ -73,20 +72,13 @@ pub const Conn = struct {
 		result_state_size: u16 = 32,
 	};
 
-	pub const AuthOpts = struct {
-		username: []const u8 = "postgres",
-		password: ?[]const u8 = null,
-		database: ?[]const u8 = null,
-		timeout: u32 = 10_000,
-	};
-
 	pub const QueryOpts = struct {
 		timeout: ?u32 = null,
 		column_names: bool = false,
 		allocator: ?Allocator = null,
 	};
 
-	pub fn open(allocator: Allocator, opts: ConnectOpts) !Conn {
+	pub fn open(allocator: Allocator, opts: Opts) !Conn {
 		const stream = blk: {
 			if (opts.unix_socket) |path| {
 				break :blk try std.net.connectUnixSocket(path);
@@ -147,55 +139,9 @@ pub const Conn = struct {
 		pool.release(self);
 	}
 
-	pub fn auth(self: *Conn, opts: AuthOpts) !void {
-		var buf = &self._buf;
-
-		try self._reader.startFlow(null, opts.timeout);
-		defer self._reader.endFlow() catch {
-			// this can only fail in extreme conditions (OOM) and it will only impact
-			// the next query (and if the app is using the pool, the pool will try to
-			// recover from this anyways)
-			self._state = .fail;
-		};
-
-		{
-			// write our startup message
-			const startup_message = proto.StartupMessage{
-				.username = opts.username,
-				.database = opts.database orelse opts.username,
-			};
-
-			buf.resetRetainingCapacity();
-			try startup_message.write(buf);
-			try self.write(buf.string());
-		}
-
-		var expect_response = true;
-		{
-			// read the server's response
-			const res = try self.read();
-			if (res.type != 'R') {
-				return self.unexpectedMessage();
-			}
-
-			switch (try proto.AuthenticationRequest.parse(res.data)) {
-				.ok => expect_response = false,
-				.sasl => |sasl| try self.authSASL(opts, sasl),
-				.md5 => |salt| try self.authMD5Password(opts, salt),
-				.password => try self.authPassword(opts.password orelse ""),
-			}
-		}
-
-		if (expect_response) {
-			// if we're here, it's because we sent more data to the server (e.g. a password)
-			// and we're now waiting for a reply, server should send a final auth ok message
-			const res = try self.read();
-			if (res.type != 'R') {
-				return self.unexpectedMessage();
-			}
-			if (std.meta.activeTag(try proto.AuthenticationRequest.parse(res.data)) != .ok) {
-				return self.unexpectedMessage();
-			}
+	pub fn auth(self: *Conn, opts: lib.auth.Opts) !void {
+		if (try lib.auth.auth(self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
+			return self.setErr(raw_pg_err);
 		}
 
 		while (true) {
@@ -204,7 +150,7 @@ pub const Conn = struct {
 				'Z' => return,
 				'K' => {}, // TODO: BackendKeyData
 				'S' => {}, // TODO: ParameterStatus,
-				else => return self.unexpectedMessage(),
+				else => return self.unexpectedDBMessage(),
 			}
 		}
 	}
@@ -312,7 +258,7 @@ pub const Conn = struct {
 				};
 
 				if (msg.type != '1') {
-					return self.unexpectedMessage();
+					return self.unexpectedDBMessage();
 				}
 			}
 
@@ -320,7 +266,7 @@ pub const Conn = struct {
 				// we expect a ParameterDescription message
 				const msg = try self.read();
 				if (msg.type != 't') {
-					return self.unexpectedMessage();
+					return self.unexpectedDBMessage();
 				}
 
 				const data = msg.data;
@@ -332,7 +278,7 @@ pub const Conn = struct {
 					if (next.type == 'T' or next.type == 'n') {
 						self.readyForQuery() catch {};
 					} else {
-						self.unexpectedMessage() catch {};
+						self.unexpectedDBMessage() catch {};
 					}
 					return error.ParameterCount;
 				} else {
@@ -365,7 +311,7 @@ pub const Conn = struct {
 						const a: ?Allocator = if (opts.column_names) allocator else null;
 						try state.from(number_of_columns, data, a);
 					},
-					else => return self.unexpectedMessage(),
+					else => return self.unexpectedDBMessage(),
 				}
 			}
 
@@ -421,7 +367,7 @@ pub const Conn = struct {
 				};
 				if (msg.type != '2') {
 					// expecting a BindComplete
-					return self.unexpectedMessage();
+					return self.unexpectedDBMessage();
 				}
 			}
 		}
@@ -527,7 +473,7 @@ pub const Conn = struct {
 				'Z' => return affected,
 				'T' => affected = 0,
 				'D' => affected = (affected orelse 0) + 1,
- 				else => return self.unexpectedMessage(),
+ 				else => return self.unexpectedDBMessage(),
 			}
 		}
 	}
@@ -543,88 +489,6 @@ pub const Conn = struct {
 
 	pub fn rollback(self: *Conn) !void {
 		_ = try self.execOpts("rollback", .{}, .{});
-	}
-
-	fn authSASL(self: *Conn, opts: AuthOpts, req: proto.AuthenticationRequest.SASL) !void {
-		if (!req.scram_sha_256) {
-			return self.unexpectedMessage();
-		}
-		var buf = &self._buf;
-
-		var sasl = try SASL.init(self._allocator);
-		defer sasl.deinit(self._allocator);
-
-		{
-			// send the client initial response
-			const msg = proto.SASLInitialResponse{
-				.response = sasl.client_first_message,
-				.mechanism = "SCRAM-SHA-256",
-			};
-			buf.resetRetainingCapacity();
-			try msg.write(buf);
-			try self.write(buf.string());
-		}
-
-		{
-			// read the server continue response
-			const msg = try self.read();
-			const c = switch (msg.type) {
-				'R' => try proto.AuthenticationSASLContinue.parse(msg.data),
-				else => return error.InvalidSASLFlow,
-			};
-			try sasl.serverResponse(c.data);
-		}
-
-		{
-			// send the client final response
-			const msg = proto.SASLResponse{
-				.data = try sasl.clientFinalMessage(opts.password orelse ""),
-			};
-			buf.resetRetainingCapacity();
-			try msg.write(buf);
-			try self.write(buf.string());
-		}
-
-		{
-			// read the server final response
-			const msg = try self.read();
-			const final = switch (msg.type) {
-				'R' => try proto.AuthenticationSASLFinal.parse(msg.data),
-				else => return error.InvalidSASLFlow,
-			};
-			try sasl.verifyServerFinal(final.data);
-		}
-	}
-
-	fn authMD5Password(self: *Conn, opts: AuthOpts, salt: []const u8) !void {
-		var hash: [16]u8 = undefined;
-		{
-			var hasher = std.crypto.hash.Md5.init(.{});
-			hasher.update(opts.password orelse "");
-			hasher.update(opts.username);
-			hasher.final(&hash);
-		}
-
-		{
-			var hex_buf:[32]u8 = undefined;
-			const hex_hash = try std.fmt.bufPrint(&hex_buf, "{}", .{std.fmt.fmtSliceHexLower(&hash)});
-			var hasher = std.crypto.hash.Md5.init(.{});
-			hasher.update(hex_hash);
-			hasher.update(salt);
-			hasher.final(&hash);
-		}
-		var hashed_password: [35]u8 = undefined;
-		const password = try std.fmt.bufPrint(&hashed_password, "md5{}", .{std.fmt.fmtSliceHexLower(&hash)});
-		try self.authPassword(password);
-	}
-
-	fn authPassword(self: *Conn, password: []const u8) !void {
-		const pw = proto.PasswordMessage{.password = password};
-
-		var buf = &self._buf;
-		buf.resetRetainingCapacity();
-		try pw.write(buf);
-		try self.write(buf.string());
 	}
 
 	// Should not be called directly
@@ -678,7 +542,7 @@ pub const Conn = struct {
 		return error.PG;
 	}
 
-	fn unexpectedMessage(self: *Conn) error{UnexpectedDBMessage} {
+	fn unexpectedDBMessage(self: *Conn) error{UnexpectedDBMessage} {
 		self._state = .fail;
 		return error.UnexpectedDBMessage;
 	}
@@ -695,7 +559,7 @@ pub const Conn = struct {
 	pub fn readyForQuery(self: *Conn) !void {
 		const msg = try self.read();
 		if (msg.type != 'Z') {
-			return self.unexpectedMessage();
+			return self.unexpectedDBMessage();
 		}
 	}
 };
@@ -1042,7 +906,7 @@ test "PG: type support" {
 	{
 		// numeric, numeric[]
 		try t.expectEqual(1234.567, row.get(f64, 21));
-		const arr = try row.iterator(lib.Numeric, 22).alloc(aa);
+		const arr = try row.iterator(types.Numeric, 22).alloc(aa);
 		try t.expectEqual(5, arr.len);
 		try expectNumeric(arr[0], "0.0");
 		try expectNumeric(arr[1], "-1.1");
@@ -1102,12 +966,12 @@ test "PG: type support" {
 
 	{
 		// cidr, cidr[]
-		const cidr = row.get(lib.Cidr, 35);
+		const cidr = row.get(types.Cidr, 35);
 		try t.expectEqual(25, cidr.netmask);
 		try t.expectEqual(.v4, cidr.family);
 		try t.expectString(&.{192, 168, 100, 128}, cidr.address);
 
-		const arr = try row.iterator(lib.Cidr, 36).alloc(aa);
+		const arr = try row.iterator(types.Cidr, 36).alloc(aa);
 		try t.expectEqual(2, arr.len);
 
 		try t.expectEqual(24, arr[0].netmask);
@@ -1121,12 +985,12 @@ test "PG: type support" {
 
 	{
 		// inet, inet[]
-		const inet = row.get(lib.Cidr, 37);
+		const inet = row.get(types.Cidr, 37);
 		try t.expectEqual(120, inet.netmask);
 		try t.expectEqual(.v6, inet.family);
 		try t.expectString(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 1, 2, 3, 0}, inet.address);
 
-		const arr = try row.iterator(lib.Cidr, 38).alloc(aa);
+		const arr = try row.iterator(types.Cidr, 38).alloc(aa);
 		try t.expectEqual(2, arr.len);
 
 		try t.expectEqual(32, arr[0].netmask);
@@ -1602,7 +1466,7 @@ test "PG: numeric" {
 
 		{
 			// test the pg.Numeric fields
-			const numeric = row.get(lib.Numeric, 1);
+			const numeric = row.get(types.Numeric, 1);
 			try t.expectEqual(939293122.0001101, numeric.toFloat());
 			try t.expectEqual(2, numeric.weight);
 			try t.expectEqual(.positive, numeric.sign);
@@ -1610,38 +1474,38 @@ test "PG: numeric" {
 			try t.expectSlice(u8, &.{0, 9, 15, 89, 12, 50, 0, 1, 3, 242}, numeric.digits);
 		}
 
-		try expectNumeric(row.get(lib.Numeric, 0), "-0.00089891");
-		try expectNumeric(row.get(lib.Numeric, 1), "939293122.0001101");
-		try expectNumeric(row.get(lib.Numeric, 2), "-123.4560991");
+		try expectNumeric(row.get(types.Numeric, 0), "-0.00089891");
+		try expectNumeric(row.get(types.Numeric, 1), "939293122.0001101");
+		try expectNumeric(row.get(types.Numeric, 2), "-123.4560991");
 
-		try expectNumeric(row.get(lib.Numeric, 3), "nan");
-		try expectNumeric(row.get(lib.Numeric, 4), "inf");
-		try expectNumeric(row.get(lib.Numeric, 5), "-inf");
+		try expectNumeric(row.get(types.Numeric, 3), "nan");
+		try expectNumeric(row.get(types.Numeric, 4), "inf");
+		try expectNumeric(row.get(types.Numeric, 5), "-inf");
 
-		try expectNumeric(row.get(lib.Numeric, 6), "nan");
-		try expectNumeric(row.get(lib.Numeric, 7), "inf");
-		try expectNumeric(row.get(lib.Numeric, 8), "-inf");
+		try expectNumeric(row.get(types.Numeric, 6), "nan");
+		try expectNumeric(row.get(types.Numeric, 7), "inf");
+		try expectNumeric(row.get(types.Numeric, 8), "-inf");
 
-		try expectNumeric(row.get(lib.Numeric, 9), "1.1");
-		try expectNumeric(row.get(lib.Numeric, 10), "12.98");
-		try expectNumeric(row.get(lib.Numeric, 11), "123.987");
-		try expectNumeric(row.get(lib.Numeric, 12), "1234.9876");
-		try expectNumeric(row.get(lib.Numeric, 13), "12345.98765");
-		try expectNumeric(row.get(lib.Numeric, 14), "123456.987654");
-		try expectNumeric(row.get(lib.Numeric, 15), "1234567.9876543");
-		try expectNumeric(row.get(lib.Numeric, 16), "12345678.98765432");
-		try expectNumeric(row.get(lib.Numeric, 17), "123456789.98765433");
-		try expectNumeric(row.get(lib.Numeric, 18), "0.0");
-		try expectNumeric(row.get(lib.Numeric, 19), "1.0");
-		try expectNumeric(row.get(lib.Numeric, 20), "0.0");
-		try expectNumeric(row.get(lib.Numeric, 21), "1.0");
-		try expectNumeric(row.get(lib.Numeric, 22), "999999999.9999999");
-		try expectNumeric(row.get(lib.Numeric, 23), "999999999.9999999");
-		try expectNumeric(row.get(lib.Numeric, 24), "-999999999.9999999");
-		try expectNumeric(row.get(lib.Numeric, 25), "-999999999.9999999");
+		try expectNumeric(row.get(types.Numeric, 9), "1.1");
+		try expectNumeric(row.get(types.Numeric, 10), "12.98");
+		try expectNumeric(row.get(types.Numeric, 11), "123.987");
+		try expectNumeric(row.get(types.Numeric, 12), "1234.9876");
+		try expectNumeric(row.get(types.Numeric, 13), "12345.98765");
+		try expectNumeric(row.get(types.Numeric, 14), "123456.987654");
+		try expectNumeric(row.get(types.Numeric, 15), "1234567.9876543");
+		try expectNumeric(row.get(types.Numeric, 16), "12345678.98765432");
+		try expectNumeric(row.get(types.Numeric, 17), "123456789.98765433");
+		try expectNumeric(row.get(types.Numeric, 18), "0.0");
+		try expectNumeric(row.get(types.Numeric, 19), "1.0");
+		try expectNumeric(row.get(types.Numeric, 20), "0.0");
+		try expectNumeric(row.get(types.Numeric, 21), "1.0");
+		try expectNumeric(row.get(types.Numeric, 22), "999999999.9999999");
+		try expectNumeric(row.get(types.Numeric, 23), "999999999.9999999");
+		try expectNumeric(row.get(types.Numeric, 24), "-999999999.9999999");
+		try expectNumeric(row.get(types.Numeric, 25), "-999999999.9999999");
 
 
-		const arr = try row.iterator(lib.Numeric, 26).alloc(t.arena.allocator());
+		const arr = try row.iterator(types.Numeric, 26).alloc(t.arena.allocator());
 		try t.expectEqual(2, arr.len);
 		try t.expectEqual(1.1, arr[0].toFloat());
 		try t.expectDelta(-0.0034, arr[1].toFloat(), 0.00000001);
@@ -1712,7 +1576,7 @@ test "PG: isUnique" {
 	}
 }
 
-fn expectNumeric(numeric: lib.Numeric, expected: []const u8) !void {
+fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {
 	var str_buf: [50]u8 = undefined;
 	try t.expectString(expected, numeric.toString(&str_buf));
 

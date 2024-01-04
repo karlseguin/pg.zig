@@ -5,12 +5,13 @@ pub const Conn = lib.Conn;
 pub const Pool = lib.Pool;
 pub const Row = lib.Row;
 pub const Result = lib.Result;
-pub const Listener = lib.Listener;
 pub const QueryRow = lib.QueryRow;
-pub const types = lib.types;
 
-pub const Cidr = lib.Cidr;
-pub const Numeric = lib.Numeric;
+pub const Listener = @import("listener.zig").Listener;
+
+pub const types = lib.types;
+pub const Cidr = types.Cidr;
+pub const Numeric = types.Numeric;
 
 pub fn uuidToHex(uuid: []const u8) ![36]u8 {
 	return lib.types.UUID.toString(uuid);

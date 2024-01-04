@@ -5,18 +5,14 @@ pub const log = std.log.scoped(.pg);
 
 pub const types = @import("types.zig");
 pub const proto = @import("proto.zig");
+pub const auth = @import("auth.zig");
 pub const Conn = @import("conn.zig").Conn;
 pub const Pool = @import("pool.zig").Pool;
-pub const SASL = @import("sasl.zig").SASL;
-pub const Listener = @import("listener.zig").Listener;
 
 const result = @import("result.zig");
 pub const Row = result.Row;
 pub const Result = result.Result;
 pub const QueryRow = result.QueryRow;
-
-pub const Cidr = types.Cidr;
-pub const Numeric = types.Numeric;
 
 const reader = @import("reader.zig");
 pub const Reader = reader.Reader;

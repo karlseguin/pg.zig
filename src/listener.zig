@@ -1,37 +1,97 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const Buffer = @import("buffer").Buffer;
 
-const log = lib.log;
+
+const proto = lib.proto;
 const Conn = lib.Conn;
+const Reader = lib.Reader;
 const NotificationResponse = lib.proto.NotificationResponse;
 
 const Stream = std.net.Stream;
 const Allocator = std.mem.Allocator;
 
-pub const Listener = struct {
-	conn: Conn,
-	err: ?anyerror,
+const ListenError = union(enum) {
+	err: anyerror,
+	pg: lib.proto.Error,
+};
 
-	pub fn open(allocator: Allocator, opts: Conn.ConnectOpts) !Listener {
+pub const Listener = struct {
+	err: ?ListenError = null,
+
+	_stream: Stream,
+
+	// A buffer used for writing to PG. This can grow dynamically as needed.
+	_buf: Buffer,
+
+	// Used to read data from PG. Has its own buffer which can grow dynamically
+	_reader: Reader,
+
+	// If we get a PG error, we'll return a LIstenError.pg, and we'll own its
+	// memory.
+	_err_data: ?[]const u8 = null,
+
+	_allocator: Allocator,
+
+	pub fn open(allocator: Allocator, opts: Conn.Opts) !Listener {
+		const stream = blk: {
+			if (opts.unix_socket) |path| {
+				break :blk try std.net.connectUnixSocket(path);
+			} else {
+				const host = opts.host orelse "127.0.0.1";
+				const port = opts.port orelse 5432;
+				break :blk try std.net.tcpConnectToHost(allocator, host, port);
+			}
+		};
+		errdefer stream.close();
+
+		const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
+		errdefer buf.deinit();
+
+		const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
+		errdefer reader.deinit();
+
 		return .{
-			.err = null,
-			.conn = try Conn.open(allocator, opts),
+			._buf = buf,
+			._stream = stream,
+			._reader = reader,
+			._allocator = allocator,
 		};
 	}
 
 	pub fn deinit(self: *Listener) void {
-		self.conn.deinit();
+		if (self._err_data) |err_data| {
+			self._allocator.free(err_data);
+		}
+		self._buf.deinit();
+		self._reader.deinit();
+
+		// try to send a Terminate to the DB
+		self._stream.writeAll(&.{'X', 0, 0, 0, 4}) catch {};
+		self._stream.close();
 	}
 
-	pub fn auth(self: *Listener, opts: Conn.AuthOpts) !void {
-		return self.conn.auth(opts);
+	pub fn auth(self: *Listener, opts: lib.auth.Opts) !void {
+		if (try lib.auth.auth(self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
+			return self.setErr(raw_pg_err);
+		}
+
+		while (true) {
+			const msg = try self.read();
+			switch (msg.type) {
+				'Z' => return,
+				'K' => {}, // TODO: BackendKeyData
+				'S' => {}, // TODO: ParameterStatus,
+				else => return error.UnexpectedDBMessage,
+			}
+		}
 	}
 
 	pub fn listen(self: *Listener, channel: []const u8) !void {
 		// LISTEN doesn't support parameterized queries. It has to be a simple query.
 		// We don't use proto.Query because we want to quote the identifier.
 
-		const buf = &self.conn._buf;
+		const buf = &self._buf;
 		buf.reset();
 
 		// "LISTEN " = 7
@@ -65,32 +125,74 @@ pub const Listener = struct {
 		// fill in the length
 		len_view.writeIntBig(u32, @intCast(len));
 
-		try self.conn._stream.writeAll(buf.string());
+		try self._stream.writeAll(buf.string());
 
-		// we expect a command complete ('C') followed by a ReadyForQuery ('Z')
-		const msg = try self.conn.read();
-		switch (msg.type) {
-			'C' => return self.conn.readyForQuery(),
-			else => return error.UnexpectedDBMessage,
+		{
+			// we expect a command complete ('C')
+			const msg = try self.read();
+			switch (msg.type) {
+				'C' => {},
+				else => return error.UnexpectedDBMessage,
+			}
+		}
+
+		{
+			// followed by a ReadyForQuery ('Z')
+			const msg = try self.read();
+			switch (msg.type) {
+				'Z' => {},
+				else => return error.UnexpectedDBMessage,
+			}
 		}
 	}
 
 	pub fn next(self: *Listener) ?NotificationResponse {
-		const msg = self.conn.read() catch |err| {
-			self.err = err;
+		const msg = self.read() catch |err| {
+			self.err = .{.err = err};
 			return null;
 		};
 
 		switch (msg.type) {
 			'A' => return NotificationResponse.parse(msg.data) catch |err| {
-				self.err = err;
+				self.err = .{.err = err};
 				return null;
 			},
 			else => {
-				self.err = error.UnexpectedDBMessage;
+				self.err = .{.err = error.UnexpectedDBMessage};
 				return null;
 			}
 		}
+	}
+
+	fn read(self: *Listener) !lib.Message {
+		var reader = &self._reader;
+		while (true) {
+			const msg = try reader.next();
+			switch (msg.type) {
+				'N' => {}, // TODO: NoticeResponse
+				'E' => return self.setErr(msg.data),
+				else => return msg,
+			}
+		}
+	}
+
+	fn setErr(self: *Listener, data: []const u8) error{PG, OutOfMemory} {
+		const allocator = self._allocator;
+
+		// The proto.Error that we're about to create is going to reference data.
+		// But data is owned by our Reader and its lifetime doesn't necessarily match
+		// what we want here. So we're going to dupe it and make the connection own
+		// the data so it can tie its lifecycle to the error.
+
+		// That means clearing out any previous duped error data we had
+		if (self._err_data) |err_data| {
+			allocator.free(err_data);
+		}
+
+		const owned = try allocator.dupe(u8, data);
+		self._err_data = owned;
+		self.err = .{.pg = proto.Error.parse(owned)};
+		return error.PG;
 	}
 };
 

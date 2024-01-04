@@ -1,9 +1,170 @@
 const std = @import("std");
+const lib = @import("lib.zig");
+const Buffer = @import("buffer").Buffer;
+
+const proto = lib.proto;
+const Reader = lib.Reader;
+
+const Stream = std.net.Stream;
 const Allocator = std.mem.Allocator;
 
-pub const SASL = struct {
-	buf: []u8,
-	fba: std.heap.FixedBufferAllocator,
+pub const Opts = struct {
+	username: []const u8 = "postgres",
+	password: ?[]const u8 = null,
+	database: ?[]const u8 = null,
+	timeout: u32 = 10_000,
+};
+
+// Weird return (but Zig has no error payloads, so..)
+// null on success
+// a []const on a PG error
+//   - can be be passed to  proto.Error.parse(owned)
+//   - is only valid until the next call to reader.read()
+//     (we expect our caller to clone the value)
+// a normal zig error on any other error
+pub fn auth(stream: Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
+	try reader.startFlow(null, opts.timeout);
+
+	// ignore errors on endFlow, because it's troublesome to handle, and only
+	// something really bad (like OOM) can happen, and that'll surface again
+	// as soon as the app tries to use the connection.
+	defer reader.endFlow() catch {};
+
+	{
+		// write our startup message
+		const startup_message = proto.StartupMessage{
+			.username = opts.username,
+			.database = opts.database orelse opts.username,
+		};
+
+		buf.resetRetainingCapacity();
+		try startup_message.write(buf);
+		try stream.writeAll(buf.string());
+	}
+
+
+	// read the server's response
+	{
+		const msg = try reader.next();
+		switch (msg.type) {
+			'R' => {},
+			'E' => return msg.data,
+			else => return error.UnexpectedDBMessage,
+		}
+
+		switch (try proto.AuthenticationRequest.parse(msg.data)) {
+			.ok => return null,
+			.sasl => |sasl| if (try saslAuth(sasl, stream, buf, reader, opts)) |raw_pg_err| {
+				return raw_pg_err;
+			},
+			.md5 => |salt| try md5PasswordAuth(salt, stream, buf, opts),
+			.password => try passwordAuth(opts.password orelse "", stream, buf),
+		}
+	}
+
+	{
+		// if we're here, it's because we sent more data to the server (e.g. a password)
+		// and we're now waiting for a reply, server should send a final auth ok message
+		const msg = try reader.next();
+		switch (msg.type) {
+			'R' => {},
+			'E' => return msg.data,
+			else => return error.UnexpectedDBMessage,
+		}
+
+		switch (try proto.AuthenticationRequest.parse(msg.data)) {
+			.ok => return null,
+			else => return error.UnexpectedDBMessage,
+		}
+	}
+}
+
+fn saslAuth(req: proto.AuthenticationRequest.SASL, stream: Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
+	if (!req.scram_sha_256) {
+		return error.UnexpectedDBMessage;
+	}
+	var sasl_buf: [1024]u8 = undefined;
+	var fba = std.heap.FixedBufferAllocator.init(&sasl_buf);
+	var sasl = try SASL.init(fba.allocator());
+
+	{
+		// send the client initial response
+		const msg = proto.SASLInitialResponse{
+			.response = sasl.client_first_message,
+			.mechanism = "SCRAM-SHA-256",
+		};
+		buf.resetRetainingCapacity();
+		try msg.write(buf);
+		try stream.writeAll(buf.string());
+	}
+
+	{
+		// read the server continue response
+		const msg = try reader.next();
+		switch (msg.type) {
+			'R' => {},
+			'E' => return msg.data,
+			else => return error.InvalidSASLFlow,
+		}
+		const c = try proto.AuthenticationSASLContinue.parse(msg.data);
+		try sasl.serverResponse(c.data);
+	}
+
+	{
+		// send the client final response
+		const msg = proto.SASLResponse{
+			.data = try sasl.clientFinalMessage(opts.password orelse ""),
+		};
+		buf.resetRetainingCapacity();
+		try msg.write(buf);
+		try stream.writeAll(buf.string());
+	}
+
+	{
+		// read the server final response
+		const msg = try reader.next();
+		switch (msg.type) {
+			'R' => {},
+			'E' => return msg.data,
+			else => return error.InvalidSASLFlow,
+		}
+		const final = try proto.AuthenticationSASLFinal.parse(msg.data);
+		try sasl.verifyServerFinal(final.data);
+	}
+	return null;
+}
+
+fn md5PasswordAuth(salt: []const u8, stream: Stream, buf: *Buffer, opts: Opts) !void {
+	var hash: [16]u8 = undefined;
+	{
+		var hasher = std.crypto.hash.Md5.init(.{});
+		hasher.update(opts.password orelse "");
+		hasher.update(opts.username);
+		hasher.final(&hash);
+	}
+
+	{
+		var hex_buf:[32]u8 = undefined;
+		const hex_hash = try std.fmt.bufPrint(&hex_buf, "{}", .{std.fmt.fmtSliceHexLower(&hash)});
+		var hasher = std.crypto.hash.Md5.init(.{});
+		hasher.update(hex_hash);
+		hasher.update(salt);
+		hasher.final(&hash);
+	}
+	var hashed_password: [35]u8 = undefined;
+	const password = try std.fmt.bufPrint(&hashed_password, "md5{}", .{std.fmt.fmtSliceHexLower(&hash)});
+	try passwordAuth(password, stream, buf);
+}
+
+fn passwordAuth(password: []const u8, stream: Stream, buf: *Buffer) !void {
+	buf.resetRetainingCapacity();
+	const pw = proto.PasswordMessage{.password = password};
+	try pw.write(buf);
+	try stream.writeAll(buf.string());
+}
+
+const SASL = struct {
+	allocator: Allocator,
 	client_first_message: []u8,
 	auth_message: ?[]const u8 = null,
 	salted_password: ?[32] u8 = null,
@@ -13,15 +174,10 @@ pub const SASL = struct {
 	const Base64Decoder = std.base64.standard.Decoder;
 
 	pub fn init(allocator: Allocator) !SASL {
-		const buf = try allocator.alloc(u8, 1024);
-		errdefer allocator.free(buf);
-
-		var fba = std.heap.FixedBufferAllocator.init(buf);
-
 		var nonce: [18]u8 = undefined;
 		std.crypto.random.bytes(&nonce);
 
-		var client_first_message = try fba.allocator().alloc(u8, 32);
+		var client_first_message = try allocator.alloc(u8, 32);
 		client_first_message[0] = 'n';
 		client_first_message[1] = ',';
 		client_first_message[2] = ',';
@@ -33,14 +189,9 @@ pub const SASL = struct {
 		_ = Base64Encoder.encode(client_first_message[8..], &nonce);
 
 		return .{
-			.buf = buf,
-			.fba = fba,
+			.allocator = allocator,
 			.client_first_message = client_first_message,
 		};
-	}
-
-	pub fn deinit(self: SASL, allocator: Allocator) void {
-		allocator.free(self.buf);
 	}
 
 	pub fn serverResponse(self: *SASL, data: []const u8) !void {
@@ -53,7 +204,7 @@ pub const SASL = struct {
 			return error.InvalidNoncePrefix;
 		}
 
-		const owned = try self.fba.allocator().dupe(u8, data);
+		const owned = try self.allocator.dupe(u8, data);
 
 		var res = ServerResponse{
 			.raw = owned,
@@ -96,7 +247,7 @@ pub const SASL = struct {
 
 	pub fn clientFinalMessage(self: *SASL, password: []const u8) ![]const u8 {
 		const sr = self.server_response orelse return error.MissingServerResponse;
-		const allocator = self.fba.allocator();
+		const allocator = self.allocator;
 
 		const salt = blk: {
 			const s = try allocator.alloc(u8, try Base64Decoder.calcSizeForSlice(sr.base64_salt));
@@ -171,22 +322,19 @@ pub const ServerResponse = struct {
 };
 
 const t = @import("lib.zig").testing;
-
 test "SASL: init" {
-	const sasl1 = try SASL.init(t.allocator);
-	defer sasl1.deinit(t.allocator);
+	defer t.reset();
+	var sasl1 = try SASL.init(t.arena.allocator());
+
 	try t.expectString("n,,n=,r=", sasl1.client_first_message[0..8]);
 
-	const sasl2 = try SASL.init(t.allocator);
-	defer sasl2.deinit(t.allocator);
+	var sasl2 = try SASL.init(t.arena.allocator());
 	try t.expectString("n,,n=,r=", sasl2.client_first_message[0..8]);
 
-	const sasl3 = try SASL.init(t.allocator);
-	defer sasl3.deinit(t.allocator);
+	var sasl3 = try SASL.init(t.arena.allocator());
 	try t.expectString("n,,n=,r=", sasl3.client_first_message[0..8]);
 
-	const sasl4 = try SASL.init(t.allocator);
-	defer sasl4.deinit(t.allocator);
+	var sasl4 = try SASL.init(t.arena.allocator());
 	try t.expectString("n,,n=,r=", sasl4.client_first_message[0..8]);
 
 	// The nonce should be random. It's unlikely that if we generate 4, we'd get
@@ -226,8 +374,9 @@ test "SASL: serverResponse invalid" {
 		.{.input = "r=abc123,s=aaaa,i=123a", .expected = error.InvalidIteration},
 	};
 
-	var sasl = try SASL.init(t.allocator);
-	defer sasl.deinit(t.allocator);
+	defer t.reset();
+	var sasl = try SASL.init(t.arena.allocator());
+
 	for (test_cases) |tc| {
 		try t.expectError(tc.expected, sasl.serverResponse(tc.input));
 		try t.expectEqual(null, sasl.server_response);
@@ -235,8 +384,8 @@ test "SASL: serverResponse invalid" {
 }
 
 test "SASL: serverResponse" {
-	var sasl = try SASL.init(t.allocator);
-	defer sasl.deinit(t.allocator);
+	defer t.reset();
+	var sasl = try SASL.init(t.arena.allocator());
 
 	try sasl.serverResponse("r=abc123,s=aaaaxa,i=4096");
 	try t.expectString("abc123", sasl.server_response.?.nonce);
@@ -244,5 +393,3 @@ test "SASL: serverResponse" {
 	try t.expectEqual(4096, sasl.server_response.?.iterations);
 }
 
-// not deterministic, tested via integration test of actually authentication to pg
-// test "SASL: clientFinalMessage" {}

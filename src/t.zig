@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
+const auth = @import("auth.zig");
 const Conn = @import("conn.zig").Conn;
 
 pub const allocator = std.testing.allocator;
@@ -202,7 +203,7 @@ pub fn connect(opts: anytype) Conn {
 	return c;
 }
 
-pub fn authOpts(opts: anytype) Conn.AuthOpts {
+pub fn authOpts(opts: anytype) auth.Opts {
 	const T = @TypeOf(opts);
 	return .{
 		.database = if (@hasField(T, "database")) opts.database else "postgres",

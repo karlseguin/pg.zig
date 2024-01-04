@@ -1,6 +1,6 @@
 # Native PostgreSQL driver for Zig
 
-A native PostgresSQL driver / client for Zig.
+A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify).
 
 ## Example
 ```zig
@@ -41,7 +41,7 @@ while (try result.next()) |row| {
 
 ## Conn
 
-### open(allocator: std.mem.Allocator, opts: Conn.ConnectOpts) !Conn
+### open(allocator: std.mem.Allocator, opts: Opts) !Conn
 Opens a connection, or returns an error. Prefer creating connections through the pool. Connection options are:
 
 * `host` - Defaults to `"127.0.0.1"`
@@ -53,7 +53,7 @@ Opens a connection, or returns an error. Prefer creating connections through the
 ### deinit(conn: \*Conn) void
 Closes the connection and releases its resources. This method should not be used when the connection comes from the pool.
 
-### auth(opts: Conn.AuthOpts) !void
+### auth(opts: Opts) !void
 Authentications the request. Prefer creating connections through the pool. Auth options are:
 
 * `username`: Defaults to `"postgres"`
@@ -326,13 +326,25 @@ When binding to an array of JSON or JSONB, automatic serialization is not suppor
 When reading a `JSON` or `JSONB` column with `[]u8`, the serialized JSON will be returned.
 
 ## Listen / Notify
-You can create a `pg.Listener` either from an existing `Pool` or directly. When using the pool, a new connection/session is created. It *does not* use a connection from the pool:
+You can create a `pg.Listener` either from an existing `Pool` or directly.
+
+Creating a new Listener directly is a lot like creating a new connection. See [Conn.open](#openallocator-stdmemallocator-opts-opts-conn) and [Conn.auth](#authopts-opts-void).
 
 ```zig
-var listener = try pool.newListener();
+// see the Conn.ConnectOpts
+var listener = try pg.Listener.open(allocator, .{
+  .host = "127.0.0.1",
+  .port = 5432,
+});
 defer listener.deinit();
 
-// listen to 1 or more channels
+try listener.auth(.{
+  .username = "leto",
+  .password = "ghanima",
+  .database = "caladan",
+});
+
+// add 1 or more channels to listen to
 try listener.listen("chan_1");
 try listener.listen("chan_2");
 
@@ -341,25 +353,29 @@ while (listener.next()) |notification| {
   std.debug.print("Channel: {s}\nPayload: {s}", .{notification.channel, notification.payload});
 }
 
-// Yes, this API is annoying. I hope Zig adds error payloads soon.
-
-// can only be here if an error occurred.
+// The error handling is explained, sorry about this API. Zig error payloads plz
 switch (listener.err.?) {
-  error.PG => std.debug.print("{s}\n", .{listener.conn.err.?.message}),
-  else => |err| std.debug.print("{s}\n", .{@errorName(err)}),
+  .pg => |pg| std.debug.print("{s}\n", .{pg.message}),
+  .err => |err| std.debug.print("{s}\n", .{@errorName(err)}),
 }
 ```
 
-Creating a new Listener directly is a lot like creating a new connection. See [Conn.open](#openallocator-stdmemallocator-opts-connconnectopts-conn) and [Conn.auth](#authopts-connauthopts-void).
+When using the pool, a new connection/session is created. It *does not* use a connection from the pool. This is merely a convenience function if you're also using normal connections through a pool.
 
 ```zig
-// see the Conn.ConnectOpts
-var l = try pg.Listener.open(allocator, .{});
-defer l.deinit();
+var listener = try pool.newListener();
+defer listener.deinit();
 
-try l.auth(.{})
+// listen to 1 or more channels
+try listener.listen("chan_1");
 
 // same as above
-try listener.listen("chan_1");
-...
 ```
+
+### Reconnects
+A listener will not automatically reconnect on error/disconnect. The pub/sub nature of LISTEN/NOTIFY mean that delivery is at-most-once and auto-reconnecting can hide that fact. Put the above code in a `while (true) {...}` loop.
+
+### Errors
+The handling of errors isn't great. Blame Zig's lack of error payloads and the awkwardness of using `try` within a `while` condition.
+
+`listener.next()` can only return `null` on error. When `null` is returned, `listener.err` will be non-null. Unlike the `Conn` this is a tagged union that can either be `err` for a normal Zig error (e.g. error.ConnectionResetByPeer) or `pg` a detailed PostgresSQL error.

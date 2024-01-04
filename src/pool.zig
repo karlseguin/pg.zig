@@ -2,8 +2,9 @@ const std = @import("std");
 const lib = @import("lib.zig");
 
 const log = lib.log;
+const auth = lib.auth;
 const Conn = lib.Conn;
-const Listener = lib.Listener;
+const Listener = @import("listener.zig").Listener;
 
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
@@ -20,8 +21,8 @@ pub const Pool = struct {
 
 	pub const Opts = struct {
 		size: u16 = 10,
-		auth: Conn.AuthOpts = .{},
-		connect: Conn.ConnectOpts = .{},
+		auth: auth.Opts = .{},
+		connect: Conn.Opts = .{},
 		timeout: u32 = 10 * std.time.ms_per_s,
 	};
 
