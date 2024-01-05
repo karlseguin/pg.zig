@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) !void {
 
 		// Expose this as a module that others can import
 	_ = b.addModule("pg", .{
-		.source_file = .{ .path = "src/pg.zig" },
+		.root_source_file  = .{ .path = "src/pg.zig" },
 		.dependencies = &.{ .{.name = "buffer", .module = modules.get("buffer").? }},
 	});
 
