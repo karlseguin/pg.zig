@@ -9,7 +9,7 @@ A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify)
     ...
     .pg = .{
         .url = "git+https://github.com/karlseguin/pg.zig#master",
-        .hash = "1220e8edba5bfcd0798360be8db597c3922b52f03dbc2b22088f6f1cbcca5065ff04",
+        .hash = {{ actual_hash string, remove this line before 'zig build' to get actual hash }},
     },
 },
 ```
