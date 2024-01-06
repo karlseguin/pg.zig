@@ -40,9 +40,9 @@ pub fn build(b: *std.Build) !void {
 	}
 }
 
-fn addLibs(step: *std.Build.CompileStep, modules: ModuleMap) void {
+fn addLibs(step: *std.Build.Step.Compile, modules: ModuleMap) void {
 	var it = modules.iterator();
 	while (it.next()) |m| {
-		step.addModule(m.key_ptr.*, m.value_ptr.*);
+		step.root_module.addImport(m.key_ptr.*, m.value_ptr.*);
 	}
 }
