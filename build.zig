@@ -18,8 +18,8 @@ pub fn build(b: *std.Build) !void {
 
 		// Expose this as a module that others can import
 	_ = b.addModule("pg", .{
-		.source_file = .{ .path = "src/pg.zig" },
-		.dependencies = &.{ .{.name = "buffer", .module = modules.get("buffer").? }},
+		.root_source_file  = .{ .path = "src/pg.zig" },
+		.imports = &.{ .{.name = "buffer", .module = modules.get("buffer").? }},
 	});
 
 	{
@@ -40,9 +40,9 @@ pub fn build(b: *std.Build) !void {
 	}
 }
 
-fn addLibs(step: *std.Build.CompileStep, modules: ModuleMap) void {
+fn addLibs(step: *std.Build.Step.Compile, modules: ModuleMap) void {
 	var it = modules.iterator();
 	while (it.next()) |m| {
-		step.addModule(m.key_ptr.*, m.value_ptr.*);
+		step.root_module.addImport(m.key_ptr.*, m.value_ptr.*);
 	}
 }
