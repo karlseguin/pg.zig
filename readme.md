@@ -2,6 +2,26 @@
 
 A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify).
 
+## Install
+1) Add into `dependencies` at `build.zig.zon`:
+```zig
+.dependencies = .{
+    ...
+    .pg = .{
+        .url = "git+https://github.com/karlseguin/pg.zig#master",
+        .hash = "1220e8edba5bfcd0798360be8db597c3922b52f03dbc2b22088f6f1cbcca5065ff04",
+    },
+},
+```
+2) Add this in `build.zig`:
+```zig
+const pg = b.dependency("pg", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("pg", pg.module("pg"));
+```
+
 ## Example
 ```zig
 var pool = try pg.Pool.init(allocator, .{
