@@ -381,10 +381,10 @@ pub const QueryRow = struct {
 };
 
 fn IteratorReturnType(comptime T: type) type {
-	if (std.meta.activeTag(@typeInfo(T)) == .Optional) {
-		return ?Iterator(T);
-	}
-	return Iterator(T);
+	return switch (@typeInfo(T)) {
+		.Optional => |opt| ?Iterator(opt.child),
+		else => Iterator(T),
+	};
 }
 
 fn Iterator(comptime T: type) type {
@@ -711,49 +711,78 @@ test "Result: iterator" {
 		try result.drain();
 	}
 
-	// {
-	// 	// one
-	// 	var result = try c.query("select $1::int[]", .{[_]i32{9}});
-	// 	defer result.deinit();
-	// 	var row = (try result.next()).?;
+	{
+		// one
+		var result = try c.query("select $1::int[]", .{[_]i32{9}});
+		defer result.deinit();
+		var row = (try result.next()).?;
 
-	// 	var iterator = row.iterator(i32, 0);
-	// 	try t.expectEqual(1, iterator.len());
+		var iterator = row.iterator(i32, 0);
+		try t.expectEqual(1, iterator.len());
 
-	// 	try t.expectEqual(9, iterator.next());
-	// 	try t.expectEqual(null, iterator.next());
+		try t.expectEqual(9, iterator.next());
+		try t.expectEqual(null, iterator.next());
 
-	// 	const arr = try iterator.alloc(t.allocator);
-	// 	defer t.allocator.free(arr);
-	// 	try t.expectEqual(1, arr.len);
-	// 	try t.expectSlice(i32, &.{9}, arr);
-	// 	try result.drain();
-	// }
+		const arr = try iterator.alloc(t.allocator);
+		defer t.allocator.free(arr);
+		try t.expectEqual(1, arr.len);
+		try t.expectSlice(i32, &.{9}, arr);
+		try result.drain();
+	}
 
-	// {
-	// 	// fill
-	// 	var result = try c.query("select $1::int[]", .{[_]i32{0, -19}});
-	// 	defer result.deinit();
-	// 	var row = (try result.next()).?;
+	{
+		// fill
+		var result = try c.query("select $1::int[]", .{[_]i32{0, -19}});
+		defer result.deinit();
+		var row = (try result.next()).?;
 
-	// 	var iterator = row.iterator(i32, 0);
-	// 	try t.expectEqual(2, iterator.len());
+		var iterator = row.iterator(i32, 0);
+		try t.expectEqual(2, iterator.len());
 
-	// 	try t.expectEqual(0, iterator.next());
-	// 	try t.expectEqual(-19, iterator.next());
-	// 	try t.expectEqual(null, iterator.next());
+		try t.expectEqual(0, iterator.next());
+		try t.expectEqual(-19, iterator.next());
+		try t.expectEqual(null, iterator.next());
 
-	// 	var arr1: [2]i32 = undefined;
-	// 	iterator.fill(&arr1);
-	// 	try t.expectSlice(i32, &.{0, -19}, &arr1);
-	// 	try result.drain();
+		var arr1: [2]i32 = undefined;
+		iterator.fill(&arr1);
+		try t.expectSlice(i32, &.{0, -19}, &arr1);
+		try result.drain();
 
-	// 	// smaller
-	// 	var arr2: [1]i32 = undefined;
-	// 	iterator.fill(&arr2);
-	// 	try t.expectSlice(i32, &.{0}, &arr2);
-	// 	try result.drain();
-	// }
+		// smaller
+		var arr2: [1]i32 = undefined;
+		iterator.fill(&arr2);
+		try t.expectSlice(i32, &.{0}, &arr2);
+		try result.drain();
+	}
+}
+
+test "Result: null iterator" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		// null int
+		var result = try c.query("select $1::int[]", .{null});
+		defer result.deinit();
+
+		var row = (try result.next()).?;
+
+		const iterator = row.iterator(?i32, 0);
+		try t.expectEqual(null, iterator);
+		try result.drain();
+	}
+
+	{
+		// null text
+		var result = try c.query("select $1::text[]", .{null});
+		defer result.deinit();
+
+		var row = (try result.next()).?;
+
+		const iterator = row.iterator(?[]u8, 0);
+		try t.expectEqual(null, iterator);
+		try result.drain();
+	}
 }
 
 test "Result: int[]" {
@@ -777,6 +806,11 @@ test "Result: int[]" {
 	const v3 = try row.iterator(i64, 2).alloc(t.allocator);
 	defer t.allocator.free(v3);
 	try t.expectSlice(i64, &.{944949338498392, -2}, v3);
+
+	// row 1, but fetch it as a nullable
+	const v4 = try row.iterator(?i16, 0).?.alloc(t.allocator);
+	defer t.allocator.free(v4);
+	try t.expectSlice(i16, &.{-303, 9449, 2}, v4);
 }
 
 test "Result: float[]" {
@@ -836,6 +870,13 @@ test "Result: text[] & bytea[]" {
 	try t.expectString(&arr1, v2[0]);
 	try t.expectString(&arr2, v2[1]);
 	try t.expectEqual(2, v2.len);
+
+	// column 0 but fetched as nullable
+	const v3 = try row.iterator(?[]u8, 0).?.alloc(t.allocator);
+	defer t.allocator.free(v3);
+	try t.expectString("over", v3[0]);
+	try t.expectString("9000", v3[1]);
+	try t.expectEqual(2, v3.len);
 }
 
 test "Result: UUID" {
