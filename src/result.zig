@@ -27,6 +27,10 @@ pub const Result = struct {
 	// number_of_columns on each row)
 	_values: []State.Value,
 
+	// When true, result.deinit() will call conn.release()
+	// Used when the result came directly from the pool.query() helper.
+	_release_conn: bool,
+
 	pub fn deinit(self: Result) void {
 		const allocator = self._allocator;
 		if (self._dyn_state) {
@@ -50,6 +54,10 @@ pub const Result = struct {
 			self._conn._state = .fail;
 			return;
 		};
+
+		if (self._release_conn) {
+			self._conn.release();
+		}
 	}
 
 	// Caller should typically call next() until null is returned.

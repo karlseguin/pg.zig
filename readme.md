@@ -39,11 +39,8 @@ var pool = try pg.Pool.init(allocator, .{
 });
 defer pool.deinit();
 
-var conn = try pool.acquire();
-defer conn.release();
-
 const sql = "select id, name from users where power > $1";
-var result = conn.query(sql, .{9000}) catch |err| switch (err) {
+var result = pool.query(sql, .{9000}) catch |err| switch (err) {
   error.PG => {
     std.debug.print("PG: {s}", {conn.err.?.message});
     return err;
@@ -58,6 +55,35 @@ while (try result.next()) |row| {
   const name = row.get([]u8, 1);
 }
 ```
+
+## Pool
+The pool keeps a configured number of database connection open. The `acquire()` method is used to retrieve a connection from the pool. Every pool runs 1 background thread which is used to re-connect disconnected connections or connections in invalid states.
+
+### init(allocator: std.mem.allocator, opts: Opts) !Pool
+Initializes a connection pool. Pool options are:
+
+* `size` - Number of connections to maintain. Defaults to `10`
+* `auth`: - See [Conn.auth](#authopts-opts-void)
+* `connect`: - See the [Conn.open](#openallocator-stdmemallocator-opts-opts-conn)
+* `timeout` - The amount of time, in milliseconds, to wait for a connection to be available when `acquire()` is called.
+
+### acquire() !\*Conn
+Returns a (\*Conn)[#conn] for the connection pool. Returns an `error.Timeout` if the connection cannot be acquired (i.e. if the pool remains empty) for the  `timeout` configuration passed to `init`.
+
+### release(conn: \*Conn) void
+Releases the conection back into the pool. Calling `pool.release(conn)` is the same as calling `conn.release()`.
+
+### newListener() !Listener
+Returns a new [Listener](#listen--notify). This function creates a new connection, it does not use/acquire a connection from the pool. It is a convenience function for cases which have already setup a pool (with the connection and authentication configuration) and want to create a listening connection using those settings.
+
+### exec / query / queryOpts / row / rowOpts
+For single-query operations, the pool offers wrappers around the connection's `exec`, `query`, `queryOpts`, `row` and `rowOpts` methods. These are convenience methods. 
+
+`pool.exec` acquires, executes and releases the connection.
+
+`pool.query` and `pool.queryOpts` acquire and execute the query. The connection is automatically returned to the pool when `result.deinit()` is called. Note that this is a special behavior of `pool.query`. When the result comes explicitly from a `conn.query`, `result.deinit()` does not automatically release the connection back into the pool.
+
+`pool.row` and `pool.rowOpts` acquire and execute the query. The connection is automatically returned to the pool when `row.deinit()` is called. Note that this is a special behavior of `pool.row`. When the result comes explicitly from a `conn.row`, `row.deinit()` does not automatically release the connection back into the pool.
 
 ## Conn
 
@@ -80,7 +106,6 @@ Authentications the request. Prefer creating connections through the pool. Auth 
 * `password`: Defaults to `null`
 * `database`: Defaults to `null`
 * `timeout` : Defaults to `10_000` (milliseconds)
-
 
 ### release(conn: \*Conn) void
 Releases the connection back to the pool. The pool might decide to close the connection and open a new one.
@@ -392,10 +417,10 @@ try listener.listen("chan_1");
 // same as above
 ```
 
-### Reconnects
+## Reconnects
 A listener will not automatically reconnect on error/disconnect. The pub/sub nature of LISTEN/NOTIFY mean that delivery is at-most-once and auto-reconnecting can hide that fact. Put the above code in a `while (true) {...}` loop.
 
-### Errors
+## Errors
 The handling of errors isn't great. Blame Zig's lack of error payloads and the awkwardness of using `try` within a `while` condition.
 
 `listener.next()` can only return `null` on error. When `null` is returned, `listener.err` will be non-null. Unlike the `Conn` this is a tagged union that can either be `err` for a normal Zig error (e.g. error.ConnectionResetByPeer) or `pg` a detailed PostgresSQL error.

@@ -469,7 +469,7 @@ pub const Types = struct {
 			for (values) |v| {
 				if (v > 32767) return error.UnsignedIntWouldBeTruncated;
 			}
-			buf.writeAt(&Int16.oid, oid_pos);
+			buf.writeAt(&Int16.oid.encoded, oid_pos);
 			return Encode.writeIntArray(i16, 2, values, buf);
 		}
 	};
@@ -487,7 +487,7 @@ pub const Types = struct {
 			for (values) |v| {
 				if (v > 2147483647) return error.UnsignedIntWouldBeTruncated;
 			}
-			buf.writeAt(&Int32.oid, oid_pos);
+			buf.writeAt(&Int32.oid.encoded, oid_pos);
 			return Encode.writeIntArray(i32, 4, values, buf);
 		}
 	};
@@ -505,7 +505,7 @@ pub const Types = struct {
 			for (values) |v| {
 				if (v > 9223372036854775807) return error.UnsignedIntWouldBeTruncated;
 			}
-			buf.writeAt(&Int64.oid, oid_pos);
+			buf.writeAt(&Int64.oid.encoded, oid_pos);
 			return Encode.writeIntArray(i64, 8, values, buf);
 		}
 	};

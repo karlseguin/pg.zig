@@ -4,6 +4,8 @@ const lib = @import("lib.zig");
 const log = lib.log;
 const auth = lib.auth;
 const Conn = lib.Conn;
+const Result = lib.Result;
+const QueryRow = lib.QueryRow;
 const Listener = @import("listener.zig").Listener;
 
 const Thread = std.Thread;
@@ -122,6 +124,40 @@ pub const Pool = struct {
 		var listener = try Listener.open(self._allocator, self._opts.connect);
 		try listener.auth(self._opts.auth);
 		return listener;
+	}
+
+	pub fn exec(self: *Pool, sql: []const u8, values: anytype) !?i64 {
+		return self.execOpts(sql, values, .{});
+	}
+
+	pub fn execOpts(self: *Pool, sql: []const u8, values: anytype, opts: Conn.QueryOpts) !?i64 {
+		var conn = try self.acquire();
+		defer self.release(conn);
+		return conn.execOpts(sql, values, opts);
+	}
+
+	pub fn query(self: *Pool, sql: []const u8, values: anytype) !Result {
+		return self.queryOpts(sql, values, .{});
+	}
+
+	pub fn queryOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !Result {
+		var opts = opts_;
+		opts._release_conn = true;
+		var conn = try self.acquire();
+		errdefer self.release(conn);
+		return conn.queryOpts(sql, values, opts);
+	}
+
+	pub fn row(self: *Pool, sql: []const u8, values: anytype) !?QueryRow {
+		return self.rowOpts(sql, values, .{});
+	}
+
+	pub fn rowOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !?QueryRow {
+		var opts = opts_;
+		opts._release_conn = true;
+		var conn = try self.acquire();
+		errdefer self.release(conn);
+		return conn.rowOpts(sql, values, opts);
 	}
 };
 
@@ -271,6 +307,55 @@ test "Pool: Release" {
 	const c1 = try pool.acquire();
 	c1._state = .query;
 	pool.release(c1);
+}
+
+test "Pool: exec" {
+	var pool = try Pool.init(t.allocator, .{.size = 1, .auth = t.authOpts(.{})});
+	defer pool.deinit();
+
+	{
+		const n = try pool.exec("insert into simple_table values ($1), ($2), ($3)", .{"pool_insert_args_a", "pool_insert_args_b", "pool_insert_args_c"});
+		try t.expectEqual(3, n.?);
+	}
+
+	{
+		// this makes sure the connection was returned to the pool
+		const n = try pool.exec("insert into simple_table values ($1)", .{"pool_insert_args_a"});
+		try t.expectEqual(1, n.?);
+	}
+}
+
+test "Pool: Query/Row" {
+		var pool = try Pool.init(t.allocator, .{.size = 1, .auth = t.authOpts(.{})});
+		defer pool.deinit();
+
+		{
+			_ = try pool.exec("insert into all_types (id, col_int8, col_text) values ($1, $2, $3)", .{100, 1, "val-1"});
+			_ = try pool.exec("insert into all_types (id, col_int8, col_text) values ($1, $2, $3)", .{101, 2, "val-2"});
+		}
+
+		for (0..3)  |_| {
+			var result = try pool.query("select col_int8, col_text from all_types where id = any($1)", .{[2]i32{100, 101}});
+			defer result.deinit();
+
+			const row1 = (try result.next()) orelse unreachable;
+			try t.expectEqual(1, row1.get(i64, 0));
+			try t.expectString("val-1", row1.get([]u8, 1));
+
+			const row2 = (try result.next()) orelse unreachable;
+			try t.expectEqual(2, row2.get(i64, 0));
+			try t.expectString("val-2", row2.get([]u8, 1));
+
+			try t.expectEqual(null, result.next());
+		}
+
+		for (0..3)  |_| {
+			var row = try pool.row("select col_int8, col_text from all_types where id = $1", .{101}) orelse unreachable;
+			defer row.deinit();
+
+			try t.expectEqual(2, row.get(i64, 0));
+			try t.expectString("val-2", row.get([]u8, 1));
+		}
 }
 
 fn testPool(p: *Pool) void {
