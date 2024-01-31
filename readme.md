@@ -39,14 +39,7 @@ var pool = try pg.Pool.init(allocator, .{
 });
 defer pool.deinit();
 
-const sql = "select id, name from users where power > $1";
-var result = pool.query(sql, .{9000}) catch |err| switch (err) {
-  error.PG => {
-    std.debug.print("PG: {s}", {conn.err.?.message});
-    return err;
-  },
-  else => return err,
-}
+var result = try pool.query("select id, name from users where power > $1", .{9000});
 defer result.deinit();
 
 while (try result.next()) |row| {
