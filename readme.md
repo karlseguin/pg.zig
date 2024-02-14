@@ -61,7 +61,14 @@ Initializes a connection pool. Pool options are:
 * `timeout` - The amount of time, in milliseconds, to wait for a connection to be available when `acquire()` is called.
 
 ### acquire() !\*Conn
-Returns a (\*Conn)[#conn] for the connection pool. Returns an `error.Timeout` if the connection cannot be acquired (i.e. if the pool remains empty) for the  `timeout` configuration passed to `init`.
+Returns a [\*Conn](#conn) for the connection pool. Returns an `error.Timeout` if the connection cannot be acquired (i.e. if the pool remains empty) for the  `timeout` configuration passed to `init`.
+
+
+```zig
+const conn = try pool.acquire();
+defer pool.release(conn);
+_ = try conn.exec("...", .{...});
+```
 
 ### release(conn: \*Conn) void
 Releases the conection back into the pool. Calling `pool.release(conn)` is the same as calling `conn.release()`.
