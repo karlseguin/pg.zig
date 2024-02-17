@@ -5,7 +5,6 @@ const Buffer = @import("buffer").Buffer;
 const proto = lib.proto;
 const types = lib.types;
 const Pool = lib.Pool;
-const Stmt = lib.Stmt;
 const Reader = lib.Reader;
 const Result = lib.Result;
 const Timeout = lib.Timeout;
