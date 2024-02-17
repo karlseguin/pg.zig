@@ -5,6 +5,7 @@ const Buffer = @import("buffer").Buffer;
 const proto = lib.proto;
 const types = lib.types;
 const Pool = lib.Pool;
+const Stmt = lib.Stmt;
 const Reader = lib.Reader;
 const Result = lib.Result;
 const Timeout = lib.Timeout;
@@ -434,15 +435,14 @@ pub const Conn = struct {
 		var buf = &self._buf;
 		buf.reset();
 
-		try self._reader.startFlow(opts.allocator, opts.timeout);
-		defer self._reader.endFlow() catch {
-			// this can only fail in extreme conditions (OOM) and it will only impact
-			// the next query (and if the app is using the pool, the pool will try to
-			// recover from this anyways)
-			self._state = .fail;
-		};
-
 		if (values.len == 0) {
+			try self._reader.startFlow(opts.allocator, opts.timeout);
+			defer self._reader.endFlow() catch {
+				// this can only fail in extreme conditions (OOM) and it will only impact
+				// the next query (and if the app is using the pool, the pool will try to
+				// recover from this anyways)
+				self._state = .fail;
+			};
 			const simple_query = proto.Query{.sql = sql};
 			try simple_query.write(buf);
 			// no longer idle, we're now in a query
