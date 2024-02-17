@@ -6,93 +6,93 @@ const Allocator = std.mem.Allocator;
 const BORDER = "=" ** 80;
 
 pub fn main() !void {
-	// var mem: [4096]u8 = undefined;
-	// var fba = std.heap.FixedBufferAllocator.init(&mem);
+	var mem: [4096]u8 = undefined;
+	var fba = std.heap.FixedBufferAllocator.init(&mem);
 
-	// const allocator = fba.allocator();
+	const allocator = fba.allocator();
 
-	// const env = Env.init(allocator);
-	// defer env.deinit(allocator);
+	const env = Env.init(allocator);
+	defer env.deinit(allocator);
 
-	// var slowest = SlowTracker.init(allocator, 5);
-	// defer slowest.deinit();
+	var slowest = SlowTracker.init(allocator, 5);
+	defer slowest.deinit();
 
-	// var pass: usize = 0;
-	// var fail: usize = 0;
-	// var skip: usize = 0;
-	// var leak: usize = 0;
+	var pass: usize = 0;
+	var fail: usize = 0;
+	var skip: usize = 0;
+	var leak: usize = 0;
 
-	// const printer = Printer.init();
-	// printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
+	const printer = Printer.init();
+	printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
-	// for (builtin.test_functions) |t| {
-	// 	std.testing.allocator_instance = .{};
-	// 	var status = Status.pass;
-	// 	slowest.startTiming();
+	for (builtin.test_functions) |t| {
+		std.testing.allocator_instance = .{};
+		var status = Status.pass;
+		slowest.startTiming();
 
-	// 	const is_unnamed_test = std.mem.eql(u8, "test_0", t.name);
-	// 	if (env.filter) |f| {
-	// 		if (!is_unnamed_test and std.mem.indexOf(u8, t.name, f) == null) {
-	// 			continue;
-	// 		}
-	// 	}
+		const is_unnamed_test = std.mem.eql(u8, "test_0", t.name);
+		if (env.filter) |f| {
+			if (!is_unnamed_test and std.mem.indexOf(u8, t.name, f) == null) {
+				continue;
+			}
+		}
 
 
-	// 	const result = t.func();
-	// 	if (is_unnamed_test) {
-	// 		continue;
-	// 	}
+		const result = t.func();
+		if (is_unnamed_test) {
+			continue;
+		}
 
-	// 	// strip out the test. prefix
-	// 	const friendly_name = t.name[5..];
-	// 	const ns_taken = slowest.endTiming(friendly_name);
+		// strip out the test. prefix
+		const friendly_name = t.name[5..];
+		const ns_taken = slowest.endTiming(friendly_name);
 
-	// 	if (std.testing.allocator_instance.deinit() == .leak) {
-	// 		leak += 1;
-	// 		printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{BORDER, friendly_name, BORDER});
-	// 	}
+		if (std.testing.allocator_instance.deinit() == .leak) {
+			leak += 1;
+			printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{BORDER, friendly_name, BORDER});
+		}
 
-	// 	if (result) |_| {
-	// 		pass += 1;
-	// 	} else |err| switch (err) {
-	// 		error.SkipZigTest => {
-	// 			skip += 1;
-	// 			status = .skip;
-	// 		},
-	// 		else => {
-	// 			status = .fail;
-	// 			fail += 1;
-	// 			printer.status(.fail, "\n{s}\n\"{s}\" - {s}\n{s}\n", .{BORDER, friendly_name, @errorName(err), BORDER});
-	// 			if (@errorReturnTrace()) |trace| {
-	// 				std.debug.dumpStackTrace(trace.*);
-	// 			}
-	// 			if (env.fail_first) {
-	// 				break;
-	// 			}
-	// 		}
-	// 	}
+		if (result) |_| {
+			pass += 1;
+		} else |err| switch (err) {
+			error.SkipZigTest => {
+				skip += 1;
+				status = .skip;
+			},
+			else => {
+				status = .fail;
+				fail += 1;
+				printer.status(.fail, "\n{s}\n\"{s}\" - {s}\n{s}\n", .{BORDER, friendly_name, @errorName(err), BORDER});
+				if (@errorReturnTrace()) |trace| {
+					std.debug.dumpStackTrace(trace.*);
+				}
+				if (env.fail_first) {
+					break;
+				}
+			}
+		}
 
-	// 	if (env.verbose) {
-	// 		const ms = @as(f64, @floatFromInt(ns_taken)) / 100_000.0;
-	// 		printer.status(status, "{s} ({d:.2}ms)\n", .{friendly_name, ms});
-	// 	} else {
-	// 		printer.status(status, ".", .{});
-	// 	}
-	// }
+		if (env.verbose) {
+			const ms = @as(f64, @floatFromInt(ns_taken)) / 100_000.0;
+			printer.status(status, "{s} ({d:.2}ms)\n", .{friendly_name, ms});
+		} else {
+			printer.status(status, ".", .{});
+		}
+	}
 
-	// const total_tests = pass + fail;
-	// const status = if (fail == 0) Status.pass else Status.fail;
-	// printer.status(status, "\n{d} of {d} test{s} passed\n", .{pass, total_tests, if (total_tests != 1) "s" else ""});
-	// if (skip > 0) {
-	// 	printer.status(.skip, "{d} test{s} skipped\n", .{skip, if (skip != 1) "s" else ""});
-	// }
-	// if (leak > 0) {
-	// 	printer.status(.fail, "{d} test{s} leaked\n", .{leak, if (leak != 1) "s" else ""});
-	// }
-	// printer.fmt("\n", .{});
-	// try slowest.display(printer);
-	// printer.fmt("\n", .{});
-	// std.os.exit(if (fail == 0) 0 else 1);
+	const total_tests = pass + fail;
+	const status = if (fail == 0) Status.pass else Status.fail;
+	printer.status(status, "\n{d} of {d} test{s} passed\n", .{pass, total_tests, if (total_tests != 1) "s" else ""});
+	if (skip > 0) {
+		printer.status(.skip, "{d} test{s} skipped\n", .{skip, if (skip != 1) "s" else ""});
+	}
+	if (leak > 0) {
+		printer.status(.fail, "{d} test{s} leaked\n", .{leak, if (leak != 1) "s" else ""});
+	}
+	printer.fmt("\n", .{});
+	try slowest.display(printer);
+	printer.fmt("\n", .{});
+	std.os.exit(if (fail == 0) 0 else 1);
 }
 
 const Printer = struct {

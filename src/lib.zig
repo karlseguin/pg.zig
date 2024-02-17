@@ -7,6 +7,7 @@ pub const types = @import("types.zig");
 pub const proto = @import("proto.zig");
 pub const auth = @import("auth.zig");
 pub const Conn = @import("conn.zig").Conn;
+pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
 
 const result = @import("result.zig");
