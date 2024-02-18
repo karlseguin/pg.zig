@@ -76,11 +76,13 @@ pub const Conn = struct {
 	pub const QueryOpts = struct {
 		timeout: ?u32 = null,
 		column_names: bool = false,
+
 		allocator: ?Allocator = null,
 		// Whether a call to result.deinit() should automatically release the
 		// connection back to the pool. Meant to be used internally by pool.query()
-		// and the other pool utility wrappers.
-		_release_conn: bool = false,
+		// and the other pool utility wrappers, but applications might find it useful
+		// to use in their own helpers
+		release_conn: bool = false,
 	};
 
 	pub fn open(allocator: Allocator, opts: Opts) !Conn {

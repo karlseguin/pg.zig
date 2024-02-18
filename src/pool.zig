@@ -142,7 +142,7 @@ pub const Pool = struct {
 
 	pub fn queryOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !Result {
 		var opts = opts_;
-		opts._release_conn = true;
+		opts.release_conn = true;
 		var conn = try self.acquire();
 		errdefer self.release(conn);
 		return conn.queryOpts(sql, values, opts);
@@ -154,7 +154,7 @@ pub const Pool = struct {
 
 	pub fn rowOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !?QueryRow {
 		var opts = opts_;
-		opts._release_conn = true;
+		opts.release_conn = true;
 		var conn = try self.acquire();
 		errdefer self.release(conn);
 		return conn.rowOpts(sql, values, opts);

@@ -295,7 +295,7 @@ pub const Stmt = struct {
 		return .{
 			._conn = conn,
 			._arena = self.arena,
-			._release_conn = opts._release_conn,
+			._release_conn = opts.release_conn,
 			._oids = state.oids[0..column_count],
 			._values = state.values[0..column_count],
 			.column_names = if (opts.column_names) state.names[0..column_count] else &[_][]const u8{},
