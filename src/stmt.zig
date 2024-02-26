@@ -161,6 +161,7 @@ pub const Stmt = struct {
 			const data = msg.data;
 			param_count = std.mem.readInt(u16, data[0..2], .big);
 			if (param_count > param_oids.len) {
+				lib.metrics.allocParams(param_count);
 				param_oids = try aa.alloc(i32, param_count);
 				self.param_oids = param_oids;
 			}
@@ -289,6 +290,7 @@ pub const Stmt = struct {
 		// concerned, we're still doing the query.
 		conn._state = .query;
 
+		lib.metrics.query();
 		const opts = &self.opts;
 		const state = self.result_state;
 		const column_count = self.column_count;

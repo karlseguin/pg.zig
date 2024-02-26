@@ -9,6 +9,7 @@ pub const auth = @import("auth.zig");
 pub const Conn = @import("conn.zig").Conn;
 pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
+pub const metrics = @import("metrics.zig");
 
 const result = @import("result.zig");
 pub const Row = result.Row;

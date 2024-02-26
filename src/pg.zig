@@ -17,6 +17,15 @@ pub fn uuidToHex(uuid: []const u8) ![36]u8 {
 	return lib.types.UUID.toString(uuid);
 }
 
+const metrics = @import("metrics.zig");
+pub fn initializeMetrics(allocator: std.mem.Allocator, comptime opts: metrics.RegistryOpts) !void {
+	return metrics.initialize(allocator, opts);
+}
+
+pub fn writeMetrics(writer: anytype) !void {
+	return metrics.write(writer);
+}
+
 const t = lib.testing;
 test {
 	try t.setup();

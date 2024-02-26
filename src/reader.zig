@@ -177,6 +177,7 @@ fn ReaderT(comptime T: type) type {
 
 							if (is_static or !allocator.resize(buf, message_length)) {
 								// Either we were using our static buffer or resizing failed
+								lib.metrics.allocReader(message_length);
 								new_buf = try allocator.alloc(u8, message_length);
 								@memcpy(new_buf[0..current_length], buf[start..pos]);
 
@@ -186,6 +187,7 @@ fn ReaderT(comptime T: type) type {
 								}
 							} else {
 								// we were using a dynamic buffer and succcessfully resized it
+								lib.metrics.allocReader(message_length - current_length);
 								new_buf = buf.ptr[0..message_length];
 								if (start > 0) {
 									std.mem.copyForwards(u8, new_buf[0..current_length], buf[start..pos]);

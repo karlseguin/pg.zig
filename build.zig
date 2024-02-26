@@ -15,11 +15,15 @@ pub fn build(b: *std.Build) !void {
 	defer modules.deinit();
 
 	try modules.put("buffer", b.dependency("buffer", dep_opts).module("buffer"));
+	try modules.put("metrics", b.dependency("metrics", dep_opts).module("metrics"));
 
 		// Expose this as a module that others can import
 	_ = b.addModule("pg", .{
 		.root_source_file  = .{ .path = "src/pg.zig" },
-		.imports = &.{ .{.name = "buffer", .module = modules.get("buffer").? }},
+		.imports = &.{
+			.{.name = "buffer", .module = modules.get("buffer").?},
+			.{.name = "metrics", .module = modules.get("metrics").?}
+		},
 	});
 
 	{

@@ -246,6 +246,7 @@ pub const Conn = struct {
 			const simple_query = proto.Query{.sql = sql};
 			try simple_query.write(buf);
 			// no longer idle, we're now in a query
+			lib.metrics.query();
 			self._state = .query;
 			try self.write(buf.string());
 		} else {

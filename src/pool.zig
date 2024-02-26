@@ -81,6 +81,7 @@ pub const Pool = struct {
 		while (true) {
 			const available = self._available;
 			if (available == 0) {
+				lib.metrics.poolEmpty();
 				try self._cond.timedWait(&self._mutex, self._timeout);
 				continue;
 			}
@@ -96,6 +97,7 @@ pub const Pool = struct {
 		var conn_to_add = conn;
 
 		if (conn._state != .idle) {
+			lib.metrics.poolDirty();
 			// conn should always be idle when being released. It's possible we can
 			// recover from this (e.g. maybe we just need to read until we get a
 			// ReadyForQuery), but we wouldn't want to block for too long. For now,
