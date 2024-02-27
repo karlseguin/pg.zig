@@ -452,3 +452,25 @@ A listener will not automatically reconnect on error/disconnect. The pub/sub nat
 The handling of errors isn't great. Blame Zig's lack of error payloads and the awkwardness of using `try` within a `while` condition.
 
 `listener.next()` can only return `null` on error. When `null` is returned, `listener.err` will be non-null. Unlike the `Conn` this is a tagged union that can either be `err` for a normal Zig error (e.g. error.ConnectionResetByPeer) or `pg` a detailed PostgresSQL error.
+
+## Metrics
+A few basic metrics are collected using [metrics.zig](https://github.com/karlseguin/metrics.zig), a prometheus-compatible library. These can be written to an `std.io.Writer` using `try pg.writeMetrics(writer)`. As an example using [httpz](https://github.com/karlseguin/http.zig):
+
+```zig
+pub fn metrics(_: *httpz.Request, res: *httpz.Response) !void {
+    const writer = res.writer();
+    try pg.writeMetrics(writer);
+
+    // also write out the httpz metrics
+    try httpz.writeMetrics(writer);
+}
+```
+
+The metrics are:
+
+* `pg_queries` - counts the number of queries
+* `pg_pool_empty` - counts how often the pool is empty
+* `pg_pool_dirty` - counts how often a connection is released back into the pool in an unclean state (thus requiring the connection to be closed and the pool to re-open another connection)
+* `pg_alloc_params` - counts the number of parameter states that were allocated. This indicates that your queries have more paraemters than `result_state_size`. If this happens often, consider increasing `result_state_size`.
+* `pg_alloc_columns` - counts the number of columns states that were allocated. This indicates that your queries are returning more columns than `result_state_size`. If this happens often, consider increasing `result_state_size`.
+* `pg_alloc_reader` - counts the number of bytes allocated while reading messages from PostgreSQL. This generally happens as a result of large result (e.g. selecting large text fields). Controlled by the `read_buffer` configuration option.

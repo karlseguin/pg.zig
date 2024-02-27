@@ -1,32 +1,33 @@
 const std = @import("std");
 const m = @import("metrics");
 
-pub const RegistryOpts = m.RegistryOpts;
-
-// defaults to noop metrics, making this safe to use
-// whether or not initializeMetrics is called
-var metrics = m.initializeNoop(Metrics);
-
-const Metrics = struct {
-	queries: m.Counter(usize),
-	pool_empty: m.Counter(usize),
-	pool_dirty: m.Counter(usize),
-	alloc_params: m.Counter(u64),
-	alloc_reader: m.Counter(u64),
+// This is an advanced usage of metrics.zig, largely done because we aren't
+// using any vectored metrics and thus can do everything at comptime.
+var metrics = Metrics{
+	.queries = m.Counter(usize).Impl.init("pg_query", .{}),
+	.pool_empty = m.Counter(usize).Impl.init("pg_pool_empty", .{}),
+	.pool_dirty = m.Counter(usize).Impl.init("pg_pool_dirty", .{}),
+	.alloc_params = m.Counter(u64).Impl.init("pg_alloc_params", .{}),
+	.alloc_columns = m.Counter(u64).Impl.init("pg_alloc_columns", .{}),
+	.alloc_reader = m.Counter(u64).Impl.init("pg_alloc_reader", .{}),
 };
 
-pub fn initialize(allocator: std.mem.Allocator, comptime opts: m.RegistryOpts) !void {
-	metrics = .{
-		.queries = try m.Counter(usize).init(allocator, "pg_query", .{}, opts),
-		.pool_empty = try m.Counter(usize).init(allocator, "pg_pool_empty", .{}, opts),
-		.pool_dirty = try m.Counter(usize).init(allocator, "pg_pool_dirty", .{}, opts),
-		.alloc_params = try m.Counter(u64).init(allocator, "pg_alloc_params", .{}, opts),
-		.alloc_reader = try m.Counter(u64).init(allocator, "pg_alloc_reader", .{}, opts),
-	};
-}
+const Metrics = struct {
+	queries: m.Counter(usize).Impl,
+	pool_empty: m.Counter(usize).Impl,
+	pool_dirty: m.Counter(usize).Impl,
+	alloc_params: m.Counter(u64).Impl,
+	alloc_columns: m.Counter(u64).Impl,
+	alloc_reader: m.Counter(u64).Impl,
+};
 
 pub fn write(writer: anytype) !void {
-	return m.write(metrics, writer);
+	try metrics.queries.write(writer);
+	try metrics.pool_empty.write(writer);
+	try metrics.pool_dirty.write(writer);
+	try metrics.alloc_params.write(writer);
+	try metrics.alloc_columns.write(writer);
+	try metrics.alloc_reader.write(writer);
 }
 
 pub fn query() void {
@@ -44,6 +45,11 @@ pub fn poolDirty() void {
 pub fn allocParams(count: usize) void {
 	// this is the # of parameters, not the bytes allocated.
 	metrics.alloc_params.incrBy(count);
+}
+
+pub fn allocColumns(count: usize) void {
+	// this is the # of columns, not the bytes allocated.
+	metrics.alloc_columns.incrBy(count);
 }
 
 pub fn allocReader(size: usize) void {

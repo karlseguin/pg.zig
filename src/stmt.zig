@@ -188,6 +188,7 @@ pub const Stmt = struct {
 					const data = msg.data;
 					const column_count = std.mem.readInt(u16, data[0..2], .big);
 					if (column_count > state.oids.len) {
+						lib.metrics.allocColumns(column_count);
 						// we have more columns than our self._result_state can handle, we
 						// need to create a new Result.State specifically for this
 						state = try Result.State.init(aa, column_count);
