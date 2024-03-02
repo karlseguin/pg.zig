@@ -7,7 +7,7 @@ const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
 // to everyone else, this is our reader
-pub const Reader = ReaderT(std.net.Stream);
+pub const Reader = ReaderT(*lib.Stream);
 
 const zero_timeval = std.mem.toBytes(os.timeval{.tv_sec = 0, .tv_usec = 0});
 
@@ -74,7 +74,7 @@ fn ReaderT(comptime T: type) type {
 				});
 			}
 			if (!builtin.is_test) {
-				return os.setsockopt(self.stream.handle, os.SOL.SOCKET, os.SO.RCVTIMEO, &timeval);
+				return self.stream.setsockopt(os.SO.RCVTIMEO, &timeval);
 			}
 			self.allocator = allocator orelse self.default_allocator;
 		}

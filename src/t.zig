@@ -194,7 +194,12 @@ pub const Stream = struct {
 pub fn connect(opts: anytype) Conn {
 	const T = @TypeOf(opts);
 
-	var c = Conn.open(allocator, .{.host = "localhost"}) catch unreachable;
+	var c = Conn.open(allocator, .{
+		.host = "localhost",
+		.tls = if (@hasField(T, "tls")) opts.tls else false,
+		.ca_bundle = if (@hasField(T, "ca_bundle")) opts.ca_bundle else null,
+	}) catch unreachable;
+
 	c.auth(.{
 		.database = if (@hasField(T, "database")) opts.database else "postgres",
 		.username = if (@hasField(T, "username")) opts.username else "postgres",

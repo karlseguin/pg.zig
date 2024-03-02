@@ -5,6 +5,7 @@ const log = lib.log;
 const Conn = lib.Conn;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
+const Bundle = std.crypto.Certificate.Bundle;
 
 pub const Pool = struct {
 	_opts: Opts,
@@ -15,6 +16,7 @@ pub const Pool = struct {
 	_mutex: Thread.Mutex,
 	_cond: Thread.Condition,
 	_reconnector: Reconnector,
+	_own_ca_bundle: bool,
 
 	pub const Opts = struct {
 		size: u16 = 10,
@@ -30,6 +32,19 @@ pub const Pool = struct {
 		const size = opts.size;
 		const conns = try allocator.alloc(*Conn, size);
 
+		var owned_opts = opts;
+		var own_ca_bundle = false;
+		if (opts.connect.tls and opts.connect.ca_bundle == null) {
+			var bundle = Bundle{};
+			try bundle.rescan(allocator);
+			own_ca_bundle = true;
+			owned_opts.connect.ca_bundle = bundle;
+		}
+
+		errdefer if (own_ca_bundle) {
+			owned_opts.connect.ca_bundle.?.deinit(allocator);
+		};
+
 		pool.* = .{
 			._cond = .{},
 			._mutex = .{},
@@ -37,6 +52,7 @@ pub const Pool = struct {
 			._conns = conns,
 			._available = size,
 			._allocator = allocator,
+			._own_ca_bundle = own_ca_bundle,
 			._reconnector = Reconnector.init(pool),
 			._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
 		};
@@ -67,6 +83,9 @@ pub const Pool = struct {
 			allocator.destroy(conn);
 		}
 		allocator.free(self._conns);
+		if (self._own_ca_bundle) {
+			 self._opts.connect.ca_bundle.?.deinit(allocator);
+		}
 		allocator.destroy(self);
 	}
 
@@ -273,5 +292,49 @@ fn testPool(p: *Pool) void {
 		const conn = p.acquire() catch unreachable;
 		_ = conn.exec("insert into pool_test (id) values ($1)", .{i}) catch unreachable;
 		conn.release();
+	}
+}
+
+test "Pool: TLS" {
+	var bundle = Bundle{};
+	try bundle.addCertsFromFilePath(t.allocator, std.fs.cwd(), "tests/server.crt");
+	defer bundle.deinit(t.allocator);
+
+	var pool = try Pool.init(t.allocator, .{
+		.size = 1,
+		.connect = .{
+			.tls = true,
+			.host = "localhost",
+			.ca_bundle = bundle,
+		},
+		.auth = .{
+			.database = "postgres",
+			.username = "postgres",
+			.password = "root_pw",
+		},
+	});
+	defer pool.deinit();
+
+	{
+		const c1 = try pool.acquire();
+		defer pool.release(c1);
+		_ = try c1.exec(
+			\\ drop table if exists pool_test;
+			\\ create table pool_test (id int not null)
+		, .{});
+	}
+
+	const t1 = try std.Thread.spawn(.{}, testPool, .{pool});
+	const t2 = try std.Thread.spawn(.{}, testPool, .{pool});
+	const t3 = try std.Thread.spawn(.{}, testPool, .{pool});
+
+	t1.join(); t2.join(); t3.join();
+
+	{
+		const c1 = try pool.acquire();
+		defer c1.release();
+
+		const affected = try c1.exec("delete from pool_test", .{});
+		try t.expectEqual(1500, affected.?);
 	}
 }
