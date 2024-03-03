@@ -34,6 +34,7 @@ pub const Pool = struct {
 
 		const size = opts.size;
 		const conns = try allocator.alloc(*Conn, size);
+		errdefer allocator.free(conns);
 
 		pool.* = .{
 			._cond = .{},
