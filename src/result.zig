@@ -231,20 +231,7 @@ pub const Row = struct {
 
 		const data = value.data;
 		const oid = self.oids[col];
-		switch (TT) {
-			u8 => return types.Char.decode(data, oid),
-			i16 => return types.Int16.decode(data, oid),
-			i32 => return types.Int32.decode(data, oid),
-			i64 => return types.Int64.decode(data, oid),
-			f32 => return types.Float32.decode(data, oid),
-			f64 => return types.Float64.decode(data, oid),
-			bool => return types.Bool.decode(data, oid),
-			[]const u8 => return types.Bytea.decode(data, oid),
-			[]u8 => return @constCast(types.Bytea.decode(data, oid)),
-			types.Numeric => return types.Numeric.decode(data, oid),
-			types.Cidr => return types.Cidr.decode(data, oid),
-			else => compileHaltGetError(T),
-		}
+		return getScalar(TT, data, oid);
 	}
 
 	pub fn getCol(self: *const Row, comptime T: type, name: []const u8) T {
@@ -352,6 +339,21 @@ pub const Row = struct {
 		lib.assert(col != null);
 		return self.iterator(T, col.?);
 	}
+
+	pub fn record(self: *const Row, col: usize) Record {
+		const data = self.values[col].data;
+		const number_of_columns = std.mem.readInt(i32, data[0..4], .big);
+		return .{
+			.data = data[4..],
+			.number_of_columns = @intCast(number_of_columns),
+		};
+	}
+
+	pub fn recordCol(self: *const Row, name: []const u8) Record {
+		const col = self._result.columnIndex(name);
+		lib.assert(col != null);
+		return self.record(col);
+	}
 };
 
 pub const QueryRow = struct {
@@ -372,6 +374,14 @@ pub const QueryRow = struct {
 
 	pub fn iteratorCol(self: *const QueryRow, comptime T: type, name: []const u8) IteratorReturnType(T) {
 		return self.row.iteratorCol(T, name);
+	}
+
+	pub fn record(self: *const QueryRow, col: usize) Record {
+		return self.row.record(col);
+	}
+
+	pub fn recordCol(self: *const QueryRow, name: []const u8) Record {
+		return self.row.recordCol(name);
 	}
 
 	pub fn deinit(self: *const QueryRow) void {
@@ -449,6 +459,58 @@ fn Iterator(comptime T: type) type {
 
 fn compileHaltGetError(comptime T: type) noreturn {
 	@compileError("cannot get value of type " ++ @typeName(T));
+}
+
+const Record = struct {
+	data: []const u8,
+	number_of_columns: usize,
+
+	pub fn next(self: *Record, comptime T: type) T {
+		var data = self.data;
+
+		// at least 4 bytes for the type and 4 bytes for the lenght
+		lib.assert(data.len >= 8);
+
+		const oid = std.mem.readInt(i32, data[0..4], .big);
+
+		data = data[4..];
+		const len = std.mem.readInt(i32, data[0..4], .big);
+
+
+		const TT = switch (@typeInfo(T)) {
+			.Optional => |opt| blk: {
+				if (len == -1) return null;
+				break :blk opt.child;
+			},
+			else => T,
+		};
+
+		// end of the data for this "column"
+		const end = @as(usize, @intCast(len)) + 4;
+
+		// the rest of the data
+		self.data = data[end..];
+
+		// start at 4 to skip the length which we already read
+		return getScalar(TT, data[4..end], oid);
+	}
+};
+
+fn getScalar(T: type, data: []const u8, oid: i32) T {
+	switch (T) {
+		u8 => return types.Char.decode(data, oid),
+		i16 => return types.Int16.decode(data, oid),
+		i32 => return types.Int32.decode(data, oid),
+		i64 => return types.Int64.decode(data, oid),
+		f32 => return types.Float32.decode(data, oid),
+		f64 => return types.Float64.decode(data, oid),
+		bool => return types.Bool.decode(data, oid),
+		[]const u8 => return types.Bytea.decode(data, oid),
+		[]u8 => return @constCast(types.Bytea.decode(data, oid)),
+		types.Numeric => return types.Numeric.decode(data, oid),
+		types.Cidr => return types.Cidr.decode(data, oid),
+		else => compileHaltGetError(T),
+	}
 }
 
 const t = lib.testing;

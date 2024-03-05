@@ -205,7 +205,7 @@ while (try result.next()) |row| {
 ```
 
 ### iterator(comptime T: type, col: usize) Iterator(T)
-Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
+Gets an [Iterator](#iteratort) for reading a PostgreSQL array. `T` indicates the type of the value. Optional/null support is the same as `get`.
 
 * `u8` - `char[]`
 * `i16` - `smallint[]`
@@ -219,8 +219,14 @@ Used for reading a PostgreSQL array. Optional/null support is the same as `get`.
 * `pg.Numeric` - See numeric section
 * `pg.Cidr` - See CIDR/INET section
 
-### iteratorCol(comptime T: typee, column_name: []const u8) Iterator(T)
-See `getCol`.
+### iteratorCol(comptime T: type, column_name: []const u8) Iterator(T)
+Gets an [Iterator](#iteratort) by column name. See [getCol](#getcolcomptime-t-type-column_name-const-u8-t) for performance notes.
+
+### record(col: usize) Record
+Gets a [Record](#record) by column position.
+
+### recordCol(column_name: []const u8) Record
+Gets an [Record](#record) by column name. See [getCol](#getcolcomptime-t-type-column_name-const-u8-t) for performance notes.
 
 ## QueryRow
 A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed.
@@ -243,6 +249,25 @@ Allocates a slice and populates it with all values.
 
 ### fill(it: Iterator(T), into: []T) void
 Fill `into` with values of the iterator. `into` can be smaller than `it.len`, in which case only `into.len` values will be filled. This can be a bit faster than calling `next()` multiple times.
+
+## Record
+Returned by `row.record(col)` for fetching a PostgreSQL record-type, for example from this query: 
+
+```sql
+select row('over', 9000)
+```
+
+In many cases, PostgreSQL will mark the inner-types as "unknown", which is likely to cause assertion failures in this library. The solution is to type each value:
+
+```sql
+select row('over'::text, 9000::int)
+```
+
+### Fields
+* `number_of_columns` - the number of columns in the record
+
+### next(T) T
+Gets the next column in the record. This behaves similarly [row.get](#getcomptime-t-type-col-usize-t) with the same supported types for `T`, including nullables.
 
 ## Stmt
 For most queries, you should use the `conn.query(...)`, `conn.row(...)` or `conn.exec(...)` methods. For queries with parameters, these methods look like:

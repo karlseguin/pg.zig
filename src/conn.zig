@@ -1389,6 +1389,30 @@ test "PG: isUnique" {
 	}
 }
 
+test "PG: Record" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		var row = (try c.row("select row(9001, 'hello'::text)", .{})).?;
+		defer row.deinit();
+
+		var record = row.record(0);
+		try t.expectEqual(2, record.number_of_columns);
+		try t.expectEqual(9001, record.next(i32));
+		try t.expectString("hello", record.next([]const u8));
+	}
+
+	{
+		var row = (try c.row("select row(null)", .{})).?;
+		defer row.deinit();
+
+		var record = row.record(0);
+		try t.expectEqual(1, record.number_of_columns);
+		try t.expectEqual(null, record.next(?i32));
+	}
+}
+
 fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {
 	var str_buf: [50]u8 = undefined;
 	try t.expectString(expected, numeric.toString(&str_buf));
