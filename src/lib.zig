@@ -6,6 +6,7 @@ pub const log = std.log.scoped(.pg);
 pub const types = @import("types.zig");
 pub const proto = @import("proto.zig");
 pub const Conn = @import("conn.zig").Conn;
+pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
 pub const SASL = @import("sasl.zig").SASL;
 pub const Stream = @import("stream.zig").Stream;

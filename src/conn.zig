@@ -6,6 +6,7 @@ const Buffer = @import("buffer").Buffer;
 const proto = lib.proto;
 const types = lib.types;
 const Pool = lib.Pool;
+const Stmt = lib.Stmt;
 const Stream = lib.Stream;
 const Reader = lib.Reader;
 const Result = lib.Result;
@@ -125,7 +126,7 @@ pub const Conn = struct {
 		const stream = try allocator.create(Stream);
 		stream.* = Stream.init(net_stream, tls_client);
 
-		const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
+		const buf = try Buffer.init(allocator, @min(opts.write_buffer orelse 2048, 128));
 		errdefer buf.deinit();
 
 		const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
@@ -218,7 +219,7 @@ pub const Conn = struct {
 			// read the server's response
 			const res = try self.read();
 			if (res.type != 'R') {
-				return self.unexpectedMessage();
+				return self.unexpectedDBMessage();
 			}
 
 			switch (try proto.AuthenticationRequest.parse(res.data)) {
@@ -234,10 +235,10 @@ pub const Conn = struct {
 			// and we're now waiting for a reply, server should send a final auth ok message
 			const res = try self.read();
 			if (res.type != 'R') {
-				return self.unexpectedMessage();
+				return self.unexpectedDBMessage();
 			}
 			if (std.meta.activeTag(try proto.AuthenticationRequest.parse(res.data)) != .ok) {
-				return self.unexpectedMessage();
+				return self.unexpectedDBMessage();
 			}
 		}
 
@@ -247,9 +248,20 @@ pub const Conn = struct {
 				'Z' => return,
 				'K' => {}, // TODO: BackendKeyData
 				'S' => {}, // TODO: ParameterStatus,
-				else => return self.unexpectedMessage(),
+				else => return self.unexpectedDBMessage(),
 			}
 		}
+	}
+
+	pub fn prepare(self: *Conn, sql: []const u8) !Stmt {
+		return self.prepareOpts(sql, .{});
+	}
+
+	pub fn prepareOpts(self: *Conn, sql: []const u8, opts: QueryOpts) !Stmt {
+		var stmt = Stmt.init(self, opts);
+		errdefer stmt.deinit();
+		try stmt.prepare(sql);
+		return stmt;
 	}
 
 	pub fn query(self: *Conn, sql: []const u8, values: anytype) !Result {
@@ -261,237 +273,15 @@ pub const Conn = struct {
 			return error.ConnectionBusy;
 		}
 
-		var dyn_state = false;
-		var number_of_columns: u16 = 0;
-		var state = self._result_state;
-		const allocator = opts.allocator orelse self._allocator;
+		var stmt = Stmt.init(self, opts);
+		errdefer stmt.deinit();
 
-		// if we end up creating a dynamic state, we need to clean it up
-		errdefer if (dyn_state) state.deinit(allocator);
+		try stmt.prepare(sql);
 
-		var buf = &self._buf;
-		buf.reset();
-
-		var param_oids = self._param_oids;
-		if (values.len > param_oids.len) {
-			param_oids = try allocator.alloc(i32, values.len);
-		} else {
-			param_oids = param_oids[0..values.len];
+		inline for (values) |value| {
+			try stmt.bind(value);
 		}
-
-		defer {
-			if (values.len > self._param_oids.len) {
-				// if the above is true, than param_oids was dynamically created just
-				// for this query
-				allocator.free(param_oids);
-			}
-		}
-		try self._reader.startFlow(allocator, opts.timeout);
-		// in normal cases, endFlow will be called in result.deinit()
-		errdefer self._reader.endFlow() catch {
-			// this can only fail in extreme conditions (OOM) and it will only impact
-			// the next query (and if the app is using the pool, the pool will try to
-			// recover from this anyways)
-				self._state = .fail;
-		};
-
-		// Step 1: Parse, Describe, Sync
-		{
-			{
-				// The first thing we do is send 3 messages: parse, describe, sync.
-				// We need the response from describe to put together our Bind message.
-				// Specifically, describe will tell us the type of the return columns, and
-				// in Bind, we tell the server how we want it to encode each column (text
-				// or binary) and to do that, we need to know what they are
-
-				// We can calculate exactly how many bytes our 3 messages are going to be
-				// and make sure our buffer is big enough, thus avoiding some unecessary
-				// bound checking
-				const bind_payload_len = 8 + sql.len;
-
-				// +1 for the type field, 'P'
-				// +7 for our Describe message
-				// +5 fo rour Sync message
-				const total_length = bind_payload_len + 13;
-
-				try buf.ensureTotalCapacity(total_length);
-				_ = buf.skip(total_length) catch unreachable;
-
-				// we're sure our buffer is big enough now, views avoid some bound checking
-				var view = buf.view(0);
-
-				view.writeByte('P');
-				view.writeIntBig(u32, @as(u32, @intCast(bind_payload_len)));
-				view.writeByte(0); // unnamed stored procedure
-				view.write(sql);
-				// null terminate sql string, and we'll be specifying 0 parameter types
-				view.write(&.{0, 0, 0});
-
-				// DESCRIBE UNNAMED PORTAL + SYNC
-				view.write(&.{
-					// Describe
-					'D',
-					// Describe payload length
-					0, 0, 0, 6,
-					// Describe a prepared statement
-					'S',
-					// Prepared statement name (unnamed)
-					0,
-					// Sync
-					'S',
-					// Sync payload length
-					0, 0, 0, 4
-				});
-				try self.write(buf.string());
-			}
-
-			// no longer idle, we're now in a query
-			self._state = .query;
-
-			// First message we expect back is a ParseComplete, which has no data.
-			{
-				// If Parse fails, then the server won't reply to our other messages
-				// (i.e. Describ) and it'l immediately send a ReadyForQuery.
-				const msg = self.read() catch |err| {
-					self.readyForQuery() catch {};
-					return err;
-				};
-
-				if (msg.type != '1') {
-					return self.unexpectedMessage();
-				}
-			}
-
-			{
-				// we expect a ParameterDescription message
-				const msg = try self.read();
-				if (msg.type != 't') {
-					return self.unexpectedMessage();
-				}
-
-				const data = msg.data;
-				if (std.mem.readIntBig(i16, data[0..2]) != param_oids.len) {
-					// We weren't given the correct # of parameters. We need to return an
-					// error, but the server doesn't know that we're bailing. We still
-					// need to read the rest of its messages
-					const next = try self.read();
-					if (next.type == 'T' or next.type == 'n') {
-						self.readyForQuery() catch {};
-					} else {
-						self.unexpectedMessage() catch {};
-					}
-					return error.ParameterCount;
-				} else {
-					var pos: usize = 2;
-					for (0..param_oids.len) |i| {
-						const end = pos + 4;
-						param_oids[i] = std.mem.readIntBig(i32, data[pos..end][0..4]);
-						pos = end;
-					}
-				}
-			}
-
-			{
-				// We now expect an answer to our describe message.
-				// This is either going to be a RowDescription, or a NoData. NoData means
-				// our statement doesn't return any data. Either way, we're going to use
-				// this information when we generate our Bind message, next.
-				const msg = try self.read();
-				switch (msg.type) {
-					'n' => {}, // no data, number_of_columns = 0
-					'T' => {
-						const data = msg.data;
-						number_of_columns = std.mem.readIntBig(u16, data[0..2]);
-						if (number_of_columns > state.oids.len) {
-							// we have more columns than our self._result_state can handle, we
-							// need to create a new Result.State specifically for this
-							dyn_state = true;
-							state = try Result.State.init(allocator, number_of_columns);
-						}
-						const a: ?Allocator = if (opts.column_names) allocator else null;
-						try state.from(number_of_columns, data, a);
-					},
-					else => return self.unexpectedMessage(),
-				}
-			}
-
-			{
-				// finally, we expect a ReadyForQuery response to our Sync
-				try self.readyForQuery();
-			}
-		}
-
-		// Step 2: Bind, Exec, Sync
-		{
-			buf.resetRetainingCapacity();
-			try buf.writeByte('B');
-
-			// length, we'll fill this up once we know
-			_ = try buf.skip(4);
-
-			// name of portal and name of prepared statement, we're using an unnamed
-			// portal and statement, so these are both empty string, so 2 null terminators
-			try buf.write(&.{0, 0});
-
-			// This will take care of parts 1 and 2 - telling PostgreSQL the format that
-			// we're sending the values in as well as actually sending the values.
-			try types.bindParameters(values, param_oids, buf);
-
-			// We just did a bunch of work binding our values, but would you believe it,
-			// we're not done builing our Bind message! The last part is us telling
-			// the server what format it should use for each column that it's sending
-			// back (if any).
-			try types.resultEncoding(state.oids[0..number_of_columns], buf);
-
-			{
-				// fill in the length of our Bind message
-				var view = buf.view(1);
-				// don't include the 'B' type
-				view.writeIntBig(u32, @as(u32, @intCast(buf.len() - 1)));
-			}
-
-			try buf.write(&.{
-				'E',
-				// message length
-				0, 0, 0, 9,
-				// unname portal
-				0,
-				// no row limit
-				0, 0, 0, 0,
-				// sync
-				'S',
-				// message length
-				0, 0, 0, 4
-			});
-
-			try self.write(buf.string());
-
-			{
-				const msg = self.read() catch |err| {
-					self.readyForQuery() catch {};
-					return err;
-				};
-				if (msg.type != '2') {
-					// expecting a BindComplete
-					return self.unexpectedMessage();
-				}
-			}
-		}
-
-		// our call to readyForQuery above changed the state, but as far as we're
-		// concerned, we're still doing the query.
-		self._state = .query;
-
-		return .{
-			._conn = self,
-			._state = state,
-			._allocator = allocator,
-			._dyn_state = dyn_state,
-			._oids = state.oids[0..number_of_columns],
-			._values = state.values[0..number_of_columns],
-			.column_names = if (opts.column_names) state.names[0..number_of_columns] else &[_][]const u8{},
-			.number_of_columns = number_of_columns,
-		};
+		return stmt.execute();
 	}
 
 	pub fn row(self: *Conn, sql: []const u8, values: anytype) !?QueryRow {
@@ -579,7 +369,7 @@ pub const Conn = struct {
 				'Z' => return affected,
 				'T' => affected = 0,
 				'D' => affected = (affected orelse 0) + 1,
- 				else => return self.unexpectedMessage(),
+ 				else => return self.unexpectedDBMessage(),
 			}
 		}
 	}
@@ -599,7 +389,7 @@ pub const Conn = struct {
 
 	fn authSASL(self: *Conn, opts: AuthOpts, req: proto.AuthenticationRequest.SASL) !void {
 		if (!req.scram_sha_256) {
-			return self.unexpectedMessage();
+			return self.unexpectedDBMessage();
 		}
 		var buf = &self._buf;
 
@@ -704,7 +494,7 @@ pub const Conn = struct {
 		}
 	}
 
-	fn write(self: *Conn, data: []const u8) !void {
+	pub fn write(self: *Conn, data: []const u8) !void {
 		self._stream.writeAll(data) catch |err| {
 			self._state = .fail;
 			return err;
@@ -730,7 +520,7 @@ pub const Conn = struct {
 		return error.PG;
 	}
 
-	fn unexpectedMessage(self: *Conn) error{UnexpectedDBMessage} {
+	pub fn unexpectedDBMessage(self: *Conn) error{UnexpectedDBMessage} {
 		self._state = .fail;
 		return error.UnexpectedDBMessage;
 	}
@@ -747,7 +537,7 @@ pub const Conn = struct {
 	pub fn readyForQuery(self: *Conn) !void {
 		const msg = try self.read();
 		if (msg.type != 'Z') {
-			return self.unexpectedMessage();
+			return self.unexpectedDBMessage();
 		}
 	}
 };
@@ -865,16 +655,6 @@ test "Conn: parse error" {
 
 	// connection is still usable
 	try t.expectEqual(2, t.scalar(&c, "select 2"));
-}
-
-test "Conn: wrong parameter count" {
-	var c = t.connect(.{});
-	defer c.deinit();
-	try t.expectError(error.ParameterCount, c.query("select $1", .{}));
-	try t.expectError(error.ParameterCount, c.query("select $1", .{1, 2}));
-
-	// connection is still usable
-	try t.expectEqual(3, t.scalar(&c, "select 3"));
 }
 
 test "Conn: bind error" {
@@ -1505,6 +1285,23 @@ test "PG: JSON struct" {
 	const row = (try result.next()) orelse unreachable;
 	try t.expectString("{\"id\":1,\"name\":\"Leto\"}", row.get([]u8, 0));
 	try t.expectString("{\"id\": 2, \"name\": \"Ghanima\"}", row.get(?[]const u8, 1).?);
+}
+
+test "Conn: prepare" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	var stmt = try c.prepare("select $1::int where $2");
+	try stmt.bind(938);
+	try stmt.bind(true);
+
+	var result = try stmt.execute();
+	defer result.deinit();
+
+	var row = (try result.next()) orelse unreachable;
+	try t.expectEqual(938, row.get(i32, 0));
+
+	try t.expectEqual(null, try result.next());
 }
 
 test "PG: row" {

@@ -44,11 +44,11 @@ while (try result.next()) |row| {
 ### open(allocator: std.mem.Allocator, opts: Conn.ConnectOpts) !Conn
 Opens a connection, or returns an error. Prefer creating connections through the pool. Connection options are:
 
-* `host`: Defaults to `"127.0.0.1"`
-* `port`: Defaults to `5432`
-* `write_buffer` - Size of the write buffer, used when sending messages to the server. Will temporarily allocate more space as needed. If you're writing large SQL or have large parameters (e.g. long text values), making this larger might improve performance a little. Defaults to `2048`.
-* `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Detauls to `4096`.
-* `result_state_size`: Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. The Default to `32`. 
+* `host` - Defaults to `"127.0.0.1"`
+* `port` - Defaults to `5432`
+* `write_buffer` - Size of the write buffer, used when sending messages to the server. Will temporarily allocate more space as needed. If you're writing large SQL or have large parameters (e.g. long text values), making this larger might improve performance a little. Defaults to `2048`, cannot be less than `128`.
+* `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Defaults to `4096`.
+* `result_state_size` - Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. Defaults to `32`. 
 
 ### deinit(conn: \*Conn) void
 Closes the connection and releases its resources. This method should not be used when the connection comes from the pool.
@@ -60,7 +60,7 @@ Releases the connection back to the pool. The pool might decide to close the con
 Executes the query with arguments, returns the number of rows affected, or null. Should not be used with a query that returns rows.
 
 ### query(sql: []const u8, args: anytype) !Result
-Executes the query with arguments, returns a result. `deinit`, and possibly `drain`, must be called on the returned `Result`.
+Executes the query with arguments, returns [Result](#result). `deinit`, and possibly `drain`, must be called on the returned `result`.
 
 ### queryOpts(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
 Same as `query` but takes options:
@@ -70,10 +70,16 @@ Same as `query` but takes options:
 - `allocator` - The allocator to use for any allocations needed when executing the query and reading the results. When `null` this will default to the connection's allocator. If you were executing a query in a web-request and each web-request had its own arena tied to the lifetime of the request, it might make sense to use that arena. Defaults to `null`.
 
 ### row(sql: []const u8, args: anytype) !?QueryRow
-Executes the query with arguments, returns a single row. Returns an error if the query returns more than one row. Returns null if the query returns no row. `deinit` must be called on the returned `Row`.
+Executes the query with arguments, returns a single row. Returns an error if the query returns more than one row. Returns `null` if the query returns no row. `deinit` must be called on the returned `QueryRow`.
 
 ### row(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
 Same as `row` but takes the same options as `queryOpts`
+
+### prepare(sql: []const u8) !Stmt
+Creates a [Stmt](#stmt). It is generally better to use `query`, `row` or `exec`, 
+
+### prepareOpts(sql: []const u8, opts: Conn.QueryOpts) !Stmt
+Same as `prepare` but takes the same options as `queryOpts`
 
 ### begin() !void
 Calls `_ = try execOpts("begin", .{}, .{})`
@@ -182,6 +188,27 @@ Allocates a slice and populates it with all values.
 
 ### fill(it: Iterator(T), into: []T) void
 Fill `into` with values of the iterator. `into` can be smaller than `it.len`, in which case only `into.len` values will be filled. This can be a bit faster than calling `next()` multiple times.
+
+## Stmt
+For most queries, you should use the `conn.query(...)`, `conn.row(...)` or `conn.exec(...)` methods. For queries with parameters, these methods look like:
+
+```zig
+var stmt = Stmt.init(conn, opts)
+errdefer stmt.deinit();
+
+try stmt.prepare(sql);
+inline for (parameters) |param| {
+  try stmt.bind(param);
+}
+
+return stmt.execute();
+```
+
+You can create a statement directly using `conn.prepare(sql)` or `conn.prepareOpts(sql, ConnQueryOpts{...})` and call `stmt.bind(value: anytype)` and `execute()` directly.
+
+The main reason to do this is to have more flexibility in binding parameters (e.g. such as when creating dynanmic SQL where all the parameters aren't fixed at compile-time).
+
+Note that `stmt.deinit()` should only be called if `stmt.execute()` is not called or returns an error. Once `stmt.execute()` returns a [Result](#result), `stmt` should be considered invalid. As we can see in the above example, `stmt.deinit()` is only called on `errdefer`.
 
 ## Important Notice 1 - Bind vs Read
 When you read a value, such as `row.get(i32, 0)`, the library assumes you know what you're doing and that column 0 really is a non-null 32-bit integer. `row.get` doesn't return an error union. There are some assertions, but these are disabled in ReleaseFast and ReleaseSmall. You can also disable these assertions in Debug/ReleaseSafe by placing `pub const pg_assert = false;` in your root, (e.g. `main.zig`):

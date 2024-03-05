@@ -954,53 +954,9 @@ pub const Encode = struct {
 	}
 };
 
-// Writes 2 pieces of the Bind message: the parameter encoding types and
-// the parameters themselves. Assumes buf is positioned correctly, i.e. the Bind
-// message has been written up to but excluding
-// "The number of parameter format codes that follow"
-pub fn bindParameters(values: anytype, oids: []i32, buf: *buffer.Buffer) !void {
-	if (values.len == 0) {
-		// 0 as u16 Big (number of parameter types)
-		// 0 as u16 Big (number of parameters)
-		try buf.write(&.{0, 0, 0, 0});
-		return;
-	}
-
-	// number of parameters types we're sending a
-	try buf.writeIntBig(u16, @as(u16, @intCast(values.len)));
-
-	// for each parameter, we specify the format (text or binary), this is the
-	// position within buf of where to write for the current parameter.
-	var format_pos = buf.len();
-
-	// every type takes 2 bytes (it's a u16 integer), pre-fill this with a text-type
-	// for all parameters
-	try buf.writeByteNTimes(0, values.len * 2);
-
-	// number of parameters that we're sending
-	try buf.writeIntBig(u16, @as(u16, @intCast(values.len)));
-
-	// buf looks something like/
-	// 'B' - Bind Message
-	//  0, 0, 0, 0 - Length Placeholder
-	//  0, 3       - We're goint to send 3 param types
-	//  0, 0       - Param Format 1 (we default to text)  <- format_pos
-	//  0, 0       - Param Format 2 (we default to text)
-	//  0, 0       - Param Format 3 (we default to text)
-	//  0, 3       - We're going to send 3 param values
-	//
-	// At this point, we can use buf.write() to add values to the message
-	// and we can use buf.writeAt(format_pos + (i*2)) to change the type
-
-	inline for (values, oids) |value, oid| {
-		try bindValue(@TypeOf(value), oid, value, buf, format_pos);
-		format_pos += 2;
-	}
-}
-
 // The oid is what PG is expecting. In some cases, we'll use that to figure
 // out what to do.
-fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
+pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
 	switch (@typeInfo(T)) {
 		.Null => {
 			// type can stay 0 (text)

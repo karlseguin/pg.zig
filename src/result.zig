@@ -5,6 +5,7 @@ const types = lib.types;
 const proto = lib.proto;
 const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub const Result = struct {
 	number_of_columns: usize,
@@ -13,11 +14,7 @@ pub const Result = struct {
 	column_names: [][]const u8,
 
 	_conn: *Conn,
-	_allocator: Allocator,
-
-	// when true, then _state was dynamically allocated and we're responsible for it
-	_dyn_state: bool,
-	_state: State,
+	_arena: ArenaAllocator,
 
 	// a sliced version of _state.oids (so we don't have to keep reslicing it to
 	// number_of_columns on each row)
@@ -28,21 +25,15 @@ pub const Result = struct {
 	_values: []State.Value,
 
 	pub fn deinit(self: Result) void {
-		const allocator = self._allocator;
-		if (self._dyn_state) {
-			self._state.deinit(allocator);
-		}
-
-		for (self.column_names) |name| {
-			allocator.free(name);
-		}
-
 		// value.data references the buffer of the reader, this buffer is potentially
 		// reused and potentially discarded. There are at least a few very good
 		// reasons why the least we can do is blank it out.
 		for (self._values) |*value| {
 			value.data = &[_]u8{};
 		}
+
+		self._arena.deinit();
+
 		self._conn._reader.endFlow() catch {
 			// this can only fail in extreme conditions (OOM) and it will only impact
 			// the next query (and if the app is using the pool, the pool will try to
