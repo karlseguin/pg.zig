@@ -75,7 +75,7 @@ pub const Numeric = struct {
 		var str_buf: [512]u8 = undefined;
 		var stream = std.io.fixedBufferStream(&str_buf);
 
-		try std.fmt.formatFloatDecimal(value, .{}, stream.writer());
+		try std.fmt.formatType(value, "d", .{}, stream.writer(), 0);
 		return encodeValidString(stream.getWritten(), buf);
 	}
 

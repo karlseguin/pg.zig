@@ -1307,7 +1307,7 @@ test "PG: numeric" {
 		try expectNumeric(row.get(types.Numeric, 14), "123456.987654");
 		try expectNumeric(row.get(types.Numeric, 15), "1234567.9876543");
 		try expectNumeric(row.get(types.Numeric, 16), "12345678.98765432");
-		try expectNumeric(row.get(types.Numeric, 17), "123456789.98765433");
+		try expectNumeric(row.get(types.Numeric, 17), "123456789.987654321");
 		try expectNumeric(row.get(types.Numeric, 18), "0.0");
 		try expectNumeric(row.get(types.Numeric, 19), "1.0");
 		try expectNumeric(row.get(types.Numeric, 20), "0.0");
