@@ -1413,6 +1413,22 @@ test "PG: Record" {
 	}
 }
 
+test "Conn: application_name" {
+	var conn = try Conn.open(t.allocator, .{});
+	defer conn.deinit();
+	try conn.auth(.{
+		.username = "pgz_user_clear",
+		.password = "pgz_user_clear_pw",
+		.database = "postgres",
+		.application_name = "pg_zig_test",
+	});
+
+	const row = (try conn.row("show application_name", .{})) orelse unreachable;
+	defer row.deinit();
+
+	try t.expectString("pg_zig_test", row.get([]const u8, 0));
+}
+
 fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {
 	var str_buf: [50]u8 = undefined;
 	try t.expectString(expected, numeric.toString(&str_buf));

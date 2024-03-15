@@ -106,6 +106,8 @@ Authentications the request. Prefer creating connections through the pool. Auth 
 * `password`: Defaults to `null`
 * `database`: Defaults to `null`
 * `timeout` : Defaults to `10_000` (milliseconds)
+* `application_name`: Defaults to `null`
+* `params`: Defaults to `null`. An `std.StringHashMap([]const u8)`
 
 ### release(conn: \*Conn) void
 Releases the connection back to the pool. The pool might decide to close the connection and open a new one.

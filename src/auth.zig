@@ -13,6 +13,8 @@ pub const Opts = struct {
 	password: ?[]const u8 = null,
 	database: ?[]const u8 = null,
 	timeout: u32 = 10_000,
+	application_name: ?[]const u8 = null,
+	startup_parameters: ?std.StringHashMap([]const u8) = null
 };
 
 // Weird return (but Zig has no error payloads, so..)
@@ -34,6 +36,7 @@ pub fn auth(stream: Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const
 		// write our startup message
 		const startup_message = proto.StartupMessage{
 			.username = opts.username,
+			.application_name = opts.application_name,
 			.database = opts.database orelse opts.username,
 		};
 
