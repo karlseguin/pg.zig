@@ -30,21 +30,29 @@ pub fn main() !void {
 		var status = Status.pass;
 		slowest.startTiming();
 
-		const is_unnamed_test = std.mem.eql(u8, "test_0", t.name);
+		const is_unnamed_test = std.mem.endsWith(u8, t.name, ".test_0");
 		if (env.filter) |f| {
 			if (!is_unnamed_test and std.mem.indexOf(u8, t.name, f) == null) {
 				continue;
 			}
 		}
 
-
 		const result = t.func();
 		if (is_unnamed_test) {
 			continue;
 		}
 
-		// strip out the test. prefix
-		const friendly_name = t.name[5..];
+		const friendly_name = blk: {
+			const name = t.name;
+			var it = std.mem.splitScalar(u8, name, '.');
+			while (it.next()) |value| {
+				if (std.mem.eql(u8, value, "test")) {
+					const rest = it.rest();
+					break :blk if (rest.len > 0) rest else name;
+				}
+			}
+			break :blk name;
+		};
 		const ns_taken = slowest.endTiming(friendly_name);
 
 		if (std.testing.allocator_instance.deinit() == .leak) {
