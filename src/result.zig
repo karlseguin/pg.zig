@@ -708,11 +708,7 @@ test "Result: text and bytea" {
 		defer t.allocator.free(s1);
 		@memcpy(s1, "Leto");
 
-		const s2 = try t.allocator.alloc(u8, 7);
-		defer t.allocator.free(s2);
-		@memcpy(s2, "Ghanima");
-
-		var result = try c.query(sql, .{s1, s2});
+		var result = try c.query(sql, .{s1, constString()});
 		defer result.deinit();
 		const row = (try result.next()).?;
 		try t.expectString("Leto", row.get([]u8, 0));
@@ -731,6 +727,10 @@ test "Result: text and bytea" {
 		try t.expectEqual(null, row.get(?[]u8, 1));
 		try result.drain();
 	}
+}
+
+fn constString() []const u8 {
+	return "Ghanima";
 }
 
 test "Result: optional" {

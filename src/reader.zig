@@ -2,14 +2,14 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const builtin = @import("builtin");
 
-const os = std.os;
+const posix = std.posix;
 const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
 // to everyone else, this is our reader
 pub const Reader = ReaderT(std.net.Stream);
 
-const zero_timeval = std.mem.toBytes(os.timeval{.tv_sec = 0, .tv_usec = 0});
+const zero_timeval = std.mem.toBytes(posix.timeval{.tv_sec = 0, .tv_usec = 0});
 
 // generic just for testing within this file
 fn ReaderT(comptime T: type) type {
@@ -68,13 +68,13 @@ fn ReaderT(comptime T: type) type {
 		pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
 			var timeval = zero_timeval;
 			if (timeout_ms) |ms| {
-				timeval = std.mem.toBytes(os.timeval{
+				timeval = std.mem.toBytes(posix.timeval{
 					.tv_sec = @intCast(@divTrunc(ms, 1000)),
 					.tv_usec = @intCast(@mod(ms, 1000) * 1000),
 				});
 			}
 			if (!builtin.is_test) {
-				return os.setsockopt(self.stream.handle, os.SOL.SOCKET, os.SO.RCVTIMEO, &timeval);
+				return posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
 			}
 			self.allocator = allocator orelse self.default_allocator;
 		}

@@ -1,3 +1,11 @@
+// in your build.zig, you can specify a custom test runner:
+// const tests = b.addTest(.{
+//   .target = target,
+//   .optimize = optimize,
+//   .test_runner = "test_runner.zig", // add this line
+//   .root_source_file = .{ .path = "src/main.zig" },
+// });
+
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -49,7 +57,7 @@ pub fn main() !void {
 				if (std.mem.eql(u8, value, "test")) {
 					const rest = it.rest();
 					break :blk if (rest.len > 0) rest else name;
-				}
+					}
 			}
 			break :blk name;
 		};
@@ -100,7 +108,7 @@ pub fn main() !void {
 	printer.fmt("\n", .{});
 	try slowest.display(printer);
 	printer.fmt("\n", .{});
-	std.os.exit(if (fail == 0) 0 else 1);
+	std.posix.exit(if (fail == 0) 0 else 1);
 }
 
 const Printer = struct {
