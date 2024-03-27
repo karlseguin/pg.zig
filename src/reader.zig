@@ -14,6 +14,10 @@ const zero_timeval = std.mem.toBytes(posix.timeval{.tv_sec = 0, .tv_usec = 0});
 // generic just for testing within this file
 fn ReaderT(comptime T: type) type {
 	return struct {
+		// Whether or not we've put a timeout on the request. This helps avoid
+		// system calls when no timeout is set.
+		has_timeout: bool,
+
 		// Provided when the reader was allocated (which is the allocator given
 		// when the connection/pool was created). Owns `static` and unless a query-
 		// specific allocator is provided, will be used for any dynamic allocations.
@@ -48,6 +52,7 @@ fn ReaderT(comptime T: type) type {
 				.buf = static,
 				.stream = stream,
 				.static = static,
+				.has_timeout = false,
 				.allocator = allocator,
 				.default_allocator = allocator,
 			};
@@ -66,16 +71,18 @@ fn ReaderT(comptime T: type) type {
 		// requires more than static.len other rows within the same result might
 		// as well.
 		pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
-			var timeval = zero_timeval;
 			if (timeout_ms) |ms| {
-				timeval = std.mem.toBytes(posix.timeval{
+				const timeval = std.mem.toBytes(posix.timeval{
 					.tv_sec = @intCast(@divTrunc(ms, 1000)),
 					.tv_usec = @intCast(@mod(ms, 1000) * 1000),
 				});
+				try posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
+				self.has_timeout = true;
+			} else if (self.has_timeout) {
+				try posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
+				self.has_timeout = false;
 			}
-			if (!builtin.is_test) {
-				return posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
-			}
+
 			self.allocator = allocator orelse self.default_allocator;
 		}
 
