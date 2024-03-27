@@ -265,7 +265,7 @@ pub const Conn = struct {
 	}
 
 	pub fn query(self: *Conn, sql: []const u8, values: anytype) !Result {
-		return self.queryOpts(sql, values, .{});
+	return self.queryOpts(sql, values, .{});
 	}
 
 	pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !Result {
