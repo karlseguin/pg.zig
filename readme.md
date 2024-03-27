@@ -497,7 +497,7 @@ The metrics are:
 
 * `pg_queries` - counts the number of queries
 * `pg_pool_empty` - counts how often the pool is empty
-* `pg_pool_dirty` - counts how often a connection is released back into the pool in an unclean state (thus requiring the connection to be closed and the pool to re-open another connection)
-* `pg_alloc_params` - counts the number of parameter states that were allocated. This indicates that your queries have more paraemters than `result_state_size`. If this happens often, consider increasing `result_state_size`.
+* `pg_pool_dirty` - counts how often a connection is released back into the pool in an unclean state (thus requiring the connection to be closed and the pool to re-open another connection). This could indicate that results aren't being fully drained (either by calling `next()` until `null` is returned or explicitly calling the `drain()` method)
+* `pg_alloc_params` - counts the number of parameter states that were allocated. This indicates that your queries have more parameters than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_columns` - counts the number of columns states that were allocated. This indicates that your queries are returning more columns than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_reader` - counts the number of bytes allocated while reading messages from PostgreSQL. This generally happens as a result of large result (e.g. selecting large text fields). Controlled by the `read_buffer` configuration option.
