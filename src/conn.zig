@@ -523,7 +523,7 @@ pub const Conn = struct {
 	}
 
 	pub fn unexpectedDBMessage(self: *Conn, context: []const u8, actual: lib.Message) error{UnexpectedDBMessage} {
-		lib.log.debug("Unexpected db message: {s}\n Got: {c} - {any}", .{context, actual.type, actual.data[0..@max(actual.data.len, 100)]});
+		lib.log.debug("Unexpected db message: {s}\n Got: {c} - {any}", .{context, actual.type, actual.data[0..@min(actual.data.len, 100)]});
 		self._state = .fail;
 		return error.UnexpectedDBMessage;
 	}
