@@ -252,7 +252,6 @@ pub const Conn = struct {
 			switch (msg.type) {
 				'Z' => return,
 				'K' => {}, // TODO: BackendKeyData
-				'S' => {}, // TODO: ParameterStatus,
 				else => return self.unexpectedDBMessage("auth-end (Z, K, S)", msg),
 			}
 		}
@@ -489,6 +488,7 @@ pub const Conn = struct {
 					};
 					return msg;
 				},
+				'S' => {}, // TODO: ParameterStatus,
 				'N' => {}, // TODO: NoticeResponse
 				'E' => return self.setErr(msg.data),
 				else => return msg,
