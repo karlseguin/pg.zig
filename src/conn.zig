@@ -219,12 +219,17 @@ pub const Conn = struct {
 			// read the server's response
 			const res = try self.read();
 			if (res.type != 'R') {
-				return self.unexpectedDBMessage();
+				return self.unexpectedDBMessage("auth-response (R)", res);
 			}
 
 			switch (try proto.AuthenticationRequest.parse(res.data)) {
 				.ok => expect_response = false,
-				.sasl => |sasl| try self.authSASL(opts, sasl),
+				.sasl => |sasl| {
+					if (!sasl.scram_sha_256) {
+						return self.unexpectedDBMessage("auth-sasl", res);
+					}
+					try self.authSASL(opts);
+				},
 				.md5 => |salt| try self.authMD5Password(opts, salt),
 				.password => try self.authPassword(opts.password orelse ""),
 			}
@@ -235,10 +240,10 @@ pub const Conn = struct {
 			// and we're now waiting for a reply, server should send a final auth ok message
 			const res = try self.read();
 			if (res.type != 'R') {
-				return self.unexpectedDBMessage();
+				return self.unexpectedDBMessage("auth-response-2 (R)", res);
 			}
 			if (std.meta.activeTag(try proto.AuthenticationRequest.parse(res.data)) != .ok) {
-				return self.unexpectedDBMessage();
+				return self.unexpectedDBMessage("auth-response-3", res);
 			}
 		}
 
@@ -248,7 +253,7 @@ pub const Conn = struct {
 				'Z' => return,
 				'K' => {}, // TODO: BackendKeyData
 				'S' => {}, // TODO: ParameterStatus,
-				else => return self.unexpectedDBMessage(),
+				else => return self.unexpectedDBMessage("auth-end (Z, K, S)", msg),
 			}
 		}
 	}
@@ -369,7 +374,7 @@ pub const Conn = struct {
 				'Z' => return affected,
 				'T' => affected = 0,
 				'D' => affected = (affected orelse 0) + 1,
- 				else => return self.unexpectedDBMessage(),
+ 				else => return self.unexpectedDBMessage("exec (C, Z, T, D)", msg),
 			}
 		}
 	}
@@ -387,10 +392,7 @@ pub const Conn = struct {
 		_ = try self.execOpts("rollback", .{}, .{});
 	}
 
-	fn authSASL(self: *Conn, opts: AuthOpts, req: proto.AuthenticationRequest.SASL) !void {
-		if (!req.scram_sha_256) {
-			return self.unexpectedDBMessage();
-		}
+	fn authSASL(self: *Conn, opts: AuthOpts) !void {
 		var buf = &self._buf;
 
 		var sasl = try SASL.init(self._allocator);
@@ -520,7 +522,8 @@ pub const Conn = struct {
 		return error.PG;
 	}
 
-	pub fn unexpectedDBMessage(self: *Conn) error{UnexpectedDBMessage} {
+	pub fn unexpectedDBMessage(self: *Conn, context: []const u8, actual: lib.Message) error{UnexpectedDBMessage} {
+		lib.log.debug("Unexpected db message: {s}\n Got: {c} - {any}", .{context, actual.type, actual.data[0..@max(actual.data.len, 100)]});
 		self._state = .fail;
 		return error.UnexpectedDBMessage;
 	}
@@ -537,7 +540,7 @@ pub const Conn = struct {
 	pub fn readyForQuery(self: *Conn) !void {
 		const msg = try self.read();
 		if (msg.type != 'Z') {
-			return self.unexpectedDBMessage();
+			return self.unexpectedDBMessage("Z", msg);
 		}
 	}
 };

@@ -139,14 +139,14 @@ pub const Stmt = struct {
 		// First message we expect back is a ParseComplete, which has no data.
 		{
 			// If Parse fails, then the server won't reply to our other messages
-			// (i.e. Describ) and it'l immediately send a ReadyForQuery.
+			// (i.e. Describe) and it'l immediately send a ReadyForQuery.
 			const msg = conn.read() catch |err| {
 				conn.readyForQuery() catch {};
 				return err;
 			};
 
 			if (msg.type != '1') {
-				return conn.unexpectedDBMessage();
+				return conn.unexpectedDBMessage("parse-complete (1)", msg);
 			}
 		}
 
@@ -156,7 +156,7 @@ pub const Stmt = struct {
 			// we expect a ParameterDescription message
 			const msg = try conn.read();
 			if (msg.type != 't') {
-				return conn.unexpectedDBMessage();
+				return conn.unexpectedDBMessage("param-desc (t)", msg);
 			}
 
 			var param_oids = self.param_oids;
@@ -198,7 +198,7 @@ pub const Stmt = struct {
 					try state.from(column_count, data, a);
 					self.column_count = column_count;
 				},
-				else => return conn.unexpectedDBMessage(),
+				else => return conn.unexpectedDBMessage("row-desc (n, T)", msg),
 			}
 		}
 
@@ -288,7 +288,7 @@ pub const Stmt = struct {
 			};
 			if (msg.type != '2') {
 				// expecting a BindComplete
-				return conn.unexpectedDBMessage();
+				return conn.unexpectedDBMessage("bind-complete (2)", msg);
 			}
 		}
 
