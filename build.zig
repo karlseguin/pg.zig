@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) !void {
 			.root_source_file = .{ .path = "src/pg.zig" },
 			.target = target,
 			.optimize = optimize,
-			.test_runner = "test_runner.zig",
+			.test_runner = .{.path = "test_runner.zig"},
 		});
 		addLibs(lib_test, modules);
 
