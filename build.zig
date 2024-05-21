@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) !void {
 
 		// Expose this as a module that others can import
 	_ = b.addModule("pg", .{
-		.root_source_file  = .{ .path = "src/pg.zig" },
+		.root_source_file  = b.path("src/pg.zig"),
 		.imports = &.{
 			.{.name = "buffer", .module = modules.get("buffer").?},
 			.{.name = "metrics", .module = modules.get("metrics").?}
@@ -29,10 +29,10 @@ pub fn build(b: *std.Build) !void {
 	{
 		// test step
 		const lib_test = b.addTest(.{
-			.root_source_file = .{ .path = "src/pg.zig" },
+			.root_source_file = b.path("src/pg.zig"),
 			.target = target,
 			.optimize = optimize,
-			.test_runner = .{.path = "test_runner.zig"},
+			.test_runner = b.path("test_runner.zig"),
 		});
 		addLibs(lib_test, modules);
 
