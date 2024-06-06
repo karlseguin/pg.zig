@@ -6,18 +6,18 @@ var metrics = Metrics{
 	.queries = m.Counter(usize).Impl.init("pg_query", .{}),
 	.pool_empty = m.Counter(usize).Impl.init("pg_pool_empty", .{}),
 	.pool_dirty = m.Counter(usize).Impl.init("pg_pool_dirty", .{}),
-	.alloc_params = m.Counter(u64).Impl.init("pg_alloc_params", .{}),
-	.alloc_columns = m.Counter(u64).Impl.init("pg_alloc_columns", .{}),
-	.alloc_reader = m.Counter(u64).Impl.init("pg_alloc_reader", .{}),
+	.alloc_params = m.Counter(usize).Impl.init("pg_alloc_params", .{}),
+	.alloc_columns = m.Counter(usize).Impl.init("pg_alloc_columns", .{}),
+	.alloc_reader = m.Counter(usize).Impl.init("pg_alloc_reader", .{}),
 };
 
 const Metrics = struct {
 	queries: m.Counter(usize).Impl,
 	pool_empty: m.Counter(usize).Impl,
 	pool_dirty: m.Counter(usize).Impl,
-	alloc_params: m.Counter(u64).Impl,
-	alloc_columns: m.Counter(u64).Impl,
-	alloc_reader: m.Counter(u64).Impl,
+	alloc_params: m.Counter(usize).Impl,
+	alloc_columns: m.Counter(usize).Impl,
+	alloc_reader: m.Counter(usize).Impl,
 };
 
 pub fn write(writer: anytype) !void {
