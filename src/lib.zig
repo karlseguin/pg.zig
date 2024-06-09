@@ -14,6 +14,7 @@ pub const metrics = @import("metrics.zig");
 const result = @import("result.zig");
 pub const Row = result.Row;
 pub const Result = result.Result;
+pub const Iterator = result.Iterator;
 pub const QueryRow = result.QueryRow;
 
 const reader = @import("reader.zig");

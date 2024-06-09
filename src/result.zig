@@ -396,7 +396,7 @@ fn IteratorReturnType(comptime T: type) type {
 	};
 }
 
-fn Iterator(comptime T: type) type {
+pub fn Iterator(comptime T: type) type {
 	return struct {
 		_len: usize,
 		_pos: usize,
