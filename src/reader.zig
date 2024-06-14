@@ -59,11 +59,10 @@ fn ReaderT(comptime T: type) type {
 		}
 
 		pub fn deinit(self: Self) void {
-			const allocator = self.default_allocator;
 			if (self.static.ptr != self.buf.ptr) {
 				self.allocator.free(self.buf);
 			}
-			allocator.free(self.static);
+			self.default_allocator.free(self.static);
 		}
 
 		// Between a call to startFlow and endFlow, the reader can re-use any
