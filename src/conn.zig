@@ -100,7 +100,7 @@ pub const Conn = struct {
 		const buf = try Buffer.init(allocator, @min(opts.write_buffer orelse 2048, 128));
 		errdefer buf.deinit();
 
-		const reader = try Reader.init(allocator, opts.read_buffer orelse 256, stream);
+		const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
 		errdefer reader.deinit();
 
 		const result_state = try Result.State.init(allocator, opts.result_state_size);
