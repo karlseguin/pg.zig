@@ -386,6 +386,29 @@ pub const QueryRow = struct {
 		return self.row.recordCol(name);
 	}
 
+	pub fn to(self: *const QueryRow, T: type, alloc: Allocator) T {
+	    var result: T = undefined;
+	    var columnIndex: usize = 0;
+		inline for (std.meta.fields(T)) |field| {
+		switch (field.type) {
+		    []u8, []const u8 => @field(result, field.name) = try dupe(alloc, self, columnIndex),
+		    ?[]u8, ?[]const u8 => @field(result, field.name) = try dupeNullable(alloc, self, columnIndex),
+		    else => @field(result, field.name) = self.get(field.type, columnIndex),
+		}
+		columnIndex += 1;
+	    }
+	    return result;
+
+	}
+
+	fn dupeNullable(alloc: Allocator, row: Row, columnIndex: usize) !?[]u8 {
+	    return if (row.get(?[]const u8, columnIndex)) |val| try alloc.dupe(u8, val) else null;
+	}
+
+	fn dupe(alloc: Allocator, row: Row, columnIndex: usize) ![]u8 {
+	    return try alloc.dupe(u8, row.get([]const u8, columnIndex));
+	}
+
 	pub fn deinit(self: *QueryRow) !void {
 		// this is unfortunate
 		try self.result.drain();
