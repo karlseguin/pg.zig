@@ -88,9 +88,6 @@ pub const Stmt = struct {
 		const aa = self.arena.allocator();
 
 		try conn._reader.startFlow(aa, opts.timeout);
-		defer self.conn._reader.endFlow() catch {
-			self.conn._state = .fail;
-		};
 
 		var buf = self.buf;
 		buf.reset();
