@@ -61,7 +61,7 @@ fn ReaderT(comptime T: type) type {
 		pub fn deinit(self: Self) void {
 			const allocator = self.default_allocator;
 			if (self.static.ptr != self.buf.ptr) {
-				allocator.free(self.buf);
+				self.allocator.free(self.buf);
 			}
 			allocator.free(self.static);
 		}
