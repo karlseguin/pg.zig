@@ -231,7 +231,7 @@ Gets a [Record](#record) by column position.
 Gets an [Record](#record) by column name. See [getCol](#getcolcomptime-t-type-column_name-const-u8-t) for performance notes.
 
 ## QueryRow
-A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed.
+A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed. This is a rare case where `deinit()` can fail. In most cases, you can simply throw away the error (because failure is extremely rare and, if the connection came from a pool, it should repair itself).
 
 ## Iterator(T)
 The iterator returned from `row.iterator(T, col)` can be iterated using the `next() ?T` call:
@@ -275,7 +275,7 @@ Gets the next column in the record. This behaves similarly [row.get](#getcomptim
 For most queries, you should use the `conn.query(...)`, `conn.row(...)` or `conn.exec(...)` methods. For queries with parameters, these methods look like:
 
 ```zig
-var stmt = Stmt.init(conn, opts)
+var stmt = try Stmt.init(conn, opts)
 errdefer stmt.deinit();
 
 try stmt.prepare(sql);

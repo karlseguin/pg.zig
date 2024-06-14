@@ -100,7 +100,7 @@ pub const Conn = struct {
 		const buf = try Buffer.init(allocator, @min(opts.write_buffer orelse 2048, 128));
 		errdefer buf.deinit();
 
-		const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
+		const reader = try Reader.init(allocator, opts.read_buffer orelse 256, stream);
 		errdefer reader.deinit();
 
 		const result_state = try Result.State.init(allocator, opts.result_state_size);
@@ -166,7 +166,7 @@ pub const Conn = struct {
 	}
 
 	pub fn prepareOpts(self: *Conn, sql: []const u8, opts: QueryOpts) !Stmt {
-		var stmt = Stmt.init(self, opts);
+		var stmt = try Stmt.init(self, opts);
 		errdefer stmt.deinit();
 		try stmt.prepare(sql);
 		return stmt;
@@ -181,7 +181,7 @@ pub const Conn = struct {
 			return error.ConnectionBusy;
 		}
 
-		var stmt = Stmt.init(self, opts);
+		var stmt = try Stmt.init(self, opts);
 		errdefer stmt.deinit();
 
 		try stmt.prepare(sql);
@@ -209,12 +209,6 @@ pub const Conn = struct {
 			result.deinit();
 			return null;
 		};
-
-		if (try result.next() != null) {
-			try result.drain();
-			result.deinit();
-			return error.MoreThanOneRow;
-		}
 
 		return .{
 			.row = r,
@@ -1139,22 +1133,19 @@ test "PG: row" {
 	const r1 = try c.row("select 1 where $1", .{false});
 	try t.expectEqual(null, r1);
 
-	const r2 = (try c.row("select 2 where $1", .{true})) orelse unreachable;
+	var r2 = (try c.row("select 2 where $1", .{true})) orelse unreachable;
 	try t.expectEqual(2, r2.get(i32, 0));
-	r2.deinit();
+	try r2.deinit();
 
 	// make sure the conn is still valid after a successful row
-	const r3 = (try c.row("select $1::int where $2", .{3, true})) orelse unreachable;
+	var r3 = (try c.row("select $1::int where $2", .{3, true})) orelse unreachable;
 	try t.expectEqual(3, r3.get(i32, 0));
-	r3.deinit();
-
-	// make sure the conn is still valid after a successful row
-	try t.expectError(error.MoreThanOneRow, c.row("select 1 union all select 2", .{}));
+	try r3.deinit();
 
 	// make sure the conn is still valid after MoreThanOneRow error
-	const r4 = (try c.row("select $1::text where $2", .{"hi", true})) orelse unreachable;
+	var r4 = (try c.row("select $1::text where $2", .{"hi", true})) orelse unreachable;
 	try t.expectString("hi", r4.get([]u8, 0));
-	r4.deinit();
+	try r4.deinit();
 }
 
 test "PG: begin/commit" {
@@ -1166,8 +1157,8 @@ test "PG: begin/commit" {
 	_ = try c.exec("insert into simple_table values ($1)", .{"begin_commit"});
 	try c.commit();
 
-	const row = (try c.row("select value from simple_table", .{})).?;
-	defer row.deinit();
+	var row = (try c.row("select value from simple_table", .{})).?;
+	defer row.deinit() catch {};
 
 	try t.expectString("begin_commit", row.get([]u8, 0));
 }
@@ -1194,12 +1185,12 @@ test "PG: bind enums" {
 		\\ values (5, $1, $2, $3, $4)
 	, .{DummyEnum.val1, &[_]DummyEnum{DummyEnum.val1, DummyEnum.val2}, DummyEnum.val2, [_]DummyEnum{DummyEnum.val2, DummyEnum.val1}});
 
-	const row = (try c.row(
+	var row = (try c.row(
 		\\ select col_enum, col_text, col_enum_arr, col_text_arr
 		\\ from all_types
 		\\ where id = 5
 	, .{})) orelse unreachable;
-	defer row.deinit();
+	defer row.deinit() catch {};
 
 	try t.expectString("val1", row.get([]u8, 0));
 	try t.expectString("val2", row.get([]u8, 1));
@@ -1231,12 +1222,12 @@ test "PG: numeric" {
 
 	{
 		// read
-		const row = (try c.row(
+		var row = (try c.row(
 			\\ select 'nan'::numeric, '+Inf'::numeric, '-Inf'::numeric,
 			\\ 0::numeric, 0.0::numeric, -0.00009::numeric, -999999.888880::numeric,
 			\\ 0.000008, 999999.888807::numeric, 123456.78901234::numeric(14, 8)
 		, .{})).?;
-		defer row.deinit();
+		defer row.deinit() catch {};
 
 		try t.expectEqual(true, std.math.isNan(row.get(f64, 0)));
 		try t.expectEqual(true, std.math.isInf(row.get(f64, 1)));
@@ -1252,7 +1243,7 @@ test "PG: numeric" {
 
 	{
 		// write + write
-		const row = (try c.row(
+		var row = (try c.row(
 			\\ select
 			\\   $1::numeric, $2::numeric, $3::numeric,
 			\\   $4::numeric, $5::numeric, $6::numeric,
@@ -1275,7 +1266,7 @@ test "PG: numeric" {
 			-999999999.9999999, @as(f64, -999999999.9999999),
 			&[_][]const u8{"1.1", "-0.0034"}
 		})).?;
-		defer row.deinit();
+		defer row.deinit() catch {};
 
 		{
 			// test the pg.Numeric fields
@@ -1333,10 +1324,10 @@ test "PG: char" {
 	defer c.deinit();
 
 	// read
-	const row = (try c.row(
+	var row = (try c.row(
 		\\ select $1::char[], $2::char[], $3::char[], $4::char[]
 	, .{&[_]u8{','}, &[_]u8{',', '"'}, &[_]u8{'\\', 'a', ' '}, &[_]u8{'z', '@'}})).?;
-	defer row.deinit();
+	defer row.deinit() catch {};
 
 	// used for our arrays
 	const aa = t.arena.allocator();
@@ -1389,13 +1380,35 @@ test "PG: isUnique" {
 	}
 }
 
+test "PG: large read" {
+	var c = t.connect(.{.read_buffer = 500});
+	defer c.deinit();
+
+	{
+		// want this to be larger than our read_buffer
+		var rows = try c.query("select $1::text", .{"!" ** 1000});
+		defer rows.deinit();
+
+		const row = (try rows.next()).?;
+		try t.expectString("!" ** 1000, row.get([]u8, 0));
+		try t.expectEqual(null, try rows.next());
+	}
+
+	{
+		// with a row
+		var row = (try c.row("select $1::text", .{"z" ** 1000})).?;
+		defer row.deinit() catch {};
+		try t.expectString("z" ** 1000, row.get([]u8, 0));
+	}
+}
+
 test "PG: Record" {
 	var c = t.connect(.{});
 	defer c.deinit();
 
 	{
 		var row = (try c.row("select row(9001, 'hello'::text)", .{})).?;
-		defer row.deinit();
+		defer row.deinit() catch {};
 
 		var record = row.record(0);
 		try t.expectEqual(2, record.number_of_columns);
@@ -1405,7 +1418,7 @@ test "PG: Record" {
 
 	{
 		var row = (try c.row("select row(null)", .{})).?;
-		defer row.deinit();
+		defer row.deinit() catch {};
 
 		var record = row.record(0);
 		try t.expectEqual(1, record.number_of_columns);
@@ -1423,8 +1436,8 @@ test "Conn: application_name" {
 		.application_name = "pg_zig_test",
 	});
 
-	const row = (try conn.row("show application_name", .{})) orelse unreachable;
-	defer row.deinit();
+	var row = (try conn.row("show application_name", .{})) orelse unreachable;
+	defer row.deinit() catch {};
 
 	try t.expectString("pg_zig_test", row.get([]const u8, 0));
 }
