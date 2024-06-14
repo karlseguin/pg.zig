@@ -354,7 +354,7 @@ test "Pool: Query/Row" {
 
 		for (0..3)  |_| {
 			var row = try pool.row("select col_int8, col_text from all_types where id = $1", .{101}) orelse unreachable;
-			defer row.deinit();
+			defer row.deinit() catch {};
 
 			try t.expectEqual(2, row.get(i64, 0));
 			try t.expectString("val-2", row.get([]u8, 1));

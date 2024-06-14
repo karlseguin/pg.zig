@@ -18,7 +18,7 @@ pub const Stmt = struct {
 	// number of columns, number of parameters, size of the SQL, size of the
 	// serialized values and our configuration (e.g. how big
 	// our write buffer is).
-	arena: ArenaAllocator,
+	arena: *ArenaAllocator,
 
 	// Every call to stmt.bind increments this value. Important because the Bind
 	// message contains all the parameter meta data first, then the serialized
@@ -44,12 +44,16 @@ pub const Stmt = struct {
 	// which is globally configured.
 	result_state: Result.State,
 
-	pub fn init(conn: *Conn, opts: Conn.QueryOpts) Stmt {
+	pub fn init(conn: *Conn, opts: Conn.QueryOpts) !Stmt {
+		const base_allocator = opts.allocator orelse conn._allocator;
+		const arena = try base_allocator.create(ArenaAllocator);
+		arena.* = ArenaAllocator.init(base_allocator);
+
 		return .{
 			.conn = conn,
 			.opts = opts,
 			.buf = &conn._buf,
-			.arena = ArenaAllocator.init(opts.allocator orelse conn._allocator),
+			.arena = arena,
 
 			.param_index = 0,
 			.param_count = 0,
@@ -64,7 +68,11 @@ pub const Stmt = struct {
 	// stmt.execute() returns a result, stmt.deinit() must not be called (all
 	// ownership is passed to the result).
 	pub fn deinit(self: *Stmt) void {
-		self.arena.deinit();
+		const arena = self.arena;
+
+		const allocator = arena.child_allocator;
+		arena.deinit();
+		allocator.destroy(arena);
 
 		self.conn._reader.endFlow() catch {
 			// this can only fail in extreme conditions (OOM) and it will only impact

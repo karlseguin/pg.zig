@@ -14,7 +14,7 @@ pub const Result = struct {
 	column_names: [][]const u8,
 
 	_conn: *Conn,
-	_arena: ArenaAllocator,
+	_arena: *ArenaAllocator,
 
 	// a sliced version of _state.oids (so we don't have to keep reslicing it to
 	// number_of_columns on each row)
@@ -36,15 +36,17 @@ pub const Result = struct {
 			value.data = &[_]u8{};
 		}
 
-		self._arena.deinit();
-
 		self._conn._reader.endFlow() catch {
 			// this can only fail in extreme conditions (OOM) and it will only impact
 			// the next query (and if the app is using the pool, the pool will try to
 			// recover from this anyways)
 			self._conn._state = .fail;
-			return;
 		};
+
+		const arena = self._arena;
+		const allocator = arena.child_allocator;
+		arena.deinit();
+		allocator.destroy(arena);
 
 		if (self._release_conn) {
 			self._conn.release();
@@ -384,7 +386,9 @@ pub const QueryRow = struct {
 		return self.row.recordCol(name);
 	}
 
-	pub fn deinit(self: *const QueryRow) void {
+	pub fn deinit(self: *QueryRow) !void {
+		// this is unfortunate
+		try self.result.drain();
 		self.result.deinit();
 	}
 };
@@ -957,7 +961,7 @@ test "Row: column names" {
 	defer c.deinit();
 	const sql = "select 923 as id, 'Leto' as name";
 	var row = (try c.rowOpts(sql, .{}, .{.column_names = true})).?;
-	defer row.deinit();
+	defer row.deinit() catch {};
 
 	try t.expectEqual(923, row.getCol(i32, "id"));
 	try t.expectString("Leto", row.getCol([]u8, "name"));
@@ -968,7 +972,7 @@ test "Result: mutable []u8" {
 	defer c.deinit();
 	const sql = "select 'Leto'";
 	var row = (try c.row(sql, .{})).?;
-	defer row.deinit();
+	defer row.deinit() catch {};
 
 	var name = row.get([]u8, 0);
 	name[3] = '!';
@@ -980,7 +984,7 @@ test "Result: mutable [][]u8" {
 	defer c.deinit();
 	const sql = "select array['Leto', 'Test']::text[]";
 	var row = (try c.row(sql, .{})).?;
-	defer row.deinit();
+	defer row.deinit() catch {};
 
 	var values = try row.iterator([]u8, 0).alloc(t.allocator);
 	defer t.allocator.free(values);
