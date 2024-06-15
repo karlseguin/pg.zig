@@ -230,6 +230,21 @@ Gets a [Record](#record) by column position.
 ### recordCol(column_name: []const u8) Record
 Gets an [Record](#record) by column name. See [getCol](#getcolcomptime-t-type-column_name-const-u8-t) for performance notes.
 
+### to(T: type, opts: ToOpts) !T
+Populates and returns a `T`. 
+
+This currently has a number of limitations:
+1 - The column order must match the structure's field order. 
+2 - Only scalar values (values that you'd get via `row.get(...)` can be mapped, so no support for iterators or records.
+
+`opts` values are:
+* `dupe` - Duplicate string columns using the internal arena. When set to `true` non-scalar values are valid until `deinit` is called on the `row`/`result`. Defaults to `false`
+* `allocator` - Allocator to use to duplicate non-scalar values (i.e. strings). It is the caller's responsible to free any non-scalar values from their structure. Defaults to `null`.
+
+Setting `allocator` implies `dupe`, though using the specified allocator rather than the internal arena.
+
+By default (when `dupe` is `false` and `allocator` is `null`), non-scalar values (i.e. strings) are only valid until the next call to `next()` or `drain()` or `deinit()`.
+
 ## QueryRow
 A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed. This is a rare case where `deinit()` can fail. In most cases, you can simply throw away the error (because failure is extremely rare and, if the connection came from a pool, it should repair itself).
 

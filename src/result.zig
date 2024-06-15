@@ -356,6 +356,40 @@ pub const Row = struct {
 		lib.assert(col != null);
 		return self.record(col);
 	}
+
+	const ToOpts = struct {
+		dupe: bool = false,
+		allocator: ?Allocator = null,
+	};
+
+	pub fn to(self: *const Row, T: type, opts: ToOpts) !T {
+		var result: T = undefined;
+
+		// if we're given an allocator, use that.
+		// if we're not given an allocator, but asked to dupe use our arena and thus
+		// tie the lifetime of the returned T to the lifetime of the DB result object.
+		var allocator: ? Allocator = null;
+		if (opts.allocator) |a| {
+			allocator = a;
+		} else if (opts.dupe) {
+			allocator = self._result._arena.allocator();
+		}
+
+		var columnIndex: usize = 0;
+		inline for (std.meta.fields(T)) |field| {
+			const value = self.get(field.type, columnIndex);
+			@field(result, field.name) = switch (field.type) {
+					[]u8, []const u8 => if (allocator) |a| try a.dupe(u8, value) else value,
+					?[]u8, ?[]const u8 => blk: {
+						const v = value orelse break :blk null;
+						break :blk if (allocator) |a| try a.dupe(u8, v) else v;
+					},
+					else => value,
+			};
+			columnIndex += 1;
+		}
+		return result;
+	}
 };
 
 pub const QueryRow = struct {
@@ -385,28 +419,8 @@ pub const QueryRow = struct {
 	pub fn recordCol(self: *const QueryRow, name: []const u8) Record {
 		return self.row.recordCol(name);
 	}
-
-	pub fn to(self: *const QueryRow, T: type, alloc: Allocator) T {
-	    var result: T = undefined;
-	    var columnIndex: usize = 0;
-		inline for (std.meta.fields(T)) |field| {
-		switch (field.type) {
-		    []u8, []const u8 => @field(result, field.name) = try dupe(alloc, self, columnIndex),
-		    ?[]u8, ?[]const u8 => @field(result, field.name) = try dupeNullable(alloc, self, columnIndex),
-		    else => @field(result, field.name) = self.get(field.type, columnIndex),
-		}
-		columnIndex += 1;
-	    }
-	    return result;
-
-	}
-
-	fn dupeNullable(alloc: Allocator, row: Row, columnIndex: usize) !?[]u8 {
-	    return if (row.get(?[]const u8, columnIndex)) |val| try alloc.dupe(u8, val) else null;
-	}
-
-	fn dupe(alloc: Allocator, row: Row, columnIndex: usize) ![]u8 {
-	    return try alloc.dupe(u8, row.get([]const u8, columnIndex));
+	pub fn to(self: *const QueryRow, T: type, opts: Row.ToOpts) !T {
+		return self.row.to(T, opts);
 	}
 
 	pub fn deinit(self: *QueryRow) !void {
@@ -1013,4 +1027,93 @@ test "Result: mutable [][]u8" {
 	defer t.allocator.free(values);
 	values[0][0] = 'n';
 	try t.expectString("neto", values[0]);
+}
+
+test "Result: to" {
+	const User = struct {
+		id: i32,
+		active: bool,
+		name: []const u8,
+		note: ?[]const u8,
+	};
+
+
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		// null, no dupe
+		var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{});
+		try t.expectEqual(1, user.id);
+		try t.expectEqual(true, user.active);
+		try t.expectString("teg", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// not null, no dupe
+		var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{});
+		try t.expectEqual(2, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectString("n1", user.note.?);
+	}
+
+	{
+		// null, dupe with internal arena
+		var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.dupe = true});
+		try t.expectEqual(1, user.id);
+		try t.expectEqual(true, user.active);
+		try t.expectString("teg", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// not null, dupe with internal arena
+		var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.dupe = true});
+		try t.expectEqual(2, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectString("n1", user.note.?);
+	}
+
+	{
+		// null, dupe with explicit allocator
+		var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.allocator = t.allocator});
+		defer t.allocator.free(user.name);
+		try t.expectEqual(1, user.id);
+		try t.expectEqual(true, user.active);
+		try t.expectString("teg", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// not null, dupe with explicit allocator
+		var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.allocator = t.allocator});
+		defer t.allocator.free(user.name);
+		defer t.allocator.free(user.note.?);
+
+		try t.expectEqual(2, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectString("n1", user.note.?);
+	}
 }
