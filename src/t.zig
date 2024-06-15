@@ -175,10 +175,7 @@ pub const Stream = struct {
 		}
 		self._read_index = read_index + data.len;
 
-		for (data, 0..) |b, i| {
-			buf[i] = b;
-		}
-
+		@memcpy(buf[0..data.len], data);
 		return data.len;
 	}
 

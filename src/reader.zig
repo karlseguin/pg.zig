@@ -172,32 +172,19 @@ fn ReaderT(comptime T: type) type {
 						message_length = std.mem.readInt(u32, buf[start+1..start+5][0..4], .big) + 1;
 
 						if (message_length > buf.len) {
-							// our buffer is too small
-							// If we're using a dynamic buffer already, we'll try to resive it
-							// If that fails, or if we're using our static buffer, we need
-							// to allocate a new buffer
-
 							var new_buf: []u8 = undefined;
 							const allocator = self.allocator;
-							const is_static = buf.ptr == self.static.ptr;
 
-							if (is_static or !allocator.resize(buf, message_length)) {
-								// Either we were using our static buffer or resizing failed
-								lib.metrics.allocReader(message_length);
+							if (buf.ptr == self.static.ptr) {
+								//currently using our static buffer, we need to allocate a larger one
 								new_buf = try allocator.alloc(u8, message_length);
 								@memcpy(new_buf[0..current_length], buf[start..pos]);
-
-								if (!is_static) {
-									// free the old dynamic buffer
-									allocator.free(buf);
-								}
+								lib.metrics.allocReader(message_length);
 							} else {
-								// we were using a dynamic buffer and succcessfully resized it
+								// currently using a dynamically alllocated buffer, we'll
+								// grow or allocate a larger one (which is what realloc does)
+								new_buf = try allocator.realloc(buf, message_length);
 								lib.metrics.allocReader(message_length - current_length);
-								new_buf = buf.ptr[0..message_length];
-								if (start > 0) {
-									std.mem.copyForwards(u8, new_buf[0..current_length], buf[start..pos]);
-								}
 							}
 
 							self.start = 0;
@@ -428,72 +415,86 @@ test "Reader: fuzz" {
 		6, 0, 0, 0, 9, 1, 2, 3, 4, 5,
 		7, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6,
 		8, 0, 0, 0, 11, 1, 2, 3, 4, 5, 6, 7,
+		9, 0, 0, 0, 25, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21
 	};
 
-	for (0..200) |_| {
+	for (0..400) |_| {
 		var s = t.Stream.init();
 		defer s.deinit();
 		var reader = R.init(t.allocator, 12, s) catch unreachable;
 		defer reader.deinit();
 
-		var buf: []const u8 = messages[0..];
-		while (buf.len > 0) {
-			try reader.startFlow(null, null);
+		for (0..4) |_| {
+			var buf: []const u8 = messages[0..];
+			while (buf.len > 0) {
+				const l = random.uintAtMost(usize, buf.len - 1) + 1;
+				s.add(buf[0..l]);
+				buf = buf[l..];
+			}
+
+			var arena = std.heap.ArenaAllocator.init(t.allocator);
+			defer arena.deinit();
+
+			const allocator: ?Allocator = if (random.uintAtMost(usize, 1) == 1) arena.allocator() else null;
+
+			try reader.startFlow(allocator, null);
 			defer reader.endFlow() catch unreachable;
-			const l = random.uintAtMost(usize, buf.len - 1) + 1;
-			s.add(buf[0..l]);
-			buf = buf[l..];
-		}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(1, msg.type);
-			try t.expectSlice(u8, &[_]u8{}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(1, msg.type);
+				try t.expectSlice(u8, &[_]u8{}, msg.data);
+			}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(2, msg.type);
-			try t.expectSlice(u8, &[_]u8{1}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(2, msg.type);
+				try t.expectSlice(u8, &[_]u8{1}, msg.data);
+			}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(3, msg.type);
-			try t.expectSlice(u8, &[_]u8{1, 2}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(3, msg.type);
+				try t.expectSlice(u8, &[_]u8{1, 2}, msg.data);
+			}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(4, msg.type);
-			try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(4, msg.type);
+				try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, msg.data);
+			}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(5, msg.type);
-			try t.expectSlice(u8, &[_]u8{1, 2, 3, 4}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(5, msg.type);
+				try t.expectSlice(u8, &[_]u8{1, 2, 3, 4}, msg.data);
+			}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(6, msg.type);
-			try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(6, msg.type);
+				try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5}, msg.data);
+			}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(7, msg.type);
-			try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5, 6}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(7, msg.type);
+				try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5, 6}, msg.data);
+			}
 
-		{
-			const msg = try reader.next();
-			try t.expectEqual(8, msg.type);
-			try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5, 6, 7}, msg.data);
-		}
+			{
+				const msg = try reader.next();
+				try t.expectEqual(8, msg.type);
+				try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5, 6, 7}, msg.data);
+			}
 
-		try t.expectError(error.Closed, reader.next());
+			{
+				const msg = try reader.next();
+				try t.expectEqual(9, msg.type);
+				try t.expectSlice(u8, &[_]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}, msg.data);
+			}
+			try t.expectError(error.Closed, reader.next());
+		}
 	}
 }
 
