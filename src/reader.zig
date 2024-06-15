@@ -652,7 +652,7 @@ test "Reader: start/endFlow large overread with flow-specific allocator" {
 	var s = t.Stream.init();
 	defer s.deinit();
 
-	// 1st message is bigge than static
+	// 1st message is bigger than static
 	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
 
 	// 2nd message is bigger than first
@@ -680,4 +680,25 @@ test "Reader: start/endFlow large overread with flow-specific allocator" {
 
 	const msg4 = try reader.next();
 	try t.expectSlice(u8, &.{255, 250, 245, 240, 235, 230, 225}, msg4.data);
+}
+
+
+test "Reader: startFlow with dynamic allocation into deinit " {
+	// This can happen on an error case, where we start a flow, but an error
+	// happens during processing, causing conn.deinit() to be called (say, when
+	// it's released back into the pool in an error state).
+	defer t.reset();
+	const R = ReaderT(*t.Stream);
+	var s = t.Stream.init();
+	defer s.deinit();
+
+	// 1st message is bigger than static
+	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
+
+	var reader = R.init(t.allocator, 7, s) catch unreachable;
+	defer reader.deinit();
+
+	try reader.startFlow(t.arena.allocator(), null);
+	const msg1 = try reader.next();
+	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
 }
