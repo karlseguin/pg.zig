@@ -1402,6 +1402,23 @@ test "PG: large read" {
 	}
 }
 
+test "Conn: dynamic buffer freed on error" {
+	var c = t.connect(.{.read_buffer = 100});
+	defer c.deinit();
+
+
+	var rows = try c.query("select $1::text", .{"!" ** 200});
+	defer rows.deinit();
+
+	const row = (try rows.next()).?;
+	try t.expectString("!" ** 200, row.get([]u8, 0));
+
+	// we end here, simulating the app returning an error. This causes
+	// rows.deinit() and c.deinit() to be called prematurely (from
+	// the point of view of our internal state). Specifically, conn.reader.endFlow
+	// isn't called.
+}
+
 test "PG: Record" {
 	var c = t.connect(.{});
 	defer c.deinit();

@@ -68,18 +68,17 @@ pub const Stmt = struct {
 	// stmt.execute() returns a result, stmt.deinit() must not be called (all
 	// ownership is passed to the result).
 	pub fn deinit(self: *Stmt) void {
-		const arena = self.arena;
-
-		const allocator = arena.child_allocator;
-		arena.deinit();
-		allocator.destroy(arena);
-
 		self.conn._reader.endFlow() catch {
 			// this can only fail in extreme conditions (OOM) and it will only impact
 			// the next query (and if the app is using the pool, the pool will try to
 			// recover from this anyways)
 				self.conn._state = .fail;
 		};
+
+		const arena = self.arena;
+		const allocator = arena.child_allocator;
+		arena.deinit();
+		allocator.destroy(arena);
 	}
 
 	pub fn prepare(self: *Stmt, sql: []const u8) !void {
