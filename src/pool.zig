@@ -59,9 +59,7 @@ pub const Pool = struct {
 			opened_connections += 1;
 		}
 
-		const thread = try Thread.spawn(.{}, Reconnector.monitor, .{&pool._reconnector});
-		thread.detach();
-
+		pool._reconnector.thread = try Thread.spawn(.{}, Reconnector.monitor, .{&pool._reconnector});
 		return pool;
 	}
 
@@ -176,6 +174,9 @@ const Reconnector = struct {
 	mutex: Thread.Mutex,
 	cond: Thread.Condition,
 
+	// the thread that the monitor look is running in
+	thread: Thread,
+
 	fn init(pool: *Pool) Reconnector {
 		return .{
 			.pool = pool,
@@ -183,6 +184,7 @@ const Reconnector = struct {
 			.cond = .{},
 			.mutex = .{},
 			.running = false,
+			.thread = undefined,
 		};
 	}
 
@@ -224,6 +226,7 @@ const Reconnector = struct {
 		self.running = false;
 		self.mutex.unlock();
 		self.cond.signal();
+		self.thread.join();
 	}
 
 	fn reconnect(self: *Reconnector) void {
