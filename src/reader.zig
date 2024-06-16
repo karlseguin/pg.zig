@@ -86,13 +86,17 @@ fn ReaderT(comptime T: type) type {
 		}
 
 		pub fn endFlow(self: *Self) !void {
+			const buf = self.buf;
 			const allocator = self.allocator;
 
 			self.allocator = self.default_allocator;
-			if (self.static.ptr == self.buf.ptr) {
+			if (self.static.ptr == buf.ptr) {
 				// we never created a dynamic buffer
 				return;
 			}
+
+			// even if the following fails, we want to free this
+			defer allocator.free(buf);
 
 			// Normally, when an "flow" ends, we expect our read buffer to be empty.
 			// This is true because data from PG is normally only sent in response
@@ -100,7 +104,6 @@ fn ReaderT(comptime T: type) type {
 			// everything from PG. But PG can occasionally send data on its own.
 			// So it's possible that we over-read and now our dynamic buffer has
 			// data unrelated to this flow.
-
 			const pos = self.pos;
 			const start = self.start;
 			const extra = pos - start;
@@ -122,8 +125,7 @@ fn ReaderT(comptime T: type) type {
 				// where it is (because we have no guarantee that the allocator is valid
 				// beyond this query).
 				// So we'll copy it to a new buffer using our default allocator.
-				new_buf = try default_allocator.alloc(u8, extra);
-				@memcpy(new_buf, self.buf[start..pos]);
+				new_buf = try default_allocator.dupe(u8, self.buf[start..pos]);
 			} else {
 				// We either have no extra data, or we have extra data, but it fits in
 				// our static buffer. Either way, we're reverting self.buf to self.static;
@@ -133,9 +135,6 @@ fn ReaderT(comptime T: type) type {
 					@memcpy(new_buf[0..extra], self.buf[start..pos]);
 				}
 			}
-
-			// now we can free the dynamic buffer
-			allocator.free(self.buf);
 
 			self.pos = extra;
 			self.start = 0;
