@@ -50,7 +50,7 @@ while (try result.next()) |row| {
 ```
 
 ## Pool
-The pool keeps a configured number of database connection open. The `acquire()` method is used to retrieve a connection from the pool. Every pool runs 1 background thread which is used to re-connect disconnected connections or connections in invalid states.
+The pool keeps a configured number of database connection open. The `acquire()` method is used to retrieve a connection from the pool. The pool may start one background thread to attempt to reconnect disconnected connections (or connections which are in an invalid state).
 
 ### init(allocator: std.mem.allocator, opts: Opts) !Pool
 Initializes a connection pool. Pool options are:
