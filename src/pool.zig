@@ -59,7 +59,6 @@ pub const Pool = struct {
 			opened_connections += 1;
 		}
 
-		pool._reconnector.thread = try Thread.spawn(.{}, Reconnector.monitor, .{&pool._reconnector});
 		return pool;
 	}
 
@@ -104,10 +103,11 @@ pub const Pool = struct {
 			conn.deinit();
 			self._allocator.destroy(conn);
 
-			conn_to_add = newConnection(self, true) catch {
-				// we failed to create the connection then and there, signal the
-				// reconnect that it has a connection to reconnect
-				self._reconnector.reconnect();
+			conn_to_add = newConnection(self, true) catch |err1| {
+				// we failed to create the connection, let the background reconnector try
+				self._reconnector.reconnect() catch |err2| {
+					log.err("Re-opening connection failed ({}) and background reconnector failed to start ({}) ", .{err1, err2});
+				};
 				return;
 			};
 		}
@@ -167,73 +167,65 @@ const Reconnector = struct {
 	// reconnected
 	count: usize,
 
-	// when stop is called, this is set to false, and the reconnect loop will exit
-	running: bool,
+	// when stop is called, this is set to true
+	stopped: bool,
 
 	pool: *Pool,
 	mutex: Thread.Mutex,
-	cond: Thread.Condition,
 
-	// the thread that the monitor look is running in
-	thread: Thread,
+	// the thread, if any, that the monitor is running in
+	thread: ?Thread,
 
 	fn init(pool: *Pool) Reconnector {
 		return .{
 			.pool = pool,
 			.count = 0,
-			.cond = .{},
 			.mutex = .{},
-			.running = false,
-			.thread = undefined,
+			.stopped = false,
+			.thread = null,
 		};
 	}
 
-	fn monitor(self: *Reconnector) void {
-		self.running = true;
+	fn run(self: *Reconnector) void {
 		const pool = self.pool;
-		const retry_delay = 5 * std.time.ns_per_s;
+		const retry_delay = 2 * std.time.ns_per_s;
 
 		self.mutex.lock();
-		while (true) {
-			if (self.running == false) {
-				self.mutex.unlock();
+		loop: while (self.count > 0) {
+			const stopped = self.stopped;
+			self.mutex.unlock();
+			if (stopped == true) {
 				return;
 			}
 
-			self.cond.wait(&self.mutex);
-			loop: while (self.count > 0) {
-				const running = self.running;
-				self.mutex.unlock();
-				if (running == false) {
-					return;
-				}
-
-				const conn = newConnection(pool, false) catch {
-					std.time.sleep(retry_delay);
-					self.mutex.lock();
-					continue :loop;
-				};
-
-				conn.release(); // inserts it into the pool
+			const conn = newConnection(pool, false) catch {
+				std.time.sleep(retry_delay);
 				self.mutex.lock();
-				self.count -= 1;
-			}
+				continue :loop;
+			};
+
+			conn.release(); // inserts it into the pool
+			self.mutex.lock();
+			self.count -= 1;
 		}
 	}
 
 	fn stop(self: *Reconnector) void {
 		self.mutex.lock();
-		self.running = false;
+		self.stopped = true;
 		self.mutex.unlock();
-		self.cond.signal();
-		self.thread.join();
+		if (self.thread) |thrd| {
+			thrd.join();
+		}
 	}
 
-	fn reconnect(self: *Reconnector) void {
+	fn reconnect(self: *Reconnector) !void {
 		self.mutex.lock();
 		self.count += 1;
+		if (self.thread == null) {
+			self.thread = try Thread.spawn(.{.stack_size = 1024 * 1024}, Reconnector.run, .{self});
+		}
 		self.mutex.unlock();
-		self.cond.signal();
 	}
 };
 
