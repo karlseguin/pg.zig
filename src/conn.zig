@@ -19,7 +19,7 @@ pub const Conn = struct {
 	// If we get a postgreSQL error, this will be set.
 	err: ?proto.Error,
 
-// The underlying data for err
+	// The underlying data for err
 	_err_data: ?[]const u8,
 
 	_stream: Stream,

@@ -1,0 +1,10 @@
+.{
+	.name = "example",
+	.paths = .{""},
+	.version = "0.0.0",
+	.dependencies = .{
+		.pg = .{
+			.path = ".."
+		},
+	},
+}
