@@ -165,8 +165,13 @@ Why can't `deinit` handle this? If `deinit` also drained, you'd have to handle a
 ### next(result: \*Result) !?Row
 Iterates to the next row of the result, or returns null if there are no more rows.
 
-### columnIndex(name: []const u8) ?usize
+### columnIndex(result: \*Result, name: []const u8) ?usize
 Returns the index of the column with the given name. This is only valid when the query is executed with the `column_names = true` option.
+
+### mapper(result: \*Result, T: type, opts: MapperOpts) Mapper(T)
+Returns a Mapper which can be used to create a T for each row. Mapping from column to field is done by name. This is an optimized version of [row.to](#tot-type-opts-toopts-t) when iterating through multiple rows with the `{.map = .name}`.
+
+See [row.to](#tot-type-opts-toopts-t) and [Mapper](#mapper) for more information.
 
 ## Row
 The `row` represents a single row from a result. Any non-primitive value that you get from the `row` are valid only until the next call to `next`, `deinit` or `drain`.
@@ -233,17 +238,18 @@ Gets an [Record](#record) by column name. See [getCol](#getcolcomptime-t-type-co
 ### to(T: type, opts: ToOpts) !T
 Populates and returns a `T`. 
 
-This currently has a number of limitations:
-1 - The column order must match the structure's field order. 
-2 - Only scalar values (values that you'd get via `row.get(...)` can be mapped, so no support for iterators or records.
+As of now, only scalar values (values that you'd get via `row.get(...)` can be mapped.
 
 `opts` values are:
 * `dupe` - Duplicate string columns using the internal arena. When set to `true` non-scalar values are valid until `deinit` is called on the `row`/`result`. Defaults to `false`
 * `allocator` - Allocator to use to duplicate non-scalar values (i.e. strings). It is the caller's responsible to free any non-scalar values from their structure. Defaults to `null`.
+* `map` - `.ordinal` or `.name`, defaults to `.ordinal`
 
-Setting `allocator` implies `dupe`, though using the specified allocator rather than the internal arena.
+Setting `allocator` implies `dupe`, but uses the specified allocator rather than the internal arena. By default (when `dupe` is `false` and `allocator` is `null`), non-scalar values (i.e. strings) are only valid until the next call to `next()` or `drain()` or `deinit()`.
 
-By default (when `dupe` is `false` and `allocator` is `null`), non-scalar values (i.e. strings) are only valid until the next call to `next()` or `drain()` or `deinit()`.
+When `.map = .ordinal`, the default, the order of the field names must match the order of the columns. 
+
+When `.map = .name`, the query must be executed with the  `{.column_names = true}` option. Columns with no field equivalent are ignored. Fields with no column equivalent are set to their default value; if they do not have a default value the function will return `error.FieldColumnMismatch`. If you're going to use this in a loop with a `result`, consider using a [Mapper](#mapper) to avoid the name->index lookup on each iteration.
 
 ## QueryRow
 A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed. This is a rare case where `deinit()` can fail. In most cases, you can simply throw away the error (because failure is extremely rare and, if the connection came from a pool, it should repair itself).
@@ -285,6 +291,37 @@ select row('over'::text, 9000::int)
 
 ### next(T) T
 Gets the next column in the record. This behaves similarly [row.get](#getcomptime-t-type-col-usize-t) with the same supported types for `T`, including nullables.
+
+## Mapper
+A mapper is used to iterate through a result and turn a row into an instance of `T`. When converting a single row, or using ordinal mapping, prefer using [row.to](#tot-type-opts-toopts-t). The mapper is an optimization over `row.to` with the `{.map = .name}` option which only has to do the name -> index lookup once.
+
+To use a mapper, the `{.column_names = true}` option must be passed to the query/row function.
+
+```zig
+const User = struct {
+  id: i32,
+  name: []const u8,
+};
+
+///...
+
+var result = try conn.queryOpts("select id, name from users", .{}, .{.column_names = true});
+defer result.deinit();
+
+var mapper = result.mapper(User, .{});
+while (try mapper.next()) |user| {
+  // use: user.id and user.name
+}
+```
+
+A column with no matching field is ignored. A field with no matching column is set to its default fault. If no default value is defined, `mapper.next()` will return `error.FieldColumnMismatch`.
+
+The 2nd argument to `result.mapper` is an option:
+
+* `dupe` - Duplicate string columns using the internal arena. When set to `true` non-scalar values are valid until `deinit` is called on the `row`/`result`. Defaults to `false`
+* `allocator` - Allocator to use to duplicate non-scalar values (i.e. strings). It is the caller's responsible to free any non-scalar values from their structure. Defaults to `null`.
+
+Setting `allocator` implies `dupe`, but uses the specified allocator rather than the internal arena. By default (when `dupe` is `false` and `allocator` is `null`), non-scalar values (i.e. strings) are only valid until the next call to `next()` or `drain()` or `deinit()`.
 
 ## Stmt
 For most queries, you should use the `conn.query(...)`, `conn.row(...)` or `conn.exec(...)` methods. For queries with parameters, these methods look like:

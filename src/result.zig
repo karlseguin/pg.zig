@@ -133,6 +133,35 @@ pub const Result = struct {
 		return null;
 	}
 
+	const MapperOpts = struct {
+		dupe: bool = false,
+		allocator: ?Allocator = null,
+	};
+
+	pub fn mapper(self: *Result, comptime T: type, opts: MapperOpts) Mapper(T) {
+		var column_indexes: [std.meta.fields(T).len]?usize = undefined;
+
+		inline for (std.meta.fields(T), 0..) |field, i| {
+			column_indexes[i] = self.columnIndex(field.name);
+		}
+
+		// if we're given an allocator, use that.
+		// if we're not given an allocator, but asked to dupe use our arena and thus
+		// tie the lifetime of the returned T to the lifetime of the DB result object.
+		var allocator: ?Allocator = null;
+		if (opts.allocator) |a| {
+			allocator = a;
+		} else if (opts.dupe) {
+			allocator = self._arena.allocator();
+		}
+
+		return .{
+			.result = self,
+			.allocator = allocator,
+			.column_indexes = column_indexes,
+		};
+	}
+
 	// For every query, we need to store the type of each column (so we know
 	// how to parse the data). Optionally, we might need the name of each column.
 	// The connection has a default Result.STate for a max # of columns, and we'll use
@@ -359,38 +388,103 @@ pub const Row = struct {
 
 	const ToOpts = struct {
 		dupe: bool = false,
+		map: Mapping = .ordinal,
 		allocator: ?Allocator = null,
+
+		const Mapping = enum {
+			name,
+			ordinal,
+		};
 	};
 
 	pub fn to(self: *const Row, T: type, opts: ToOpts) !T {
-		var result: T = undefined;
-
 		// if we're given an allocator, use that.
 		// if we're not given an allocator, but asked to dupe use our arena and thus
 		// tie the lifetime of the returned T to the lifetime of the DB result object.
-		var allocator: ? Allocator = null;
+		var allocator: ?Allocator = null;
 		if (opts.allocator) |a| {
 			allocator = a;
 		} else if (opts.dupe) {
 			allocator = self._result._arena.allocator();
 		}
 
-		var columnIndex: usize = 0;
-		inline for (std.meta.fields(T)) |field| {
-			const value = self.get(field.type, columnIndex);
-			@field(result, field.name) = switch (field.type) {
-					[]u8, []const u8 => if (allocator) |a| try a.dupe(u8, value) else value,
-					?[]u8, ?[]const u8 => blk: {
-						const v = value orelse break :blk null;
-						break :blk if (allocator) |a| try a.dupe(u8, v) else v;
-					},
-					else => value,
-			};
-			columnIndex += 1;
+		return switch (opts.map) {
+			.ordinal => self.toUsingOrdinal(T, allocator),
+			.name => return self.toUsingName(T, allocator),
+		};
+	}
+
+	fn toUsingOrdinal(self: *const Row, T: type, allocator: ?Allocator) !T {
+		var value: T = undefined;
+
+		inline for (std.meta.fields(T), 0..) |field, column_index| {
+			const column_value = self.get(field.type, column_index);
+			@field(value, field.name) = try toValue(field.type, column_value, allocator);
 		}
-		return result;
+		return value;
+	}
+
+	fn toUsingName(self: *const Row, T: type, allocator: ?Allocator) !T {
+		var value: T = undefined;
+		const result = self._result;
+
+		inline for (std.meta.fields(T)) |field| {
+			const name = field.name;
+			if (result.columnIndex(name)) |column_index| {
+				const column_value = self.get(field.type, column_index);
+				@field(value, name) = try toValue(field.type, column_value, allocator);
+			} else if (field.default_value) |dflt| {
+				@field(value, name) = @as(*align(1) const field.type, @ptrCast(dflt)).*;
+			} else {
+				return error.FieldColumnMismatch;
+			}
+		}
+
+		return value;
 	}
 };
+
+pub fn Mapper(comptime T: type) type {
+	return struct {
+		result: *Result,
+		allocator: ?Allocator,
+		column_indexes: [std.meta.fields(T).len]?usize,
+
+		const Self = @This();
+
+		pub fn next(self: *const Self) !?T {
+			const row = (try self.result.next()) orelse return null;
+
+			var value: T = undefined;
+
+			const allocator = self.allocator;
+			inline for (std.meta.fields(T), self.column_indexes) |field, optional_column_index| {
+				const name = field.name;
+				if (optional_column_index) |column_index| {
+					const column_value = row.get(field.type, column_index);
+					@field(value, name) = try toValue(field.type, column_value, allocator);
+				} else if (field.default_value) |dflt| {
+					@field(value, name) = @as(*align(1) const field.type, @ptrCast(dflt)).*;
+				} else {
+					return error.FieldColumnMismatch;
+				}
+			}
+
+			return value;
+		}
+	};
+}
+
+fn toValue(comptime T: type, value: T, allocator: ?Allocator) !T {
+	return switch (T) {
+		[]u8, []const u8 => if (allocator) |a| try a.dupe(u8, value) else value,
+		?[]u8, ?[]const u8 => blk: {
+			const v = value orelse break :blk null;
+			break :blk if (allocator) |a| try a.dupe(u8, v) else v;
+		},
+		else => value,
+	};
+}
 
 pub const QueryRow = struct {
 	row: Row,
@@ -1029,7 +1123,7 @@ test "Result: mutable [][]u8" {
 	try t.expectString("neto", values[0]);
 }
 
-test "Result: to" {
+test "Row.to: ordinal" {
 	const User = struct {
 		id: i32,
 		active: bool,
@@ -1116,4 +1210,235 @@ test "Result: to" {
 		try t.expectString("ghanima", user.name);
 		try t.expectString("n1", user.note.?);
 	}
+}
+
+test "Row.to: name no map" {
+	const User = struct {
+		id: i32 = 9876,
+		active: bool,
+		name: []const u8,
+		note: ?[]const u8 = null,
+	};
+
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		// null, no dupe
+		var row = (try c.rowOpts("select 1 as id, true as active, 'teg' as name, null as note", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.map = .name});
+		try t.expectEqual(1, user.id);
+		try t.expectEqual(true, user.active);
+		try t.expectString("teg", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// default values are used if no colum
+		// and extra columns are ignored
+		var row = (try c.rowOpts("select 2 as id, false as active, 'ghanima' as name, 'x123' as other", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.map = .name});
+		try t.expectEqual(2, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// nullable fields are nulled if no column
+		// and extra columns are ignored
+		var row = (try c.rowOpts("select false as active, 'ghanima' as name, 'x123' as other", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.map = .name});
+		try t.expectEqual(9876, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// error on missing column with non-default value
+		var row = (try c.rowOpts("select 1 as id", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		try t.expectError(error.FieldColumnMismatch, row.to(User, .{.map = .name}));
+	}
+
+	{
+		// not null, no dupe
+		var row = (try c.rowOpts("select 2::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.map = .name});
+		try t.expectEqual(2, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectString("n1", user.note.?);
+	}
+
+	{
+		// null, dupe with internal arena
+		var row = (try c.rowOpts("select 1::integer as id, true as active, 'teg' as name, null::text as note", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.dupe = true, .map = .name});
+		try t.expectEqual(1, user.id);
+		try t.expectEqual(true, user.active);
+		try t.expectString("teg", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// not null, dupe with internal arena
+		var row = (try c.rowOpts("select 2::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.dupe = true, .map = .name});
+		try t.expectEqual(2, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectString("n1", user.note.?);
+	}
+
+	{
+		// null, dupe with explicit allocator
+		var row = (try c.rowOpts("select 1::integer as id, true as active, 'teg' as name, null::text as note", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.allocator = t.allocator, .map = .name});
+		defer t.allocator.free(user.name);
+		try t.expectEqual(1, user.id);
+		try t.expectEqual(true, user.active);
+		try t.expectString("teg", user.name);
+		try t.expectEqual(null, user.note);
+	}
+
+	{
+		// not null, dupe with explicit allocator
+		var row = (try c.rowOpts("select 5::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{.column_names = true})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{.allocator = t.allocator, .map = .name});
+		defer t.allocator.free(user.name);
+		defer t.allocator.free(user.note.?);
+
+		try t.expectEqual(5, user.id);
+		try t.expectEqual(false, user.active);
+		try t.expectString("ghanima", user.name);
+		try t.expectString("n1", user.note.?);
+	}
+}
+
+test "Result.Mapper" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		// mapper with missing column and non-default field
+		var result = try c.queryOpts("select 1", .{}, .{.column_names = true});
+		defer result.deinit();
+		const mapper = result.mapper(struct{id: i32}, .{});
+		try t.expectError(error.FieldColumnMismatch, mapper.next());
+		try result.drain();
+	}
+
+	// null, no dupe
+	try expectResultMapper(&c, "select 1 as id, true as active, 'teg' as name, null as note", .{
+		.id = 1,
+		.active = true,
+		.name = "teg",
+		.note = null,
+	}, .{});
+
+
+	// default values are used if no colum
+	// and extra columns are ignored
+	try expectResultMapper(&c, "select 2 as id, false as active, 'ghanima' as name, 'x123' as other", .{
+		.id = 2,
+		.active = false,
+		.name = "ghanima",
+		.note = null,
+	}, .{});
+
+
+	// nullable fields are nulled if no column
+	// and extra columns are ignored
+	try expectResultMapper(&c, "select false as active, 'ghanima' as name, 'x123' as other", .{
+		.id = 9876,
+		.active = false,
+		.name = "ghanima",
+		.note = null,
+	}, .{});
+
+	// not null, no dupe
+	try expectResultMapper(&c, "select 2::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{
+		.id = 2,
+		.active = false,
+		.name = "ghanima",
+		.note = "n1",
+	}, .{});
+
+	// null, dupe with internal arena
+	try expectResultMapper(&c, "select 1::integer as id, true as active, 'teg' as name, null::text as note", .{
+		.id = 1,
+		.active = true,
+		.name = "teg",
+		.note = null,
+	}, .{.dupe = true});
+
+	// not null, dupe with internal arena
+	try expectResultMapper(&c, "select 3::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{
+		.id = 3,
+		.active = false,
+		.name = "ghanima",
+		.note = "n1",
+	}, .{.dupe = true});
+
+	// null, dupe with explicit allocator
+	try expectResultMapper(&c, "select 4::integer as id, true as active, 'teg' as name, null::text as note", .{
+		.id = 4,
+		.active = true,
+		.name = "teg",
+		.note = null,
+	}, .{.allocator = t.allocator});
+
+	// not null, dupe with explicit allocator
+	try expectResultMapper(&c, "select 5::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{
+		.id = 5,
+		.active = false,
+		.name = "ghanima",
+		.note = "n1",
+	}, .{.allocator = t.allocator});
+}
+
+fn expectResultMapper(conn: *Conn, sql: []const u8, expected: anytype, opts: Result.MapperOpts) !void {
+	const User = struct {
+		id: i32 = 9876,
+		active: bool,
+		name: []const u8,
+		note: ?[]const u8 = null,
+	};
+
+	var result = try conn.queryOpts(sql, .{}, .{.column_names = true});
+	defer result.deinit();
+	var mapper = result.mapper(User, opts);
+
+	const user = (try mapper.next()) orelse unreachable;
+	try t.expectEqual(expected.id, user.id);
+	try t.expectEqual(expected.active, user.active);
+	try t.expectString(expected.name, user.name);
+	if (opts.allocator) |a| { a.free(user.name); }
+	if (@TypeOf(expected.note) == @TypeOf(null)) {
+		try t.expectEqual(null, user.note);
+	} else {
+		try t.expectString(expected.note, user.note.?);
+		if (opts.allocator) |a| { a.free(user.note.?); }
+	}
+
+	try t.expectEqual(null, mapper.next());
 }
