@@ -248,7 +248,7 @@ pub const Stmt = struct {
 		self.param_index = param_index + 1;
 	}
 
-	pub fn execute(self: *Stmt) !Result {
+	pub fn execute(self: *Stmt) !*Result {
 		lib.assert(self.param_index == self.param_count);
 
 		// We haven't sent our `bind` message yet. We need to finish it, and then
@@ -302,7 +302,14 @@ pub const Stmt = struct {
 		const opts = &self.opts;
 		const state = self.result_state;
 		const column_count = self.column_count;
-		return .{
+
+		const arena = self.arena;
+
+		// Put result on the heap largely for the QueryRow (created via the
+		// conn.row(...) helper). This allows QueryRow.result and QueryRow.row._result
+		// to reference the result, which isn't otherwise owned.
+		const result = try arena.allocator().create(Result);
+		result.* = .{
 			._conn = conn,
 			._arena = self.arena,
 			._release_conn = opts.release_conn,
@@ -311,5 +318,6 @@ pub const Stmt = struct {
 			.column_names = if (opts.column_names) state.names[0..column_count] else &[_][]const u8{},
 			.number_of_columns = column_count,
 		};
+		return result;
 	}
 };

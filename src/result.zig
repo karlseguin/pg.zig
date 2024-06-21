@@ -43,14 +43,14 @@ pub const Result = struct {
 			self._conn._state = .fail;
 		};
 
+		if (self._release_conn) {
+			self._conn.release();
+		}
+
 		const arena = self._arena;
 		const allocator = arena.child_allocator;
 		arena.deinit();
 		allocator.destroy(arena);
-
-		if (self._release_conn) {
-			self._conn.release();
-		}
 	}
 
 	// Caller should typically call next() until null is returned.
@@ -350,7 +350,6 @@ pub const Row = struct {
 	fn toUsingName(self: *const Row, T: type, allocator: ?Allocator) !T {
 		var value: T = undefined;
 		const result = self._result;
-
 		inline for (std.meta.fields(T)) |field| {
 			const name = field.name;
 			if (result.columnIndex(name)) |column_index| {
@@ -422,7 +421,7 @@ fn toValue(comptime T: type, value: T, allocator: ?Allocator) !T {
 
 pub const QueryRow = struct {
 	row: Row,
-	result: Result,
+	result: *Result,
 
 	pub fn get(self: *const QueryRow, comptime T: type, col: usize) T {
 		return self.row.get(T, col);
@@ -1261,8 +1260,6 @@ test "Row.to: ordinal" {
 		var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
 		const user = try row.to(User, .{.allocator = t.allocator});
 		row.deinit() catch {};
-		// hack, but make sure we have nothing pointing to it
-		@memset(row.result._conn._reader.buf, 0);
 
 		defer t.allocator.free(user.name);
 		try t.expectEqual(1, user.id);
@@ -1277,9 +1274,6 @@ test "Row.to: ordinal" {
 
 		const user = try row.to(User, .{.allocator = t.allocator});
 		row.deinit() catch {};
-
-		// hack, but make sure we have nothing pointing to it
-		@memset(row.result._conn._reader.buf, 0);
 
 		defer t.allocator.free(user.name);
 		defer t.allocator.free(user.note.?);
@@ -1518,9 +1512,6 @@ test "Row.to: iterator" {
 		var row = (try c.row("select array[0]::integer[], array['over', '9000']::text[]", .{})).?;
 		const user = try row.to(User, .{.allocator = t.allocator});
 		row.deinit() catch {};
-		// hack, but the point here is to make sure that no references are still pointing
-		// to the reader.buf
-		@memset(row.result._conn._reader.buf, 0);
 
 		defer user.parents.deinit(t.allocator);
 		defer user.tags.?.deinit(t.allocator);
@@ -1541,9 +1532,6 @@ test "Row.to: iterator" {
 		const user2 = try (try result.next()).?.to(User, .{.dupe = true});
 		try t.expectEqual(null, try result.next());
 		defer result.deinit();
-		// hack, but the point here is to make sure that no references are still pointing
-		// to the reader.buf
-		@memset(result._conn._reader.buf, 0);
 
 		try t.expectSlice(i32, &.{0}, try user1.parents.alloc(t.arena.allocator()));
 		try t.expectStringSlice(&.{"over"}, try user1.tags.?.alloc(t.arena.allocator()));
@@ -1564,9 +1552,6 @@ test "Row.to: iterator" {
 		const user2 = try (try result.next()).?.to(User, .{.allocator = t.allocator});
 		try t.expectEqual(null, try result.next());
 		result.deinit();
-		// hack, but the point here is to make sure that no references are still pointing
-		// to the reader.buf
-		@memset(result._conn._reader.buf, 0);
 
 		defer user1.tags.?.deinit(t.allocator);
 		defer user1.parents.deinit(t.allocator);

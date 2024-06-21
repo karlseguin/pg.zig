@@ -172,11 +172,11 @@ pub const Conn = struct {
 		return stmt;
 	}
 
-	pub fn query(self: *Conn, sql: []const u8, values: anytype) !Result {
+	pub fn query(self: *Conn, sql: []const u8, values: anytype) !*Result {
 		return self.queryOpts(sql, values, .{});
 	}
 
-	pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !Result {
+	pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !*Result {
 		if (self.canQuery() == false) {
 			return error.ConnectionBusy;
 		}

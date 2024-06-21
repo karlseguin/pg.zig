@@ -137,11 +137,11 @@ pub const Pool = struct {
 		return conn.execOpts(sql, values, opts);
 	}
 
-	pub fn query(self: *Pool, sql: []const u8, values: anytype) !Result {
+	pub fn query(self: *Pool, sql: []const u8, values: anytype) !*Result {
 		return self.queryOpts(sql, values, .{});
 	}
 
-	pub fn queryOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !Result {
+	pub fn queryOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !*Result {
 		var opts = opts_;
 		opts.release_conn = true;
 		var conn = try self.acquire();

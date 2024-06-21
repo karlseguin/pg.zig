@@ -2,6 +2,8 @@
 
 A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify).
 
+See or run [example/main.zig](https://github.com/karlseguin/pg.zig/blob/master/example/main.zig) for a number of examples.
+
 ## Install
 1) Add into `dependencies` at `build.zig.zon`:
 ```zig
