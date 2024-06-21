@@ -183,7 +183,7 @@ Only advance usage will need access to the row fields:
 * `values: []Value` - The underlying byte value for each column in the row.  See `result.number_of_columns` for the length of this slice. Might be useful if you're trying to read a non-natively supported type. Has two fields, `is_null: bool` and `data: []const u8`.
 
 ### get(comptime T: type, col: usize) T
-Gets a single value from the row at the specified column index (0-based). **Type mapping is strict.** For example, you **cannot** use `i32` to read an `smallint` column.
+Gets a value from the row at the specified column index (0-based). **Type mapping is strict.** For example, you **cannot** use `i32` to read an `smallint` column.
 
 For any supported type, you can use an optional instead. Therefore, if you use `row.get(i16, 0)` the return type is `i16`. If you use `row.get(?i16, 0)` the return type is `?i16`. If you use a non-optional type for a null value, you'll get a failed assertion in `Debug` and `ReleaseSafe`, and undefined behavior in `ReleaseFast`, `ReleaseSmall` or if you set `pg_assert = false`.
 
@@ -211,8 +211,8 @@ while (try result.next()) |row| {
 }
 ```
 
-### iterator(comptime T: type, col: usize) Iterator(T)
-Gets an [Iterator](#iteratort) for reading a PostgreSQL array. `T` indicates the type of the value. Optional/null support is the same as `get`.
+### Array Columns
+Use `row.get(pg.Iterator(i32))` to return an [Iterator](#iteratort) over an array column. Supported array types are:
 
 * `u8` - `char[]`
 * `i16` - `smallint[]`
@@ -226,9 +226,6 @@ Gets an [Iterator](#iteratort) for reading a PostgreSQL array. `T` indicates the
 * `pg.Numeric` - See numeric section
 * `pg.Cidr` - See CIDR/INET section
 
-### iteratorCol(comptime T: type, column_name: []const u8) Iterator(T)
-Gets an [Iterator](#iteratort) by column name. See [getCol](#getcolcomptime-t-type-column_name-const-u8-t) for performance notes.
-
 ### record(col: usize) Record
 Gets a [Record](#record) by column position.
 
@@ -237,8 +234,6 @@ Gets an [Record](#record) by column name. See [getCol](#getcolcomptime-t-type-co
 
 ### to(T: type, opts: ToOpts) !T
 Populates and returns a `T`. 
-
-As of now, only scalar values (values that you'd get via `row.get(...)` can be mapped.
 
 `opts` values are:
 * `dupe` - Duplicate string columns using the internal arena. When set to `true` non-scalar values are valid until `deinit` is called on the `row`/`result`. Defaults to `false`
@@ -251,14 +246,16 @@ When `.map = .ordinal`, the default, the order of the field names must match the
 
 When `.map = .name`, the query must be executed with the  `{.column_names = true}` option. Columns with no field equivalent are ignored. Fields with no column equivalent are set to their default value; if they do not have a default value the function will return `error.FieldColumnMismatch`. If you're going to use this in a loop with a `result`, consider using a [Mapper](#mapper) to avoid the name->index lookup on each iteration.
 
+Array columns map to `pg.Iterator(T)` field types. When mapping to an `pg.Iterator(T)` with a custom allocator (`.{.allocator = allocator}`), the iterator must be freed by calling `iteartor.deinit(allocator)`. Strongly suggest you use an ArenaAllocator.
+
 ## QueryRow
 A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed. This is a rare case where `deinit()` can fail. In most cases, you can simply throw away the error (because failure is extremely rare and, if the connection came from a pool, it should repair itself).
 
 ## Iterator(T)
-The iterator returned from `row.iterator(T, col)` can be iterated using the `next() ?T` call:
+The iterator returned from `row.get(pg.Iterator(T), col)` can be iterated using the `next() ?T` call:
 
 ```zig
-var names = row.iterator([]u8, 0);
+var names = row.get(pg.Iterator([]const u8), 0);
 while (names.next()) |name| {
   ...
 }
@@ -416,7 +413,7 @@ Multi-dimensional arrays aren't supported. The array lower bound is always 0 (or
 ### text, bool, bytea, char, char(n), custom enums
 No surprises, arrays supported. 
 
-When reading a `char[]`, it's tempting to use `row.get([]u8, 0)`, but this is incorrect. A `char[]` is an array, and thus `row.iterator(u8, 0`) must be used.
+When reading a `char[]`, it's tempting to use `row.get([]u8, 0)`, but this is incorrect. A `char[]` is an array, and thus `row.get(pg.Iterator(u8), 0`) must be used.
 
 ### smallint, int, bigint
 When binding an integer, the library will coerce the Zig value to the parameter type, as long as it fits. Thus, a `u64` can be bound to a `smallint`, if the value fits, else an error will be returned.

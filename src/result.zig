@@ -28,7 +28,7 @@ pub const Result = struct {
 	// Used when the result came directly from the pool.query() helper.
 	_release_conn: bool,
 
-	pub fn deinit(self: Result) void {
+	pub fn deinit(self: *const Result) void {
 		// value.data references the buffer of the reader, this buffer is potentially
 		// reused and potentially discarded. There are at least a few very good
 		// reasons why the least we can do is blank it out.
@@ -250,9 +250,18 @@ pub const Row = struct {
 	pub fn get(self: *const Row, comptime T: type, col: usize) T {
 		const value = self.values[col];
 		const TT = switch (@typeInfo(T)) {
-			.Optional => |opt| blk: {
-				if (value.is_null) return null;
-				break :blk opt.child;
+			.Optional => |opt| {
+				if (value.is_null) {
+					return null;
+				} else {
+					return self.get(opt.child, col);
+				}
+			},
+			.Struct => blk: {
+				if (@hasDecl(T, "fromPgzRow") == true) {
+					return T.fromPgzRow(value, self.oids[col]);
+				}
+				break :blk T;
 			},
 			else => blk: {
 				lib.assert(value.is_null == false);
@@ -260,10 +269,9 @@ pub const Row = struct {
 			},
 		};
 
-		const data = value.data;
-		const oid = self.oids[col];
-		return getScalar(TT, data, oid);
+		return getScalar(TT, value.data, self.oids[col]);
 	}
+
 
 	pub fn getCol(self: *const Row, comptime T: type, name: []const u8) T {
 		const col = self._result.columnIndex(name);
@@ -274,95 +282,10 @@ pub const Row = struct {
 	pub fn iterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
 		const value = self.values[col];
 		const TT = switch (@typeInfo(T)) {
-			.Optional => |opt| blk: {
-				if (value.is_null) return null;
-				break :blk opt.child;
-			},
+			.Optional => |opt| if (value.is_null) return null else opt.child,
 			else => T,
 		};
-
-		const data_oid = self.oids[col];
-
-		const decoder = switch (TT) {
-			u8 => blk: {
-				lib.assert(data_oid == types.CharArray.oid.decimal);
-				break :blk &types.Char.decodeKnown;
-			},
-			i16 => blk: {
-				lib.assert(data_oid == types.Int16Array.oid.decimal);
-				break :blk &types.Int16.decodeKnown;
-			},
-			i32 => blk: {
-				lib.assert(data_oid == types.Int32Array.oid.decimal);
-				break :blk &types.Int32.decodeKnown;
-			},
-			i64 => switch (data_oid) {
-				types.TimestampArray.oid.decimal => &types.Timestamp.decodeKnown,
-				types.TimestampTzArray.oid.decimal => &types.Timestamp.decodeKnown,
-				types.Int64Array.oid.decimal => &types.Int64.decodeKnown,
-				else => std.debug.panic("{d} oid cannot target i64 iterator", .{data_oid}),
-			},
-			f32 => blk: {
-				lib.assert(data_oid == types.Float32Array.oid.decimal);
-				break :blk &types.Float32.decodeKnown;
-			},
-			f64 => switch (data_oid) {
-				types.Float64Array.oid.decimal => &types.Float64.decodeKnown,
-				types.NumericArray.oid.decimal => &types.Numeric.decodeKnownToFloat,
-				else => std.debug.panic("{d} oid cannot target f64 iterator", .{data_oid}),
-			},
-			bool =>  blk: {
-				lib.assert(data_oid == types.BoolArray.oid.decimal);
-				break :blk &types.Bool.decodeKnown;
-			},
-			[]const u8 => switch (data_oid) {
-				types.JSONBArray.oid.decimal => &types.JSONB.decodeKnown,
-				else => &types.Bytea.decodeKnown,
-			},
-			[]u8 => switch (data_oid) {
-				types.JSONBArray.oid.decimal => &types.JSONB.decodeKnownMutable,
-				else => &types.Bytea.decodeKnownMutable,
-			},
-			types.Numeric => blk: {
-				lib.assert(data_oid == types.NumericArray.oid.decimal);
-				break :blk &types.Numeric.decodeKnown;
-			},
-			types.Cidr => blk: {
-				lib.assert(data_oid == types.CidrArray.oid.decimal or data_oid == types.CidrArray.inet_oid.decimal );
-				break :blk &types.Cidr.decodeKnown;
-			},
-			else => compileHaltGetError(T),
-		};
-
-		const data = value.data;
-		if (data.len == 12) {
-			// we have an empty
-			return .{
-				._len = 0,
-				._pos = 0,
-				._data = &[_]u8{},
-				._decoder = decoder,
-			};
-		}
-
-		// minimum size for 1 empty array
-		lib.assert(data.len >= 20);
-		const dimensions = std.mem.readInt(i32, data[0..4], .big);
-		lib.assert(dimensions == 1);
-
-		const has_nulls = std.mem.readInt(i32, data[4..8][0..4], .big);
-		lib.assert(has_nulls == 0);
-
-		// const oid = std.mem.readInt(i32, data[8..12][0..4], .big);
-		const len = std.mem.readInt(i32, data[12..16][0..4], .big);
-		// const lower_bound = std.mem.readInt(i32, data[16..20][0..4], .big);
-
-		return .{
-			._len = @intCast(len),
-			._pos = 0,
-			._data = data[20..],
-			._decoder = decoder,
-		};
+		return Iterator(TT).fromPgzRow(value, self.oids[col]);
 	}
 
 	pub fn iteratorCol(self: *const Row, comptime T: type, name: []const u8) IteratorReturnType(T) {
@@ -476,14 +399,25 @@ pub fn Mapper(comptime T: type) type {
 }
 
 fn toValue(comptime T: type, value: T, allocator: ?Allocator) !T {
-	return switch (T) {
-		[]u8, []const u8 => if (allocator) |a| try a.dupe(u8, value) else value,
-		?[]u8, ?[]const u8 => blk: {
-			const v = value orelse break :blk null;
-			break :blk if (allocator) |a| try a.dupe(u8, v) else v;
-		},
-		else => value,
-	};
+	const a = allocator orelse return value;
+
+	if (@typeInfo(T) == .Optional) {
+		if (value) |v| {
+			return try toValue(@TypeOf(v), v, allocator);
+		} else {
+			return null;
+		}
+	}
+
+	if (T == []u8 or T == []const u8) {
+		return try a.dupe(u8, value);
+	}
+
+	if (@typeInfo(T) == .Struct and @hasDecl(T, "pgzMoveOwner")) {
+		return T.pgzMoveOwner(value, a);
+	}
+
+	return value;
 }
 
 pub const QueryRow = struct {
@@ -549,6 +483,110 @@ pub fn Iterator(comptime T: type) type {
 
 		pub fn len(self: Self) usize {
 			return self._len;
+		}
+
+		// used internally by row.get(Iterator(T))
+		fn fromPgzRow(value: Result.State.Value, oid: i32) Self {
+			const TT = switch (@typeInfo(T)) {
+				.Optional => |opt| opt.child,
+				else => T,
+			};
+
+			const decoder = switch (TT) {
+				u8 => blk: {
+					lib.assert(oid == types.CharArray.oid.decimal);
+					break :blk &types.Char.decodeKnown;
+				},
+				i16 => blk: {
+					lib.assert(oid == types.Int16Array.oid.decimal);
+					break :blk &types.Int16.decodeKnown;
+				},
+				i32 => blk: {
+					lib.assert(oid == types.Int32Array.oid.decimal);
+					break :blk &types.Int32.decodeKnown;
+				},
+				i64 => switch (oid) {
+					types.TimestampArray.oid.decimal => &types.Timestamp.decodeKnown,
+					types.TimestampTzArray.oid.decimal => &types.Timestamp.decodeKnown,
+					types.Int64Array.oid.decimal => &types.Int64.decodeKnown,
+					else => std.debug.panic("{d} oid cannot target i64 iterator", .{oid}),
+				},
+				f32 => blk: {
+					lib.assert(oid == types.Float32Array.oid.decimal);
+					break :blk &types.Float32.decodeKnown;
+				},
+				f64 => switch (oid) {
+					types.Float64Array.oid.decimal => &types.Float64.decodeKnown,
+					types.NumericArray.oid.decimal => &types.Numeric.decodeKnownToFloat,
+					else => std.debug.panic("{d} oid cannot target f64 iterator", .{oid}),
+				},
+				bool =>  blk: {
+					lib.assert(oid == types.BoolArray.oid.decimal);
+					break :blk &types.Bool.decodeKnown;
+				},
+				[]const u8 => switch (oid) {
+					types.JSONBArray.oid.decimal => &types.JSONB.decodeKnown,
+					else => &types.Bytea.decodeKnown,
+				},
+				[]u8 => switch (oid) {
+					types.JSONBArray.oid.decimal => &types.JSONB.decodeKnownMutable,
+					else => &types.Bytea.decodeKnownMutable,
+				},
+				types.Numeric => blk: {
+					lib.assert(oid == types.NumericArray.oid.decimal);
+					break :blk &types.Numeric.decodeKnown;
+				},
+				types.Cidr => blk: {
+					lib.assert(oid == types.CidrArray.oid.decimal or oid == types.CidrArray.inet_oid.decimal );
+					break :blk &types.Cidr.decodeKnown;
+				},
+				else => compileHaltGetError(T),
+			};
+
+			const data = value.data;
+			if (data.len == 12) {
+				// we have an empty
+				return .{
+					._len = 0,
+					._pos = 0,
+					._data = &[_]u8{},
+					._decoder = decoder,
+				};
+			}
+
+			// minimum size for 1 empty array
+			lib.assert(data.len >= 20);
+			const dimensions = std.mem.readInt(i32, data[0..4], .big);
+			lib.assert(dimensions == 1);
+
+			const has_nulls = std.mem.readInt(i32, data[4..8][0..4], .big);
+			lib.assert(has_nulls == 0);
+
+			// const oid = std.mem.readInt(i32, data[8..12][0..4], .big);
+			const l = std.mem.readInt(i32, data[12..16][0..4], .big);
+			// const lower_bound = std.mem.readInt(i32, data[16..20][0..4], .big);
+
+			return .{
+				._len = @intCast(l),
+				._pos = 0,
+				._data = data[20..],
+				._decoder = decoder,
+			};
+		}
+
+		fn pgzMoveOwner(self: Self, allocator: Allocator) !Self {
+			return .{
+				._len = self._len,
+				._pos = self._pos,
+				._data = try allocator.dupe(u8, self._data),
+				._decoder = self._decoder,
+			};
+		}
+
+		// Should only be called if the Iterator was created with row.to(...)
+		// or a result mapper AND an explicit allocator was given
+		pub fn deinit(self: *const Self, allocator: Allocator) void {
+			allocator.free(self._data);
 		}
 
 		pub fn next(self: *Self) ?T {
@@ -891,7 +929,7 @@ test "Result: iterator" {
 	defer c.deinit();
 
 	{
-		// empty
+		// empty row.iterator()
 		var result = try c.query("select $1::int[]", .{[_]i32{}});
 		defer result.deinit();
 		var row = (try result.next()).?;
@@ -907,13 +945,49 @@ test "Result: iterator" {
 		try result.drain();
 	}
 
+{
+		// empty row.get()
+		var result = try c.query("select $1::int[]", .{[_]i32{}});
+		defer result.deinit();
+		var row = (try result.next()).?;
+
+		var iterator = row.get(Iterator(i32), 0);
+		try t.expectEqual(0, iterator.len());
+
+		try t.expectEqual(null, iterator.next());
+		try t.expectEqual(null, iterator.next());
+
+		const a = try iterator.alloc(t.allocator);
+		try t.expectEqual(0, a.len);
+		try result.drain();
+	}
+
 	{
-		// one
+		// one: row.iterator
 		var result = try c.query("select $1::int[]", .{[_]i32{9}});
 		defer result.deinit();
 		var row = (try result.next()).?;
 
 		var iterator = row.iterator(i32, 0);
+		try t.expectEqual(1, iterator.len());
+
+		try t.expectEqual(9, iterator.next());
+		try t.expectEqual(null, iterator.next());
+
+		const arr = try iterator.alloc(t.allocator);
+		defer t.allocator.free(arr);
+		try t.expectEqual(1, arr.len);
+		try t.expectSlice(i32, &.{9}, arr);
+		try result.drain();
+	}
+
+	{
+		// one: row.get
+		var result = try c.query("select $1::int[]", .{[_]i32{9}});
+		defer result.deinit();
+		var row = (try result.next()).?;
+
+		var iterator = row.get(Iterator(i32), 0);
 		try t.expectEqual(1, iterator.len());
 
 		try t.expectEqual(9, iterator.next());
@@ -1131,7 +1205,6 @@ test "Row.to: ordinal" {
 		note: ?[]const u8,
 	};
 
-
 	var c = t.connect(.{});
 	defer c.deinit();
 
@@ -1174,9 +1247,9 @@ test "Row.to: ordinal" {
 	{
 		// not null, dupe with internal arena
 		var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
+		const user = try row.to(User, .{.dupe = true});
 		defer row.deinit() catch {};
 
-		const user = try row.to(User, .{.dupe = true});
 		try t.expectEqual(2, user.id);
 		try t.expectEqual(false, user.active);
 		try t.expectString("ghanima", user.name);
@@ -1186,9 +1259,11 @@ test "Row.to: ordinal" {
 	{
 		// null, dupe with explicit allocator
 		var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
-		defer row.deinit() catch {};
-
 		const user = try row.to(User, .{.allocator = t.allocator});
+		row.deinit() catch {};
+		// hack, but make sure we have nothing pointing to it
+		@memset(row.result._conn._reader.buf, 0);
+
 		defer t.allocator.free(user.name);
 		try t.expectEqual(1, user.id);
 		try t.expectEqual(true, user.active);
@@ -1199,9 +1274,13 @@ test "Row.to: ordinal" {
 	{
 		// not null, dupe with explicit allocator
 		var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
-		defer row.deinit() catch {};
 
 		const user = try row.to(User, .{.allocator = t.allocator});
+		row.deinit() catch {};
+
+		// hack, but make sure we have nothing pointing to it
+		@memset(row.result._conn._reader.buf, 0);
+
 		defer t.allocator.free(user.name);
 		defer t.allocator.free(user.note.?);
 
@@ -1414,6 +1493,92 @@ test "Result.Mapper" {
 		.name = "ghanima",
 		.note = "n1",
 	}, .{.allocator = t.allocator});
+}
+
+test "Row.to: iterator" {
+	const User = struct {
+		parents: Iterator(i32),
+		tags: ?Iterator([]const u8),
+	};
+
+	defer t.reset();
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	{
+		var row = (try c.row("select array[1, 99]::integer[], null", .{})).?;
+		defer row.deinit() catch {};
+
+		const user = try row.to(User, .{});
+		try t.expectSlice(i32, &.{1, 99}, try user.parents.alloc(t.arena.allocator()));
+		try t.expectEqual(null, user.tags);
+	}
+
+	{
+		var row = (try c.row("select array[0]::integer[], array['over', '9000']::text[]", .{})).?;
+		const user = try row.to(User, .{.allocator = t.allocator});
+		row.deinit() catch {};
+		// hack, but the point here is to make sure that no references are still pointing
+		// to the reader.buf
+		@memset(row.result._conn._reader.buf, 0);
+
+		defer user.parents.deinit(t.allocator);
+		defer user.tags.?.deinit(t.allocator);
+
+		try t.expectSlice(i32, &.{0}, try user.parents.alloc(t.arena.allocator()));
+		try t.expectStringSlice(&.{"over", "9000"}, try user.tags.?.alloc(t.arena.allocator()));
+	}
+
+	{
+		// dupe with result arena
+		var result = try c.query(
+			\\ select array[0]::integer[], array['over']::text[]
+				\\ union all
+				\\ select array[1]::integer[], array['9000']::text[]
+		, .{});
+
+		const user1 = try (try result.next()).?.to(User, .{.dupe = true});
+		const user2 = try (try result.next()).?.to(User, .{.dupe = true});
+		try t.expectEqual(null, try result.next());
+		defer result.deinit();
+		// hack, but the point here is to make sure that no references are still pointing
+		// to the reader.buf
+		@memset(result._conn._reader.buf, 0);
+
+		try t.expectSlice(i32, &.{0}, try user1.parents.alloc(t.arena.allocator()));
+		try t.expectStringSlice(&.{"over"}, try user1.tags.?.alloc(t.arena.allocator()));
+
+		try t.expectSlice(i32, &.{1}, try user2.parents.alloc(t.arena.allocator()));
+		try t.expectStringSlice(&.{"9000"}, try user2.tags.?.alloc(t.arena.allocator()));
+	}
+
+	{
+		// dupe with explicit arena
+		var result = try c.query(
+			\\ select array[0]::integer[], array['over']::text[]
+				\\ union all
+				\\ select array[1]::integer[], array['9000']::text[]
+		, .{});
+
+		const user1 = try (try result.next()).?.to(User, .{.allocator = t.allocator});
+		const user2 = try (try result.next()).?.to(User, .{.allocator = t.allocator});
+		try t.expectEqual(null, try result.next());
+		result.deinit();
+		// hack, but the point here is to make sure that no references are still pointing
+		// to the reader.buf
+		@memset(result._conn._reader.buf, 0);
+
+		defer user1.tags.?.deinit(t.allocator);
+		defer user1.parents.deinit(t.allocator);
+		defer user2.tags.?.deinit(t.allocator);
+		defer user2.parents.deinit(t.allocator);
+
+		try t.expectSlice(i32, &.{0}, try user1.parents.alloc(t.arena.allocator()));
+		try t.expectStringSlice(&.{"over"}, try user1.tags.?.alloc(t.arena.allocator()));
+
+		try t.expectSlice(i32, &.{1}, try user2.parents.alloc(t.arena.allocator()));
+		try t.expectStringSlice(&.{"9000"}, try user2.tags.?.alloc(t.arena.allocator()));
+	}
 }
 
 fn expectResultMapper(conn: *Conn, sql: []const u8, expected: anytype, opts: Result.MapperOpts) !void {

@@ -31,6 +31,12 @@ pub fn expectDelta(expected: anytype, actual: anytype, delta: anytype) !void {
 pub const expectError = std.testing.expectError;
 pub const expectSlice = std.testing.expectEqualSlices;
 pub const expectString = std.testing.expectEqualStrings;
+pub fn expectStringSlice(expected: []const []const u8, actual: [][]const u8) !void {
+	try expectEqual(expected.len, actual.len);
+	for (expected, actual) |e, a| {
+		try expectString(e, a);
+	}
+}
 
 pub fn getRandom() std.rand.DefaultPrng {
 	var seed: u64 = undefined;
