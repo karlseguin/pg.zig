@@ -183,6 +183,9 @@ fn ReaderT(comptime T: type) type {
 								// currently using a dynamically alllocated buffer, we'll
 								// grow or allocate a larger one (which is what realloc does)
 								new_buf = try allocator.realloc(buf, message_length);
+								if (start > 0) {
+									std.mem.copyForwards(u8, new_buf[0..current_length], new_buf[start..pos]);
+								}
 								lib.metrics.allocReader(message_length - current_length);
 							}
 
@@ -616,17 +619,20 @@ test "Reader: start/endFlow large overread" {
 	var s = t.Stream.init();
 	defer s.deinit();
 
-	// 1st message is bigge than static
+	// 1st message is bigger than static
 	s.add(&[_]u8{1, 0, 0, 0, 8, 1, 2, 3, 4});
 
 	// 2nd message is bigger than first
-	s.add(&[_]u8{2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6});
+	s.add(&[_]u8{2, 0, 0, 0, 18, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14});
 
 	// 3rd message is smaller than 2nd (should re-use previous buffer)
 	s.add(&[_]u8{3, 0, 0, 0, 9, 1, 2, 3, 4, 5});
 
-	// 4th message is overread and does not fit into static
-	s.add(&[_]u8{3, 0, 0, 0, 11, 255, 250, 245, 240, 235, 230, 225});
+	// 4rd message is huge
+	s.add(&[_]u8{4, 0, 0, 19, 140} ++ "z" ** 5000);
+
+	// 5th message is overread and does not fit into static
+	s.add(&[_]u8{5, 0, 0, 0, 11, 255, 250, 245, 240, 235, 230, 225});
 
 	var reader = R.init(t.allocator, 7, s) catch unreachable;
 	defer reader.deinit();
@@ -636,14 +642,17 @@ test "Reader: start/endFlow large overread" {
 	try t.expectSlice(u8, &.{1, 2, 3, 4}, msg1.data);
 
 	const msg2 = try reader.next();
-	try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6}, msg2.data);
+	try t.expectSlice(u8, &.{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, msg2.data);
 
 	const msg3 = try reader.next();
 	try t.expectSlice(u8, &.{1, 2, 3, 4, 5}, msg3.data);
-	reader.endFlow() catch unreachable;
 
 	const msg4 = try reader.next();
-	try t.expectSlice(u8, &.{255, 250, 245, 240, 235, 230, 225}, msg4.data);
+	try t.expectSlice(u8, "z" ** 5000, msg4.data);
+	reader.endFlow() catch unreachable;
+
+	const msg5 = try reader.next();
+	try t.expectSlice(u8, &.{255, 250, 245, 240, 235, 230, 225}, msg5.data);
 }
 
 test "Reader: start/endFlow large overread with flow-specific allocator" {
@@ -681,7 +690,6 @@ test "Reader: start/endFlow large overread with flow-specific allocator" {
 	const msg4 = try reader.next();
 	try t.expectSlice(u8, &.{255, 250, 245, 240, 235, 230, 225}, msg4.data);
 }
-
 
 test "Reader: startFlow with dynamic allocation into deinit " {
 	// This can happen on an error case, where we start a flow, but an error
