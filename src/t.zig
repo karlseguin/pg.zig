@@ -38,10 +38,10 @@ pub fn expectStringSlice(expected: []const []const u8, actual: [][]const u8) !vo
 	}
 }
 
-pub fn getRandom() std.rand.DefaultPrng {
+pub fn getRandom() std.Random.DefaultPrng {
 	var seed: u64 = undefined;
 	std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
-	return std.rand.DefaultPrng.init(seed);
+	return std.Random.DefaultPrng.init(seed);
 }
 
 pub fn setup() !void {
