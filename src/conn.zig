@@ -97,7 +97,7 @@ pub const Conn = struct {
 		};
 		errdefer stream.close();
 
-		const buf = try Buffer.init(allocator, @min(opts.write_buffer orelse 2048, 128));
+		const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));
 		errdefer buf.deinit();
 
 		const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
