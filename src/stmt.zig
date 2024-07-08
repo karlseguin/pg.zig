@@ -144,7 +144,7 @@ pub const Stmt = struct {
 		// First message we expect back is a ParseComplete, which has no data.
 		{
 			// If Parse fails, then the server won't reply to our other messages
-			// (i.e. Describ) and it'l immediately send a ReadyForQuery.
+			// (i.e. Describe) and it'l immediately send a ReadyForQuery.
 			const msg = conn.read() catch |err| {
 				conn.readyForQuery() catch {};
 				return err;

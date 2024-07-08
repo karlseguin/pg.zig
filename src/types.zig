@@ -953,85 +953,84 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
 			// special length of -1 indicates null, no other data for this value
 			return buf.write(&.{255, 255, 255, 255});
 		},
-		.ComptimeInt => {
-			switch (oid) {
-				Types.Int16.oid.decimal => {
-					if (value > 32767 or value < -32768) return error.IntWontFit;
-					return Types.Int16.encode(@intCast(value), buf, format_pos);
-				},
-				Types.Int32.oid.decimal => {
-					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
-					return Types.Int32.encode(@intCast(value), buf, format_pos);
-				},
-				Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
-				Types.Numeric.oid.decimal => return Types.Numeric.encode(@as(f64, @floatFromInt(value)), buf, format_pos),
-				Types.Char.oid.decimal => {
-					if (value > 255 or value < 0) return error.IntWontFit;
-					return Types.Char.encode(@intCast(value), buf, format_pos);
-				},
-				else => return Types.Int64.encode(@intCast(value), buf, format_pos),
-			}
+		.ComptimeInt => switch (oid) {
+			Types.Int16.oid.decimal => {
+				if (value > 32767 or value < -32768) return error.IntWontFit;
+				return Types.Int16.encode(@intCast(value), buf, format_pos);
+			},
+			Types.Int32.oid.decimal => {
+				if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
+				return Types.Int32.encode(@intCast(value), buf, format_pos);
+			},
+			Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+			Types.Numeric.oid.decimal => return Types.Numeric.encode(@as(f64, @floatFromInt(value)), buf, format_pos),
+			Types.Char.oid.decimal => {
+				if (value > 255 or value < 0) return error.IntWontFit;
+				return Types.Char.encode(@intCast(value), buf, format_pos);
+			},
+			Types.Int64.oid.decimal => return Types.Int64.encode(@intCast(value), buf, format_pos),
+			else => return error.BindWrongType,
 		},
-		.Int => {
-			switch (oid) {
-				Types.Int16.oid.decimal => {
-					if (value > 32767 or value < -32768) return error.IntWontFit;
-					return Types.Int16.encode(@intCast(value), buf, format_pos);
-				},
-				Types.Int32.oid.decimal => {
-					if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
-					return Types.Int32.encode(@intCast(value), buf, format_pos);
-				},
-				Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
-				Types.Numeric.oid.decimal => return Types.Numeric.encode(@as(f64, @floatFromInt(value)), buf, format_pos),
-				Types.Char.oid.decimal => {
-					if (value > 255 or value < 0) return error.IntWontFit;
-					return Types.Char.encode(@intCast(value), buf, format_pos);
-				},
-				else => {
-					if (value > 9223372036854775807 or value < -9223372036854775808) return error.IntWontFit;
-					return Types.Int64.encode(@intCast(value), buf, format_pos);
-				},
-			}
+		.Int => switch (oid) {
+			Types.Int16.oid.decimal => {
+				if (value > 32767 or value < -32768) return error.IntWontFit;
+				return Types.Int16.encode(@intCast(value), buf, format_pos);
+			},
+			Types.Int32.oid.decimal => {
+				if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
+				return Types.Int32.encode(@intCast(value), buf, format_pos);
+			},
+			Types.Timestamp.oid.decimal, Types.TimestampTz.oid.decimal => return Types.Timestamp.encode(@intCast(value), buf, format_pos),
+			Types.Numeric.oid.decimal => return Types.Numeric.encode(@as(f64, @floatFromInt(value)), buf, format_pos),
+			Types.Char.oid.decimal => {
+				if (value > 255 or value < 0) return error.IntWontFit;
+				return Types.Char.encode(@intCast(value), buf, format_pos);
+			},
+			Types.Int64.oid.decimal => {
+				if (value > 9223372036854775807 or value < -9223372036854775808) {
+					return error.IntWontFit;
+				}
+				return Types.Int64.encode(@intCast(value), buf, format_pos);
+			},
+			else => return error.BindWrongType,
 		},
-		.ComptimeFloat => {
-			switch (oid) {
-				Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
-				Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
-				else => return Types.Float64.encode(@floatCast(value), buf, format_pos),
-			}
+		.ComptimeFloat => switch (oid) {
+			Types.Float64.oid.decimal => return Types.Float64.encode(@floatCast(value), buf, format_pos),
+			Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
+			Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
+			else => return Types.Float64.encode(@floatCast(value), buf, format_pos),
 		},
-		.Float => {
-			switch (oid) {
-				Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
-				Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
-				else => return Types.Float64.encode(@floatCast(value), buf, format_pos),
-			}
+		.Float => switch (oid) {
+			Types.Float64.oid.decimal => return Types.Float64.encode(@floatCast(value), buf, format_pos),
+			Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
+			Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
+			else => return error.BindWrongType,
 		},
-		.Bool => return Types.Bool.encode(value, buf, format_pos),
-		.Pointer => |ptr| {
-			switch (ptr.size) {
-				.Slice => {
-					if (ptr.is_const) {
-						return bindSlice(oid, @as([]const ptr.child, value), buf, format_pos);
-					} else {
-						return bindSlice(oid, @as([]ptr.child, value), buf, format_pos);
-					}
+		.Bool => switch (oid) {
+			Types.Bool.oid.decimal => return Types.Bool.encode(value, buf, format_pos),
+			else => return error.BindWrongType,
+		},
+		.Pointer => |ptr| switch (ptr.size) {
+			.Slice => {
+				if (ptr.is_const) {
+					return bindSlice(oid, @as([]const ptr.child, value), buf, format_pos);
+				} else {
+					return bindSlice(oid, @as([]ptr.child, value), buf, format_pos);
+				}
+			},
+			.One => switch (@typeInfo(ptr.child)) {
+				.Array => {
+					const Slice = []const std.meta.Elem(ptr.child);
+					return bindSlice(oid, @as(Slice, value), buf, format_pos);
 				},
-				.One => switch (@typeInfo(ptr.child)) {
-					.Array => {
-						const Slice = []const std.meta.Elem(ptr.child);
-						return bindSlice(oid, @as(Slice, value), buf, format_pos);
-					},
-					.Struct => switch (oid) {
-						Types.JSON.oid.decimal => return Types.JSON.encode(value, buf, format_pos),
-						Types.JSONB.oid.decimal => return Types.JSONB.encode(value, buf, format_pos),
-						else => return error.CannotBindStruct,
-					},
-					else => compileHaltBindError(T),
+				.Struct => switch (oid) {
+					Types.JSON.oid.decimal => return Types.JSON.encode(value, buf, format_pos),
+					Types.JSONB.oid.decimal => return Types.JSONB.encode(value, buf, format_pos),
+					else => return error.CannotBindStruct,
 				},
 				else => compileHaltBindError(T),
-			}
+			},
+			else => compileHaltBindError(T),
 		},
 		.Array => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),
 		.Struct => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),

@@ -1459,6 +1459,14 @@ test "Conn: application_name" {
 	try t.expectString("pg_zig_test", row.get([]const u8, 0));
 }
 
+test "PG: bind conversion" {
+	var c = t.connect(.{});
+	defer c.deinit();
+
+	std.debug.print("HERE\n", .{});
+	try t.expectError(error.BindWrongType, c.row("select $1 as text", .{false}));
+}
+
 fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {
 	var str_buf: [50]u8 = undefined;
 	try t.expectString(expected, numeric.toString(&str_buf));
