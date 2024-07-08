@@ -479,15 +479,6 @@ test "Conn: parse error" {
 	try t.expectEqual(2, t.scalar(&c, "select 2"));
 }
 
-test "Conn: bind error" {
-	var c = t.connect(.{});
-	defer c.deinit();
-	try t.expectError(error.PG, c.query("select $1::bool", .{33.2}));
-
-	// connection is still usable
-	try t.expectEqual(4, t.scalar(&c, "select 4"));
-}
-
 test "Conn: Query within Query error" {
 	var c = t.connect(.{});
 	defer c.deinit();
@@ -1459,12 +1450,18 @@ test "Conn: application_name" {
 	try t.expectString("pg_zig_test", row.get([]const u8, 0));
 }
 
-test "PG: bind conversion" {
+test "PG: bind strictness" {
 	var c = t.connect(.{});
 	defer c.deinit();
+	try t.expectError(error.BindWrongType, c.row("select $1", .{100}));
+	try t.expectError(error.BindWrongType, c.row("select $1", .{10.2}));
+	try t.expectError(error.BindWrongType, c.row("select $1", .{true}));
 
-	std.debug.print("HERE\n", .{});
-	try t.expectError(error.BindWrongType, c.row("select $1 as text", .{false}));
+	try t.expectError(error.BindWrongType, c.row("select $1", .{@as(i32, 100)}));
+	try t.expectError(error.BindWrongType, c.row("select $1", .{@as(f32, 10.2)}));
+
+	// conn is still usable
+	try t.expectEqual(4, t.scalar(&c, "select 4"));
 }
 
 fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {

@@ -998,7 +998,7 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
 			Types.Float64.oid.decimal => return Types.Float64.encode(@floatCast(value), buf, format_pos),
 			Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
 			Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
-			else => return Types.Float64.encode(@floatCast(value), buf, format_pos),
+			else => return error.BindWrongType,
 		},
 		.Float => switch (oid) {
 			Types.Float64.oid.decimal => return Types.Float64.encode(@floatCast(value), buf, format_pos),
