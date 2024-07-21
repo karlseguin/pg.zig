@@ -28,6 +28,12 @@ pub const Pool = struct {
         timeout: u32 = 10 * std.time.ms_per_s,
     };
 
+    pub fn initUri(allocator: Allocator, uri: std.Uri, size: u16, pool_timeout_ms: u32) !*Pool {
+        var po = try lib.parseOpts(uri, allocator, size, pool_timeout_ms);
+        defer po.deinit();
+        return Pool.init(allocator, po.opts);
+    }
+
     pub fn init(allocator: Allocator, opts: Opts) !*Pool {
         const pool = try allocator.create(Pool);
         errdefer allocator.destroy(pool);

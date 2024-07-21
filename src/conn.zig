@@ -85,6 +85,20 @@ pub const Conn = struct {
         release_conn: bool = false,
     };
 
+    pub fn openAndAuthUri(allocator: Allocator, uri: std.Uri) !Conn {
+        var po = try lib.parseOpts(uri, allocator, 0, 0);
+        defer po.deinit();
+        return try openAndAuth(allocator, po.opts.connect, po.opts.auth);
+    }
+
+    pub fn openAndAuth(allocator: Allocator, opts: Opts, ao: lib.auth.Opts) !Conn {
+        var conn = try open(allocator, opts);
+        errdefer conn.deinit();
+
+        try conn.auth(ao);
+        return conn;
+    }
+
     pub fn open(allocator: Allocator, opts: Opts) !Conn {
         const stream = blk: {
             if (opts.unix_socket) |path| {
@@ -1496,6 +1510,12 @@ test "PG: bind strictness" {
 
     // conn is still usable
     try t.expectEqual(4, t.scalar(&c, "select 4"));
+}
+
+test "open URI" {
+    const uri = try std.Uri.parse("postgresql://postgres:root_pw@localhost:5432/postgres?tcp_user_timeout=5000");
+    var conn = try Conn.openAndAuthUri(t.allocator, uri);
+    conn.deinit();
 }
 
 fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {
