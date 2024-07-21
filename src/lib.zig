@@ -42,27 +42,28 @@ pub fn assert(ok: bool) void {
 
 pub const ParsedOpts = struct {
     opts: Pool.Opts,
-    aa: std.heap.ArenaAllocator,
+    arena: std.heap.ArenaAllocator,
+
     pub fn deinit(self: *ParsedOpts) void {
-        self.aa.deinit();
+        self.arena.deinit();
     }
 };
 
 pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_timeout_ms: u32) !ParsedOpts {
-    var aa = std.heap.ArenaAllocator.init(allocator);
-    errdefer aa.deinit();
-    const a = aa.allocator();
-
     if (!std.mem.eql(u8, uri.scheme, "postgresql")) {
         return error.InvalidUriScheme;
     }
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const aa = arena.allocator();
+
     var tcp_user_timeout: ?u32 = null;
     if (uri.query) |qry| {
-        const qryString = try qry.toRawMaybeAlloc(a);
-        var it = std.mem.splitScalar(u8, qryString, '&');
-        while (it.next()) |paramString| {
-            var it2 = std.mem.splitScalar(u8, paramString, '=');
+        const query_string = try qry.toRawMaybeAlloc(aa);
+        var it = std.mem.splitScalar(u8, query_string, '&');
+        while (it.next()) |param| {
+            var it2 = std.mem.splitScalar(u8, param, '=');
             const key = it2.first();
             const val = it2.rest();
             if (std.mem.eql(u8, key, "tcp_user_timeout")) {
@@ -72,21 +73,25 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
             }
         }
     }
-    const pathTrim = std.mem.trimLeft(u8, try uri.path.toRawMaybeAlloc(a), "/");
-    return .{ .aa = aa, .opts = .{
-        .size = size,
-        .auth = .{
-            .username = if (uri.user) |user| try user.toRawMaybeAlloc(a) else "postgres",
-            .password = if (uri.password) |password| try password.toRawMaybeAlloc(a) else null,
-            .database = if (pathTrim.len == 0) null else pathTrim,
-            .timeout = tcp_user_timeout orelse 10_000,
-        },
-        .connect = .{
-            .host = if (uri.host) |host| try host.toRawMaybeAlloc(a) else null,
-            .port = uri.port orelse null,
-        },
-        .timeout = pool_timeout_ms,
-    } };
+
+    const path = std.mem.trimLeft(u8, try uri.path.toRawMaybeAlloc(aa), "/");
+    return .{
+        .arena = arena,
+        .opts = .{
+            .size = size,
+            .auth = .{
+                .username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres",
+                .password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null,
+                .database = if (path.len == 0) null else path,
+                .timeout = tcp_user_timeout orelse 10_000,
+            },
+            .connect = .{
+                .host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null,
+                .port = uri.port orelse null,
+            },
+            .timeout = pool_timeout_ms,
+        }
+    };
 }
 
 const TestCase = struct {
