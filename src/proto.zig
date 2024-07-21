@@ -15,5 +15,5 @@ pub const StartupMessage = @import("proto/StartupMessage.zig");
 pub const Sync = @import("proto/Sync.zig");
 
 test {
-	@import("std").testing.refAllDecls(@This());
+    @import("std").testing.refAllDecls(@This());
 }
