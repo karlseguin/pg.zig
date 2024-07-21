@@ -54,13 +54,22 @@ while (try result.next()) |row| {
 ## Pool
 The pool keeps a configured number of database connection open. The `acquire()` method is used to retrieve a connection from the pool. The pool may start one background thread to attempt to reconnect disconnected connections (or connections which are in an invalid state).
 
-### init(allocator: std.mem.allocator, opts: Opts) !Pool
+### init(allocator: std.mem.allocator, opts: Opts) !*Pool
 Initializes a connection pool. Pool options are:
 
 * `size` - Number of connections to maintain. Defaults to `10`
 * `auth`: - See [Conn.auth](#authopts-opts-void)
 * `connect`: - See the [Conn.open](#openallocator-stdmemallocator-opts-opts-conn)
 * `timeout` - The amount of time, in milliseconds, to wait for a connection to be available when `acquire()` is called.
+
+### initUri(allocator: std.mem.Allocator, uri: std.Uri, size: u16, pool_timeout_ms: u32) !*Pool
+Initializes a connection pool using a std.Uri.
+
+```zig
+const uri = try std.Uri.parse("postgresql://username:password@localhost:5432/database_name");
+const pool = try pg.Pool.initUri(allocator, uri, 5, 10_000);
+defer pool.deinit();
+```
 
 ### acquire() !\*Conn
 Returns a [\*Conn](#conn) for the connection pool. Returns an `error.Timeout` if the connection cannot be acquired (i.e. if the pool remains empty) for the  `timeout` configuration passed to `init`.
