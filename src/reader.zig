@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 // to everyone else, this is our reader
 pub const Reader = ReaderT(std.net.Stream);
 
-const zero_timeval = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 0 });
+const zero_timeval = std.mem.toBytes(posix.timeval{ .tv_sec =  0, .tv_usec = 0 });
 
 // generic just for testing within this file
 fn ReaderT(comptime T: type) type {
