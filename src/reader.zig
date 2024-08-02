@@ -72,8 +72,8 @@ fn ReaderT(comptime T: type) type {
         pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
             if (timeout_ms) |ms| {
                 const timeval = std.mem.toBytes(posix.timeval{
-                    .sec = @intCast(@divTrunc(ms, 1000)),
-                    .usec = @intCast(@mod(ms, 1000) * 1000),
+                    .tv_sec = @intCast(@divTrunc(ms, 1000)),
+                    .tv_usec = @intCast(@mod(ms, 1000) * 1000),
                 });
                 try posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
                 self.has_timeout = true;
