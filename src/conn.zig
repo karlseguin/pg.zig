@@ -192,10 +192,15 @@ pub const Conn = struct {
 
     pub fn queryOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !*Result {
         if (self.canQuery() == false) {
+            self.maybeRelease(opts.release_conn);
             return error.ConnectionBusy;
         }
 
-        var stmt = try Stmt.init(self, opts);
+        var stmt = Stmt.init(self, opts) catch |err| {
+            self.maybeRelease(opts.release_conn);
+            return err;
+        };
+
         errdefer stmt.deinit();
 
         try stmt.prepare(sql);
@@ -203,7 +208,6 @@ pub const Conn = struct {
         inline for (values) |value| {
             try stmt.bind(value);
         }
-
         return stmt.execute();
     }
 
@@ -212,10 +216,6 @@ pub const Conn = struct {
     }
 
     pub fn rowOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !?QueryRow {
-        if (self.canQuery() == false) {
-            return error.ConnectionBusy;
-        }
-
         var result = try self.queryOpts(sql, values, opts);
         errdefer result.deinit();
 
@@ -367,6 +367,12 @@ pub const Conn = struct {
             return true;
         }
         return false;
+    }
+
+    inline fn maybeRelease(self: *Conn, rel: bool) void {
+        if (rel) {
+            self.release();
+        }
     }
 
     // should not be called directly

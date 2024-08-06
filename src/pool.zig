@@ -163,7 +163,6 @@ pub const Pool = struct {
         var opts = opts_;
         opts.release_conn = true;
         var conn = try self.acquire();
-        errdefer self.release(conn);
         return conn.rowOpts(sql, values, opts);
     }
 };
@@ -362,6 +361,19 @@ test "Pool: Query/Row" {
         try t.expectEqual(2, row.get(i64, 0));
         try t.expectString("val-2", row.get([]u8, 1));
     }
+}
+
+test "Pool: Row error" {
+    var pool = try Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    _ = try pool.row("insert into all_types (id) values ($1)", .{ 200 });
+
+    // This would segfault:
+    // https://github.com/karlseguin/pg.zig/issues/34
+    try t.expectError(error.PG, pool.row("insert into all_types (id) values ($1)", .{ 200 }));
+
+    try t.expectEqual(1, pool._available);
 }
 
 fn testPool(p: *Pool) void {
