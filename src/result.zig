@@ -679,7 +679,13 @@ fn getScalar(T: type, data: []const u8, oid: i32) T {
         []u8 => return @constCast(types.Bytea.decode(data, oid)),
         types.Numeric => return types.Numeric.decode(data, oid),
         types.Cidr => return types.Cidr.decode(data, oid),
-        else => compileHaltGetError(T),
+        else => switch (@typeInfo(T)) {
+            .Enum => {
+                const str = types.Bytea.decode(data, oid);
+                return std.meta.stringToEnum(T, str).?;
+            },
+            else => compileHaltGetError(T),
+        },
     }
 }
 
@@ -1199,6 +1205,13 @@ test "Row.to: ordinal" {
         active: bool,
         name: []const u8,
         note: ?[]const u8,
+        choice: Choice,
+
+        const Choice = enum {
+            blue,
+            green,
+            red,
+        };
     };
 
     var c = t.connect(.{});
@@ -1206,7 +1219,7 @@ test "Row.to: ordinal" {
 
     {
         // null, no dupe
-        var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
+        var row = (try c.row("select 1::integer, true, 'teg', null::text, 'blue'", .{})).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{});
@@ -1214,11 +1227,12 @@ test "Row.to: ordinal" {
         try t.expectEqual(true, user.active);
         try t.expectString("teg", user.name);
         try t.expectEqual(null, user.note);
+        try t.expectEqual(.blue, user.choice);
     }
 
     {
         // not null, no dupe
-        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
+        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{});
@@ -1226,11 +1240,12 @@ test "Row.to: ordinal" {
         try t.expectEqual(false, user.active);
         try t.expectString("ghanima", user.name);
         try t.expectString("n1", user.note.?);
+        try t.expectEqual(.red, user.choice);
     }
 
     {
         // null, dupe with internal arena
-        var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
+        var row = (try c.row("select 1::integer, true, 'teg', null::text, 'red'", .{})).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .dupe = true });
@@ -1238,11 +1253,12 @@ test "Row.to: ordinal" {
         try t.expectEqual(true, user.active);
         try t.expectString("teg", user.name);
         try t.expectEqual(null, user.note);
+        try t.expectEqual(.red, user.choice);
     }
 
     {
         // not null, dupe with internal arena
-        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
+        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
         const user = try row.to(User, .{ .dupe = true });
         defer row.deinit() catch {};
 
@@ -1250,11 +1266,12 @@ test "Row.to: ordinal" {
         try t.expectEqual(false, user.active);
         try t.expectString("ghanima", user.name);
         try t.expectString("n1", user.note.?);
+        try t.expectEqual(.red, user.choice);
     }
 
     {
         // null, dupe with explicit allocator
-        var row = (try c.row("select 1::integer, true, 'teg', null::text", .{})).?;
+        var row = (try c.row("select 1::integer, true, 'teg', null::text, 'red'", .{})).?;
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
 
@@ -1263,11 +1280,12 @@ test "Row.to: ordinal" {
         try t.expectEqual(true, user.active);
         try t.expectString("teg", user.name);
         try t.expectEqual(null, user.note);
+        try t.expectEqual(.red, user.choice);
     }
 
     {
         // not null, dupe with explicit allocator
-        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1'", .{})).?;
+        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
 
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
@@ -1279,6 +1297,7 @@ test "Row.to: ordinal" {
         try t.expectEqual(false, user.active);
         try t.expectString("ghanima", user.name);
         try t.expectString("n1", user.note.?);
+        try t.expectEqual(.red, user.choice);
     }
 }
 
