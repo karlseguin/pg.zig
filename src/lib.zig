@@ -40,6 +40,53 @@ pub fn assert(ok: bool) void {
     }
 }
 
+pub fn assertDecodeType(comptime T: type, comptime expected_oids: []const i32, actual: i32) void {
+    if (comptime _assert == false) {
+        return;
+    }
+
+    inline for (expected_oids) |expected_oid| {
+        if (expected_oid == actual) {
+            return;
+        }
+    }
+
+    log.warn(
+        "PostgreSQL value of type {s} cannot be read into a " ++ @typeName(T) ++ ". " ++
+        "pg.zig has strict type checking when reading value."
+    , .{types.oidToString(actual)});
+    unreachable;
+}
+
+pub fn assertNotNull(comptime T: type, is_null: bool) void {
+    if (comptime _assert == false) {
+        return;
+    }
+
+    if (is_null == false) {
+        return;
+    }
+
+    log.warn(
+        "PostgreSQL null column cannot be read into non-optional type (" ++ @typeName(T) ++ "). " ++
+        "pg.zig has strict type checking when reading value."
+    , .{});
+    unreachable;
+}
+
+pub fn assertColumnName(name: []const u8, valid: bool) void {
+    if (comptime _assert == false) {
+        return;
+    }
+
+    if (valid) {
+        return;
+    }
+
+    log.warn("Unknown column name '{s}'", .{name});
+    unreachable;
+}
+
 pub const ParsedOpts = struct {
     opts: Pool.Opts,
     arena: std.heap.ArenaAllocator,

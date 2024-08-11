@@ -80,7 +80,8 @@ pub const Numeric = struct {
     }
 
     pub fn decode(data: []const u8, data_oid: i32) Numeric {
-        lib.assert(data_oid == Numeric.oid.decimal and data.len >= 8);
+        lib.assertDecodeType(Numeric, &.{Numeric.oid.decimal}, data_oid);
+        lib.assert(data.len >= 8);
         return decodeKnown(data);
     }
 

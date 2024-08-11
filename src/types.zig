@@ -44,7 +44,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) u8 {
-            lib.assert(data_oid == Char.oid.decimal);
+            lib.assertDecodeType(u8, &.{Char.oid.decimal}, data_oid);
             return data[0];
         }
 
@@ -69,7 +69,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) i16 {
-            lib.assert(data_oid == Int16.oid.decimal);
+            lib.assertDecodeType(i16, &.{Int16.oid.decimal}, data_oid);
             return Int16.decodeKnown(data);
         }
 
@@ -94,7 +94,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) i32 {
-            lib.assert(data_oid == Int32.oid.decimal);
+            lib.assertDecodeType(i32, &.{Int32.oid.decimal}, data_oid);
             return Int32.decodeKnown(data);
         }
 
@@ -122,7 +122,7 @@ pub const Types = struct {
             switch (data_oid) {
                 Timestamp.oid.decimal, TimestampTz.oid.decimal => return Timestamp.decode(data, data_oid),
                 else => {
-                    lib.assert(data_oid == Int64.oid.decimal);
+                    lib.assertDecodeType(i64, &.{Int64.oid.decimal}, data_oid);
                     return Int64.decodeKnown(data);
                 },
             }
@@ -145,7 +145,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) i64 {
-            lib.assert(data_oid == Timestamp.oid.decimal or data_oid == TimestampTz.oid.decimal);
+            lib.assertDecodeType(i64, &.{Timestamp.oid.decimal, TimestampTz.oid.decimal}, data_oid);
             return std.mem.readInt(i64, data[0..8], .big) + us_from_epoch_to_y2k;
         }
 
@@ -171,7 +171,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) f32 {
-            lib.assert(data_oid == Float32.oid.decimal);
+            lib.assertDecodeType(f32, &.{Float32.oid.decimal}, data_oid);
             return Float32.decodeKnown(data);
         }
 
@@ -199,7 +199,7 @@ pub const Types = struct {
             switch (data_oid) {
                 Types.Numeric.oid.decimal => return Types.Numeric.decode(data, data_oid).toFloat(),
                 else => {
-                    lib.assert(data_oid == Float64.oid.decimal);
+                    lib.assertDecodeType(f64, &.{Float64.oid.decimal}, data_oid);
                     return Float64.decodeKnown(data);
                 },
             }
@@ -223,7 +223,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) bool {
-            lib.assert(data_oid == Bool.oid.decimal);
+            lib.assertDecodeType(bool, &.{Bool.oid.decimal}, data_oid);
             return decodeKnown(data);
         }
 
@@ -292,7 +292,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) []const u8 {
-            lib.assert(data_oid == UUID.oid.decimal);
+            lib.assertDecodeType([]const u8, &.{UUID.oid.decimal}, data_oid);
             return data;
         }
 
@@ -442,7 +442,7 @@ pub const Types = struct {
         }
 
         fn decode(data: []const u8, data_oid: i32) []const u8 {
-            lib.assert(data_oid == JSONB.oid.decimal);
+            lib.assertDecodeType([]const u8, &.{JSONB.oid.decimal}, data_oid);
             return JSONB.decodeKnown(data);
         }
 
@@ -943,6 +943,179 @@ pub const Encode = struct {
         view.writeIntBig(i32, @intCast(buf.len() - start));
     }
 };
+
+pub fn oidToString(oid: i32) []const u8 {
+    switch (oid) {
+        16 => return "T_bool",
+        17 => return "T_bytea",
+        18 => return "T_char",
+        19 => return "T_name",
+        20 => return "T_int8",
+        21 => return "T_int2",
+        22 => return "T_int2vector",
+        23 => return "T_int4",
+        24 => return "T_regproc",
+        25 => return "T_text",
+        26 => return "T_oid",
+        27 => return "T_tid",
+        28 => return "T_xid",
+        29 => return "T_cid",
+        30 => return "T_oidvector",
+        32 => return "T_pg_ddl_command",
+        71 => return "T_pg_type",
+        75 => return "T_pg_attribute",
+        81 => return "T_pg_proc",
+        83 => return "T_pg_class",
+        114 => return "T_json",
+        142 => return "T_xml",
+        143 => return "T__xml",
+        194 => return "T_pg_node_tree",
+        199 => return "T__json",
+        210 => return "T_smgr",
+        325 => return "T_index_am_handler",
+        600 => return "T_point",
+        601 => return "T_lseg",
+        602 => return "T_path",
+        603 => return "T_box",
+        604 => return "T_polygon",
+        628 => return "T_line",
+        629 => return "T__line",
+        650 => return "T_cidr",
+        651 => return "T__cidr",
+        700 => return "T_float4",
+        701 => return "T_float8",
+        702 => return "T_abstime",
+        703 => return "T_reltime",
+        704 => return "T_tinterval",
+        705 => return "T_unknown",
+        718 => return "T_circle",
+        719 => return "T__circle",
+        790 => return "T_money",
+        791 => return "T__money",
+        829 => return "T_macaddr",
+        869 => return "T_inet",
+        1000 => return "T__bool",
+        1001 => return "T__bytea",
+        1002 => return "T__char",
+        1003 => return "T__name",
+        1005 => return "T__int2",
+        1006 => return "T__int2vector",
+        1007 => return "T__int4",
+        1008 => return "T__regproc",
+        1009 => return "T__text",
+        1010 => return "T__tid",
+        1011 => return "T__xid",
+        1012 => return "T__cid",
+        1013 => return "T__oidvector",
+        1014 => return "T__bpchar",
+        1015 => return "T__varchar",
+        1016 => return "T__int8",
+        1017 => return "T__point",
+        1018 => return "T__lseg",
+        1019 => return "T__path",
+        1020 => return "T__box",
+        1021 => return "T__float4",
+        1022 => return "T__float8",
+        1023 => return "T__abstime",
+        1024 => return "T__reltime",
+        1025 => return "T__tinterval",
+        1027 => return "T__polygon",
+        1028 => return "T__oid",
+        1033 => return "T_aclitem",
+        1034 => return "T__aclitem",
+        1040 => return "T__macaddr",
+        1041 => return "T__inet",
+        1042 => return "T_bpchar",
+        1043 => return "T_varchar",
+        1082 => return "T_date",
+        1083 => return "T_time",
+        1114 => return "T_timestamp",
+        1115 => return "T__timestamp",
+        1182 => return "T__date",
+        1183 => return "T__time",
+        1184 => return "T_timestamptz",
+        1185 => return "T__timestamptz",
+        1186 => return "T_interval",
+        1187 => return "T__interval",
+        1231 => return "T__numeric",
+        1248 => return "T_pg_database",
+        1263 => return "T__cstring",
+        1266 => return "T_timetz",
+        1270 => return "T__timetz",
+        1560 => return "T_bit",
+        1561 => return "T__bit",
+        1562 => return "T_varbit",
+        1563 => return "T__varbit",
+        1700 => return "T_numeric",
+        1790 => return "T_refcursor",
+        2201 => return "T__refcursor",
+        2202 => return "T_regprocedure",
+        2203 => return "T_regoper",
+        2204 => return "T_regoperator",
+        2205 => return "T_regclass",
+        2206 => return "T_regtype",
+        2207 => return "T__regprocedure",
+        2208 => return "T__regoper",
+        2209 => return "T__regoperator",
+        2210 => return "T__regclass",
+        2211 => return "T__regtype",
+        2249 => return "T_record",
+        2275 => return "T_cstring",
+        2276 => return "T_any",
+        2277 => return "T_anyarray",
+        2278 => return "T_void",
+        2279 => return "T_trigger",
+        2280 => return "T_language_handler",
+        2281 => return "T_internal",
+        2282 => return "T_opaque",
+        2283 => return "T_anyelement",
+        2287 => return "T__record",
+        2776 => return "T_anynonarray",
+        2842 => return "T_pg_authid",
+        2843 => return "T_pg_auth_members",
+        2949 => return "T__txid_snapshot",
+        2950 => return "T_uuid",
+        2951 => return "T__uuid",
+        2970 => return "T_txid_snapshot",
+        3115 => return "T_fdw_handler",
+        3220 => return "T_pg_lsn",
+        3221 => return "T__pg_lsn",
+        3310 => return "T_tsm_handler",
+        3500 => return "T_anyenum",
+        3614 => return "T_tsvector",
+        3615 => return "T_tsquery",
+        3642 => return "T_gtsvector",
+        3643 => return "T__tsvector",
+        3644 => return "T__gtsvector",
+        3645 => return "T__tsquery",
+        3734 => return "T_regconfig",
+        3735 => return "T__regconfig",
+        3769 => return "T_regdictionary",
+        3770 => return "T__regdictionary",
+        3802 => return "T_jsonb",
+        3807 => return "T__jsonb",
+        3831 => return "T_anyrange",
+        3838 => return "T_event_trigger",
+        3904 => return "T_int4range",
+        3905 => return "T__int4range",
+        3906 => return "T_numrange",
+        3907 => return "T__numrange",
+        3908 => return "T_tsrange",
+        3909 => return "T__tsrange",
+        3910 => return "T_tstzrange",
+        3911 => return "T__tstzrange",
+        3912 => return "T_daterange",
+        3913 => return "T__daterange",
+        3926 => return "T_int8range",
+        3927 => return "T__int8range",
+        4066 => return "T_pg_shseclabel",
+        4089 => return "T_regnamespace",
+        4090 => return "T__regnamespace",
+        4096 => return "T_regrole",
+        4097 => return "T__regrole",
+        else => return "unknown",
+    }
+}
 
 // The oid is what PG is expecting. In some cases, we'll use that to figure
 // out what to do.

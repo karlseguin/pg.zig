@@ -102,6 +102,9 @@ pub const Conn = struct {
     pub fn open(allocator: Allocator, opts: Opts) !Conn {
         const stream = blk: {
             if (opts.unix_socket) |path| {
+                if (comptime std.net.has_unix_sockets == false or std.posix.AF == void) {
+                    return error.UnixPathNotSupported;
+                }
                 break :blk try std.net.connectUnixSocket(path);
             } else {
                 const host = opts.host orelse "127.0.0.1";

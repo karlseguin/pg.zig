@@ -18,8 +18,8 @@ pub const Cidr = struct {
     };
 
     pub fn decode(data: []const u8, data_oid: i32) Cidr {
-        lib.assert((data_oid == Cidr.oid.decimal or data_oid == Cidr.inet_oid.decimal) and
-            (data.len == 8 or data.len == 20));
+        lib.assertDecodeType(Cidr, &.{Cidr.oid.decimal, Cidr.inet_oid.decimal}, data_oid);
+        lib.assert(data.len == 8 or data.len == 20);
 
         return decodeKnown(data);
     }

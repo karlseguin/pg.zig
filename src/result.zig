@@ -264,7 +264,7 @@ pub const Row = struct {
                 break :blk T;
             },
             else => blk: {
-                lib.assert(value.is_null == false);
+                lib.assertNotNull(T, value.is_null);
                 break :blk T;
             },
         };
@@ -274,7 +274,7 @@ pub const Row = struct {
 
     pub fn getCol(self: *const Row, comptime T: type, name: []const u8) T {
         const col = self._result.columnIndex(name);
-        lib.assert(col != null);
+        lib.assertColumnName(name, col != null);
         return self.get(T, col.?);
     }
 
@@ -289,7 +289,7 @@ pub const Row = struct {
 
     pub fn iteratorCol(self: *const Row, comptime T: type, name: []const u8) IteratorReturnType(T) {
         const col = self._result.columnIndex(name);
-        lib.assert(col != null);
+        lib.assertColumnName(name, col != null);
         return self.iterator(T, col.?);
     }
 
@@ -304,7 +304,7 @@ pub const Row = struct {
 
     pub fn recordCol(self: *const Row, name: []const u8) Record {
         const col = self._result.columnIndex(name);
-        lib.assert(col != null);
+        lib.assertColumnName(name, col != null);
         return self.record(col);
     }
 
@@ -492,15 +492,15 @@ pub fn Iterator(comptime T: type) type {
 
             const decoder = switch (TT) {
                 u8 => blk: {
-                    lib.assert(oid == types.CharArray.oid.decimal);
+                    lib.assertDecodeType([]u8, &.{types.CharArray.oid.decimal}, oid);
                     break :blk &types.Char.decodeKnown;
                 },
                 i16 => blk: {
-                    lib.assert(oid == types.Int16Array.oid.decimal);
+                    lib.assertDecodeType([]i16, &.{types.Int16Array.oid.decimal}, oid);
                     break :blk &types.Int16.decodeKnown;
                 },
                 i32 => blk: {
-                    lib.assert(oid == types.Int32Array.oid.decimal);
+                    lib.assertDecodeType([]i32, &.{types.Int32Array.oid.decimal}, oid);
                     break :blk &types.Int32.decodeKnown;
                 },
                 i64 => switch (oid) {
@@ -510,7 +510,7 @@ pub fn Iterator(comptime T: type) type {
                     else => std.debug.panic("{d} oid cannot target i64 iterator", .{oid}),
                 },
                 f32 => blk: {
-                    lib.assert(oid == types.Float32Array.oid.decimal);
+                    lib.assertDecodeType([]f32, &.{types.Float32Array.oid.decimal}, oid);
                     break :blk &types.Float32.decodeKnown;
                 },
                 f64 => switch (oid) {
@@ -519,7 +519,7 @@ pub fn Iterator(comptime T: type) type {
                     else => std.debug.panic("{d} oid cannot target f64 iterator", .{oid}),
                 },
                 bool => blk: {
-                    lib.assert(oid == types.BoolArray.oid.decimal);
+                    lib.assertDecodeType([]bool, &.{types.BoolArray.oid.decimal}, oid);
                     break :blk &types.Bool.decodeKnown;
                 },
                 []const u8 => switch (oid) {
@@ -531,11 +531,11 @@ pub fn Iterator(comptime T: type) type {
                     else => &types.Bytea.decodeKnownMutable,
                 },
                 types.Numeric => blk: {
-                    lib.assert(oid == types.NumericArray.oid.decimal);
+                    lib.assertDecodeType([]f64, &.{types.NumericArray.oid.decimal}, oid);
                     break :blk &types.Numeric.decodeKnown;
                 },
                 types.Cidr => blk: {
-                    lib.assert(oid == types.CidrArray.oid.decimal or oid == types.CidrArray.inet_oid.decimal);
+                    lib.assertDecodeType([]types.Cidr, &.{types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal}, oid);
                     break :blk &types.Cidr.decodeKnown;
                 },
                 else => compileHaltGetError(T),
