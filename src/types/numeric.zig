@@ -3,7 +3,6 @@ const buffer = @import("buffer");
 const lib = @import("../lib.zig");
 const types = @import("../types.zig");
 
-const OID = types.OID;
 const Encode = types.Encode;
 
 const math = std.math;

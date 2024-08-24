@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "root_pw"
+      PGDATA: "/var/lib/postgresql/pgdata/"
+      LANG: "en_US.utf8"
+    ports:
+      - 5432:5432
+    volumes:
+      - "./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro"
+    command:
+      - "postgres"
+      - "-c"
+      - "hba_file=/etc/postgresql/pg_hba.conf"

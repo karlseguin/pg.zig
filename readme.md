@@ -561,3 +561,18 @@ The metrics are:
 * `pg_alloc_params` - counts the number of parameter states that were allocated. This indicates that your queries have more parameters than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_columns` - counts the number of columns states that were allocated. This indicates that your queries are returning more columns than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_reader` - counts the number of bytes allocated while reading messages from PostgreSQL. This generally happens as a result of large result (e.g. selecting large text fields). Controlled by the `read_buffer` configuration option.
+
+## Tests
+
+Launch the Postgres database with the provided Docker Compose configuration:
+
+```console
+cd tests/
+docker compose up
+```
+
+Run tests:
+
+```console
+zig build test
+```
