@@ -785,7 +785,7 @@ pub const Types = struct {
 
     // Return the encoding we want PG to use for a particular OID
     fn resultEncodingFor(oid: i32) *const [2]u8 {
-        inline for (@typeInfo(@This()).Struct.decls) |decl| {
+        inline for (@typeInfo(@This()).@"struct".decls) |decl| {
             const S = @field(@This(), decl.name);
             if (oid == S.oid.decimal) {
                 return S.encoding;
@@ -1121,12 +1121,12 @@ pub fn oidToString(oid: i32) []const u8 {
 // out what to do.
 pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
     switch (@typeInfo(T)) {
-        .Null => {
+        .null => {
             // type can stay 0 (text)
             // special length of -1 indicates null, no other data for this value
             return buf.write(&.{ 255, 255, 255, 255 });
         },
-        .ComptimeInt => switch (oid) {
+        .comptime_int => switch (oid) {
             Types.Int16.oid.decimal => {
                 if (value > 32767 or value < -32768) return error.IntWontFit;
                 return Types.Int16.encode(@intCast(value), buf, format_pos);
@@ -1144,7 +1144,7 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
             Types.Int64.oid.decimal => return Types.Int64.encode(@intCast(value), buf, format_pos),
             else => return error.BindWrongType,
         },
-        .Int => switch (oid) {
+        .int => switch (oid) {
             Types.Int16.oid.decimal => {
                 if (value > 32767 or value < -32768) return error.IntWontFit;
                 return Types.Int16.encode(@intCast(value), buf, format_pos);
@@ -1167,23 +1167,23 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
             },
             else => return error.BindWrongType,
         },
-        .ComptimeFloat => switch (oid) {
+        .comptime_float => switch (oid) {
             Types.Float64.oid.decimal => return Types.Float64.encode(@floatCast(value), buf, format_pos),
             Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
             Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
             else => return error.BindWrongType,
         },
-        .Float => switch (oid) {
+        .float => switch (oid) {
             Types.Float64.oid.decimal => return Types.Float64.encode(@floatCast(value), buf, format_pos),
             Types.Float32.oid.decimal => return Types.Float32.encode(@floatCast(value), buf, format_pos),
             Types.Numeric.oid.decimal => return Types.Numeric.encode(value, buf, format_pos),
             else => return error.BindWrongType,
         },
-        .Bool => switch (oid) {
+        .bool => switch (oid) {
             Types.Bool.oid.decimal => return Types.Bool.encode(value, buf, format_pos),
             else => return error.BindWrongType,
         },
-        .Pointer => |ptr| switch (ptr.size) {
+        .pointer => |ptr| switch (ptr.size) {
             .Slice => {
                 if (ptr.is_const) {
                     return bindSlice(oid, @as([]const ptr.child, value), buf, format_pos);
@@ -1192,11 +1192,11 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
                 }
             },
             .One => switch (@typeInfo(ptr.child)) {
-                .Array => {
+                .array => {
                     const Slice = []const std.meta.Elem(ptr.child);
                     return bindSlice(oid, @as(Slice, value), buf, format_pos);
                 },
-                .Struct => switch (oid) {
+                .@"struct" => switch (oid) {
                     Types.JSON.oid.decimal => return Types.JSON.encode(value, buf, format_pos),
                     Types.JSONB.oid.decimal => return Types.JSONB.encode(value, buf, format_pos),
                     else => return error.CannotBindStruct,
@@ -1205,16 +1205,16 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
             },
             else => compileHaltBindError(T),
         },
-        .Array => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),
-        .Struct => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),
-        .Optional => |opt| {
+        .array => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),
+        .@"struct" => return bindValue(@TypeOf(&value), oid, &value, buf, format_pos),
+        .optional => |opt| {
             if (value) |v| {
                 return bindValue(opt.child, oid, v, buf, format_pos);
             }
             // null
             return buf.write(&.{ 255, 255, 255, 255 });
         },
-        .Enum, .EnumLiteral => return Types.String.encode(@tagName(value), buf, format_pos),
+        .@"enum", .enum_literal => return Types.String.encode(@tagName(value), buf, format_pos),
         else => compileHaltBindError(T),
     }
 }
@@ -1278,9 +1278,9 @@ fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !
     try buf.writeIntBig(i32, @intCast(value.len));
     try buf.write(&.{ 0, 0, 0, 1 }); // lower bound of this demension
 
-    const ElemT = @typeInfo(T).Pointer.child;
+    const ElemT = @typeInfo(T).pointer.child;
     switch (@typeInfo(ElemT)) {
-        .Int => |int| {
+        .int => |int| {
             if (int.signedness == .signed) {
                 switch (int.bits) {
                     16 => try Types.Int16Array.encode(value, buf, oid_pos),
@@ -1304,7 +1304,7 @@ fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !
                 }
             }
         },
-        .Float => |float| {
+        .float => |float| {
             if (oid == Types.NumericArray.oid.decimal) {
                 try Types.NumericArray.encode(value, buf, oid_pos);
             } else switch (float.bits) {
@@ -1313,8 +1313,8 @@ fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !
                 else => compileHaltBindError(T),
             }
         },
-        .Bool => try Types.BoolArray.encode(value, buf, oid_pos),
-        .Pointer => |ptr| switch (ptr.size) {
+        .bool => try Types.BoolArray.encode(value, buf, oid_pos),
+        .pointer => |ptr| switch (ptr.size) {
             .Slice => switch (ptr.child) {
                 u8 => switch (oid) {
                     Types.StringArray.oid.decimal => try Types.StringArray.encode(value, buf, oid_pos),
@@ -1330,8 +1330,8 @@ fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !
             },
             else => compileHaltBindError(T),
         },
-        .Enum, .EnumLiteral => try Types.StringArray.encodeEnum(&value, buf, oid_pos),
-        .Array => try bindSlice(oid, &value, buf, format_pos),
+        .@"enum", .enum_literal => try Types.StringArray.encodeEnum(&value, buf, oid_pos),
+        .array => try bindSlice(oid, &value, buf, format_pos),
         else => compileHaltBindError(T),
     }
 
@@ -1344,7 +1344,7 @@ fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !
 
 fn isStringArray(comptime T: type) bool {
     switch (@typeInfo(T)) {
-        .Pointer => |ptr| switch (ptr.size) {
+        .pointer => |ptr| switch (ptr.size) {
             .Slice => switch (ptr.child) {
                 []u8, []const u8 => return true,
                 else => return false,

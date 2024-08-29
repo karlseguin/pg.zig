@@ -3,11 +3,13 @@
     .paths = .{""},
     .version = "0.0.0",
     .dependencies = .{
-        .buffer = .{ .url = "https://github.com/karlseguin/buffer.zig/archive/eeaf2eeaae136f2a71dc3638232318a8109b42ed.tar.gz", .hash = "1220f998af6145d7179eabf281881ec68b21b5ecfacd45daf3bbc77513f3b0a821a7" },
-        .metrics = .{ .url = "https://github.com/karlseguin/metrics.zig/archive/8892dce43b46a69c8e736329629f38df232adee1.tar.gz", .hash = "1220232ab38d0c2cfb10680115c17ad2fa1a8531dbaf8bbfb359ec67e80c7d5f5758" },
-        .pg = .{
-            .url = "git+https://github.com/karlseguin/pg.zig?ref=master#dcb386cf2275b8660310bffc2304760301437615",
-            .hash = "1220b91cbba0d9c70f223aa434a395898673bbb11f199cc288411de2f752e8d6d896",
+        .buffer = .{
+            .url = "https://github.com/karlseguin/buffer.zig/archive/c9a9e33b1c4387cc730a42b4344fd3904a81854b.tar.gz",
+            .hash = "1220e4fc5352fd938fdebcc558a33a9e3f665e91cb33f754758282f3862e27942cc6"
         },
+        .metrics = .{
+            .url = "https://github.com/karlseguin/metrics.zig/archive/ca494b536787e95e5290527c0b30b82eff2d5d38.tar.gz",
+            .hash = "122084a9d77d05c33b1a559882e34a018e2c8d4d1a017ccebe5a8c956c16d545fd0a"
+        }
     },
 }
