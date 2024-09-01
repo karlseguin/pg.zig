@@ -77,7 +77,7 @@ pub const Result = struct {
 
     pub fn next(self: *Result) !?Row {
         if (self._conn._state != .query) {
-            // Possibly weird state. Most likely cause if calling next() multiple times
+            // Possibly weird state. Most likely cause is calling next() multiple times
             // despite null being returned.
             return null;
         }
@@ -690,6 +690,27 @@ fn getScalar(T: type, data: []const u8, oid: i32) T {
 }
 
 const t = lib.testing;
+test "Result: eager error" {
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    {
+        // Some errors happen when the prepared statement is executed
+        try t.expectError(error.PG, c.query("select * from invalid", .{}));
+        try t.expectString("relation \"invalid\" does not exist", c.err.?.message);
+    }
+
+    {
+        // some errors only happen whemn the result is read
+        try c.begin();
+        defer c.rollback() catch {};
+        const sql = "create temp table test1 (id int) on commit drop";
+        _ = try c.exec(sql, .{});
+        try t.expectError(error.PG, c.query(sql, .{}));
+    }
+
+}
+
 test "Result: ints" {
     var c = t.connect(.{});
     defer c.deinit();

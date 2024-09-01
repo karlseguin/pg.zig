@@ -141,11 +141,31 @@ fn ReaderT(comptime T: type) type {
             self.buf = new_buf;
         }
 
-        pub fn next(self: *Self) !Message {
-            return self.buffered(self.pos) orelse self.read();
+        // If you execute "select * from invalid_table", PostgreSQL will return
+        // an error early in the process of preparing the statement - as part
+        // of parsing the statement, it knows that "invalid_table" isn't a valid table.
+
+        // But if you execute "create table already_exists", the error is is only
+        // returned once you try to read the result.
+        //
+        // This difference results in an inconsistent api: some error are returned
+        // immediatelyby conn.query() and some errors are only returned when
+        // result.next() is first called.
+        //
+        // Here we attempt to fix this by eagerly reading the next message. If it's
+        // an error, we return it. If it isn't an error, we put it back for the next
+        // successful read.
+        pub fn peekForError(self: *Self) !?[]const u8 {
+            const message = self.buffered(self.pos, true) orelse try self.read(true);
+            return if (message.type == 'E') message.data else null;
         }
 
-        fn read(self: *Self) !Message {
+
+        pub fn next(self: *Self) !Message {
+            return self.buffered(self.pos, false) orelse self.read(false);
+        }
+
+        fn read(self: *Self, error_peek: bool) !Message {
             const stream = self.stream;
             // const spare = buf.len - pos; // how much space we have left in our buffer
 
@@ -180,7 +200,7 @@ fn ReaderT(comptime T: type) type {
                                 @memcpy(new_buf[0..current_length], buf[start..pos]);
                                 lib.metrics.allocReader(message_length);
                             } else {
-                                // currently using a dynamically alllocated buffer, we'll
+                                // currently using a dynamically allocated buffer, we'll
                                 // grow or allocate a larger one (which is what realloc does)
                                 new_buf = try allocator.realloc(buf, message_length);
                                 if (start > 0) {
@@ -212,14 +232,14 @@ fn ReaderT(comptime T: type) type {
                     return error.Closed;
                 }
                 pos += n;
-                if (self.buffered(pos)) |msg| {
+                if (self.buffered(pos, error_peek)) |msg| {
                     return msg;
                 }
             }
         }
 
         // checks and consume if we already have a message buffered
-        fn buffered(self: *Self, pos: usize) ?Message {
+        fn buffered(self: *Self, pos: usize, error_peek: bool) ?Message {
             const start = self.start;
             const available = pos - start;
 
@@ -240,20 +260,26 @@ fn ReaderT(comptime T: type) type {
             // -4 because the len includes the 4 byte length header itself
             const end = len_end + len - 4;
 
-            // how much extra data we already have
-            const extra = pos - end;
-            if (extra == 0) {
-                // we have no more data in the buffer, reset everything to the start
-                // so that we have the full buffer for future messages
-                self.pos = 0;
-                self.start = 0;
+            const message_type = buf[start];
+
+            if (error_peek == false or message_type == 'E') {
+                // how much extra data we already have
+                const extra = pos - end;
+                if (extra == 0) {
+                    // we have no more data in the buffer, reset everything to the start
+                    // so that we have the full buffer for future messages
+                    self.pos = 0;
+                    self.start = 0;
+                } else {
+                    self.pos = pos;
+                    self.start = end;
+                }
             } else {
                 self.pos = pos;
-                self.start = end;
             }
 
             return .{
-                .type = buf[start],
+                .type = message_type,
                 .data = buf[len_end..end],
             };
         }

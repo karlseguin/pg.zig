@@ -297,11 +297,14 @@ pub const Stmt = struct {
             }
         }
 
+        try conn.peekForError();
+
         // our call to readyForQuery above changed the state, but as far as we're
         // concerned, we're still doing the query.
         conn._state = .query;
 
         lib.metrics.query();
+
         const opts = &self.opts;
         const state = self.result_state;
         const column_count = self.column_count;
