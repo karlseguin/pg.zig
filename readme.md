@@ -4,13 +4,15 @@ A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify)
 
 See or run [example/main.zig](https://github.com/karlseguin/pg.zig/blob/master/example/main.zig) for a number of examples.
 
+## TLS / sslmode
+This library does not support TLS / sslmode - Zig's TLS support is currently [incomplete/buggy](https://github.com/ziglang/zig/issues/14172).
+
 ## Install
 1) Add pg.zig as a dependency in your `build.zig.zon`:
 
 ```bash
 zig fetch --save git+https://github.com/karlseguin/pg.zig#master
 ```
-
 
 2) In your `build.zig`, add the `pg` module as a dependency you your program:
 
