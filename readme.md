@@ -278,10 +278,12 @@ while (names.next()) |name| {
 * `len` - the number of values in the iterator
 
 ### alloc(it: Iterator(T), allocator: std.mem.Allocator) ![]T
-Allocates a slice and populates it with all values.
+Allocates a slice and populates it with all values. 
+
+If the slice is a `[]u8` or `[]const u8`, the string is also duplicated. It is the responsibility of the caller to free them.
 
 ### fill(it: Iterator(T), into: []T) void
-Fill `into` with values of the iterator. `into` can be smaller than `it.len`, in which case only `into.len` values will be filled. This can be a bit faster than calling `next()` multiple times.
+Fill `into` with values of the iterator. `into` can be smaller than `it.len`, in which case only `into.len` values will be filled. This can be a bit faster than calling `next()` multiple times. Values are not duplicated; they are only valid until the next iterations.
 
 ## Record
 Returned by `row.record(col)` for fetching a PostgreSQL record-type, for example from this query: 

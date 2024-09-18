@@ -605,13 +605,17 @@ pub fn Iterator(comptime T: type) type {
             return self._decoder(data[len_end..data_end]);
         }
 
-        pub fn alloc(self: Self, allocator: Allocator) ![]T {
+        pub fn alloc(self: *const Self, allocator: Allocator) ![]T {
             const into = try allocator.alloc(T, self._len);
-            self.fill(into);
+            try self.fillAlloc(true, into, allocator);
             return into;
         }
 
-        pub fn fill(self: Self, into: []T) void {
+        pub fn fill(self: *const Self, into: []T) void {
+            self.fillAlloc(false, into, undefined) catch unreachable;
+        }
+
+        fn fillAlloc(self: *const Self, comptime should_dupe: bool, into: []T, allocator: Allocator) !void {
             const data = self._data;
             const decoder = self._decoder;
 
@@ -622,7 +626,11 @@ pub fn Iterator(comptime T: type) type {
                 const len_end = pos + 4;
                 const data_len = std.mem.readInt(i32, data[pos..len_end][0..4], .big);
                 pos = len_end + @as(usize, @intCast(data_len));
-                into[i] = decoder(data[len_end..pos]);
+                if (comptime should_dupe and (T == []u8 or T == []const u8)) {
+                    into[i] = try allocator.dupe(u8, decoder(data[len_end..pos]));
+                } else {
+                    into[i] = decoder(data[len_end..pos]);
+                }
             }
         }
     };
@@ -1170,6 +1178,36 @@ test "Result: text[] & bytea[]" {
     try t.expectString("over", v3[0]);
     try t.expectString("9000", v3[1]);
     try t.expectEqual(2, v3.len);
+}
+
+test "Result: text[] alloc dupes" {
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    var arr1: [][]const u8 = undefined;
+    var arr2: [][]const u8 = undefined;
+    defer {
+        for (arr1) |str| { t.allocator.free(str); }
+        t.allocator.free(arr1);
+
+        for (arr2) |str| { t.allocator.free(str); }
+        t.allocator.free(arr2);
+    }
+
+    {
+        var row = (try c.row("select array['Leto', 'Test']::text[]" , .{})) orelse unreachable;
+        defer row.deinit() catch {};
+        arr1 = try row.iterator([]const u8, 0).alloc(t.allocator);
+    }
+
+    {
+        var row = (try c.row("select array['Ghanima', 'Goku']::text[]" , .{})) orelse unreachable;
+        defer row.deinit() catch {};
+        arr2 = try row.iterator([]const u8, 0).alloc(t.allocator);
+    }
+
+    try t.expectStringSlice(&.{ "Leto", "Test" }, arr1);
+    try t.expectStringSlice(&.{ "Ghanima", "Goku" }, arr2);
 }
 
 test "Result: UUID" {
