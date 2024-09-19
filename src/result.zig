@@ -250,14 +250,14 @@ pub const Row = struct {
     pub fn get(self: *const Row, comptime T: type, col: usize) T {
         const value = self.values[col];
         const TT = switch (@typeInfo(T)) {
-            .optional => |opt| {
+            .Optional => |opt| {
                 if (value.is_null) {
                     return null;
                 } else {
                     return self.get(opt.child, col);
                 }
             },
-            .@"struct" => blk: {
+            .Struct => blk: {
                 if (@hasDecl(T, "fromPgzRow") == true) {
                     return T.fromPgzRow(value, self.oids[col]);
                 }
@@ -281,7 +281,7 @@ pub const Row = struct {
     pub fn iterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
         const value = self.values[col];
         const TT = switch (@typeInfo(T)) {
-            .optional => |opt| if (value.is_null) return null else opt.child,
+            .Optional => |opt| if (value.is_null) return null else opt.child,
             else => T,
         };
         return Iterator(TT).fromPgzRow(value, self.oids[col]);
@@ -399,7 +399,7 @@ pub fn Mapper(comptime T: type) type {
 fn toValue(comptime T: type, value: T, allocator: ?Allocator) !T {
     const a = allocator orelse return value;
 
-    if (@typeInfo(T) == .optional) {
+    if (@typeInfo(T) == .Optional) {
         if (value) |v| {
             return try toValue(@TypeOf(v), v, allocator);
         } else {
@@ -458,7 +458,7 @@ pub const QueryRow = struct {
 
 fn IteratorReturnType(comptime T: type) type {
     return switch (@typeInfo(T)) {
-        .optional => |opt| ?Iterator(opt.child),
+        .Optional => |opt| ?Iterator(opt.child),
         else => Iterator(T),
     };
 }
@@ -472,7 +472,7 @@ pub fn Iterator(comptime T: type) type {
 
         fn ItemType() type {
             return switch (@typeInfo(T)) {
-                .optional => |opt| opt.child,
+                .Optional => |opt| opt.child,
                 else => T,
             };
         }
@@ -486,7 +486,7 @@ pub fn Iterator(comptime T: type) type {
         // used internally by row.get(Iterator(T))
         fn fromPgzRow(value: Result.State.Value, oid: i32) Self {
             const TT = switch (@typeInfo(T)) {
-                .optional => |opt| opt.child,
+                .Optional => |opt| opt.child,
                 else => T,
             };
 
@@ -535,7 +535,7 @@ pub fn Iterator(comptime T: type) type {
                     break :blk &types.Numeric.decodeKnown;
                 },
                 types.Cidr => blk: {
-                    lib.assertDecodeType([]types.Cidr, &.{types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal}, oid);
+                    lib.assertDecodeType([]types.Cidr, &.{ types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal }, oid);
                     break :blk &types.Cidr.decodeKnown;
                 },
                 else => compileHaltGetError(T),
@@ -656,7 +656,7 @@ const Record = struct {
         const len = std.mem.readInt(i32, data[0..4], .big);
 
         const TT = switch (@typeInfo(T)) {
-            .optional => |opt| blk: {
+            .Optional => |opt| blk: {
                 if (len == -1) return null;
                 break :blk opt.child;
             },
@@ -688,7 +688,7 @@ fn getScalar(T: type, data: []const u8, oid: i32) T {
         types.Numeric => return types.Numeric.decode(data, oid),
         types.Cidr => return types.Cidr.decode(data, oid),
         else => switch (@typeInfo(T)) {
-            .@"enum" => {
+            .Enum => {
                 const str = types.Bytea.decode(data, oid);
                 return std.meta.stringToEnum(T, str).?;
             },
@@ -716,7 +716,6 @@ test "Result: eager error" {
         _ = try c.exec(sql, .{});
         try t.expectError(error.PG, c.query(sql, .{}));
     }
-
 }
 
 test "Result: ints" {
@@ -1187,21 +1186,25 @@ test "Result: text[] alloc dupes" {
     var arr1: [][]const u8 = undefined;
     var arr2: [][]const u8 = undefined;
     defer {
-        for (arr1) |str| { t.allocator.free(str); }
+        for (arr1) |str| {
+            t.allocator.free(str);
+        }
         t.allocator.free(arr1);
 
-        for (arr2) |str| { t.allocator.free(str); }
+        for (arr2) |str| {
+            t.allocator.free(str);
+        }
         t.allocator.free(arr2);
     }
 
     {
-        var row = (try c.row("select array['Leto', 'Test']::text[]" , .{})) orelse unreachable;
+        var row = (try c.row("select array['Leto', 'Test']::text[]", .{})) orelse unreachable;
         defer row.deinit() catch {};
         arr1 = try row.iterator([]const u8, 0).alloc(t.allocator);
     }
 
     {
-        var row = (try c.row("select array['Ghanima', 'Goku']::text[]" , .{})) orelse unreachable;
+        var row = (try c.row("select array['Ghanima', 'Goku']::text[]", .{})) orelse unreachable;
         defer row.deinit() catch {};
         arr2 = try row.iterator([]const u8, 0).alloc(t.allocator);
     }

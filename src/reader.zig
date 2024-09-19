@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 // to everyone else, this is our reader
 pub const Reader = ReaderT(std.net.Stream);
 
-const zero_timeval = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 0 });
+const zero_timeval = std.mem.toBytes(posix.timeval{ .tv_sec = 0, .tv_usec = 0 });
 
 // generic just for testing within this file
 fn ReaderT(comptime T: type) type {
@@ -72,8 +72,8 @@ fn ReaderT(comptime T: type) type {
         pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
             if (timeout_ms) |ms| {
                 const timeval = std.mem.toBytes(posix.timeval{
-                    .sec = @intCast(@divTrunc(ms, 1000)),
-                    .usec = @intCast(@mod(ms, 1000) * 1000),
+                    .tv_sec = @intCast(@divTrunc(ms, 1000)),
+                    .tv_usec = @intCast(@mod(ms, 1000) * 1000),
                 });
                 try posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
                 self.has_timeout = true;
@@ -159,7 +159,6 @@ fn ReaderT(comptime T: type) type {
             const message = self.buffered(self.pos, true) orelse try self.read(true);
             return if (message.type == 'E') message.data else null;
         }
-
 
         pub fn next(self: *Self) !Message {
             return self.buffered(self.pos, false) orelse self.read(false);
