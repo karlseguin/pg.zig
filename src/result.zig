@@ -1160,20 +1160,29 @@ test "Result: text[] & bytea[]" {
     var row = (try result.next()).?;
 
     const v1 = try row.iterator([]u8, 0).alloc(t.allocator);
-    defer t.allocator.free(v1);
+    defer {
+        for (v1) |v| t.allocator.free(v);
+        t.allocator.free(v1);
+    }
     try t.expectString("over", v1[0]);
     try t.expectString("9000", v1[1]);
     try t.expectEqual(2, v1.len);
 
     const v2 = try row.iterator([]const u8, 1).alloc(t.allocator);
-    defer t.allocator.free(v2);
+    defer {
+        for (v2) |v| t.allocator.free(v);
+        t.allocator.free(v2);
+    }
     try t.expectString(&arr1, v2[0]);
     try t.expectString(&arr2, v2[1]);
     try t.expectEqual(2, v2.len);
 
     // column 0 but fetched as nullable
     const v3 = try row.iterator(?[]u8, 0).?.alloc(t.allocator);
-    defer t.allocator.free(v3);
+    defer {
+        for (v3) |v| t.allocator.free(v);
+        t.allocator.free(v3);
+    }
     try t.expectString("over", v3[0]);
     try t.expectString("9000", v3[1]);
     try t.expectEqual(2, v3.len);
@@ -1256,7 +1265,10 @@ test "Result: mutable [][]u8" {
     defer row.deinit() catch {};
 
     var values = try row.iterator([]u8, 0).alloc(t.allocator);
-    defer t.allocator.free(values);
+    defer {
+        for (values) |value| t.allocator.free(value);
+        t.allocator.free(values);
+    }
     values[0][0] = 'n';
     try t.expectString("neto", values[0]);
 }
