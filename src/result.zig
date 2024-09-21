@@ -338,10 +338,8 @@ pub const Row = struct {
 
     fn toUsingOrdinal(self: *const Row, T: type, allocator: ?Allocator) !T {
         var value: T = undefined;
-
         inline for (std.meta.fields(T), 0..) |field, column_index| {
-            const column_value = self.get(field.type, column_index);
-            @field(value, field.name) = try toValue(field.type, column_value, allocator);
+            @field(value, field.name) = try self.mapColumn(&field, column_index, allocator);
         }
         return value;
     }
@@ -351,19 +349,71 @@ pub const Row = struct {
         const result = self._result;
         inline for (std.meta.fields(T)) |field| {
             const name = field.name;
-            if (result.columnIndex(name)) |column_index| {
-                const column_value = self.get(field.type, column_index);
-                @field(value, name) = try toValue(field.type, column_value, allocator);
-            } else if (field.default_value) |dflt| {
-                @field(value, name) = @as(*align(1) const field.type, @ptrCast(dflt)).*;
-            } else {
-                return error.FieldColumnMismatch;
-            }
+            @field(value, name) = try self.mapColumn(&field, result.columnIndex(name), allocator);
         }
-
         return value;
     }
+
+    fn mapColumn(self: *const Row, field: *const std.builtin.Type.StructField, optional_column_index: ?usize, allocator: ?Allocator) !field.type {
+        const T = field.type;
+        const column_index = optional_column_index orelse {
+            if (field.default_value) |dflt| {
+                return @as(*align(1) const field.type, @ptrCast(dflt)).*;
+            }
+            return error.FieldColumnMismatch;
+        };
+
+        if (comptime isSlice(T)) |S| {
+            const slice = blk: {
+                if (@typeInfo(T) == .optional) {
+                    break :blk self.get(?Iterator(S), column_index) orelse return null;
+                } else {
+                    break :blk self.get(Iterator(S), column_index);
+                }
+            };
+            return try slice.alloc(allocator orelse return error.AllocatorRequiredForSliceMapping);
+        }
+
+        const value = self.get(field.type, column_index);
+        const a = allocator orelse return value;
+        return mapValue(T, value, a);
+    }
 };
+
+fn isSlice(comptime T: type) ?type {
+    switch(@typeInfo(T)) {
+        .pointer => |ptr| {
+            if (ptr.size != .Slice) {
+                compileHaltGetError(T);
+            }
+            return if (ptr.child == u8) null else ptr.child;
+        },
+        .optional => |opt| return isSlice(opt.child),
+        else => return null,
+    }
+}
+
+fn mapValue(comptime T: type, value: T, allocator: Allocator) !T {
+    switch (@typeInfo(T)) {
+        .optional => |opt| {
+            if (value) |v| {
+                return try mapValue(opt.child, v, allocator);
+            }
+            return null;
+        },
+        else => {},
+    }
+
+    if (T == []u8 or T == []const u8) {
+        return try allocator.dupe(u8, value);
+    }
+
+    if (std.meta.hasFn(T, "pgzMoveOwner")) {
+        return value.pgzMoveOwner(allocator);
+    }
+
+    return value;
+}
 
 pub fn Mapper(comptime T: type) type {
     return struct {
@@ -380,42 +430,11 @@ pub fn Mapper(comptime T: type) type {
 
             const allocator = self.allocator;
             inline for (std.meta.fields(T), self.column_indexes) |field, optional_column_index| {
-                const name = field.name;
-                if (optional_column_index) |column_index| {
-                    const column_value = row.get(field.type, column_index);
-                    @field(value, name) = try toValue(field.type, column_value, allocator);
-                } else if (field.default_value) |dflt| {
-                    @field(value, name) = @as(*align(1) const field.type, @ptrCast(dflt)).*;
-                } else {
-                    return error.FieldColumnMismatch;
-                }
+                @field(value, field.name) = try row.mapColumn(&field, optional_column_index, allocator);
             }
-
             return value;
         }
     };
-}
-
-fn toValue(comptime T: type, value: T, allocator: ?Allocator) !T {
-    const a = allocator orelse return value;
-
-    if (@typeInfo(T) == .optional) {
-        if (value) |v| {
-            return try toValue(@TypeOf(v), v, allocator);
-        } else {
-            return null;
-        }
-    }
-
-    if (T == []u8 or T == []const u8) {
-        return try a.dupe(u8, value);
-    }
-
-    if (std.meta.hasFn(T, "pgzMoveOwner")) {
-        return value.pgzMoveOwner(a);
-    }
-
-    return value;
 }
 
 pub const QueryRow = struct {
@@ -1161,20 +1180,32 @@ test "Result: text[] & bytea[]" {
     var row = (try result.next()).?;
 
     const v1 = try row.iterator([]u8, 0).alloc(t.allocator);
-    defer t.allocator.free(v1);
+    defer {
+        t.allocator.free(v1[0]);
+        t.allocator.free(v1[1]);
+        t.allocator.free(v1);
+    }
     try t.expectString("over", v1[0]);
     try t.expectString("9000", v1[1]);
     try t.expectEqual(2, v1.len);
 
     const v2 = try row.iterator([]const u8, 1).alloc(t.allocator);
-    defer t.allocator.free(v2);
+    defer {
+        t.allocator.free(v2[0]);
+        t.allocator.free(v2[1]);
+        t.allocator.free(v2);
+    }
     try t.expectString(&arr1, v2[0]);
     try t.expectString(&arr2, v2[1]);
     try t.expectEqual(2, v2.len);
 
     // column 0 but fetched as nullable
     const v3 = try row.iterator(?[]u8, 0).?.alloc(t.allocator);
-    defer t.allocator.free(v3);
+    defer {
+        t.allocator.free(v3[0]);
+        t.allocator.free(v3[1]);
+        t.allocator.free(v3);
+    }
     try t.expectString("over", v3[0]);
     try t.expectString("9000", v3[1]);
     try t.expectEqual(2, v3.len);
@@ -1642,6 +1673,44 @@ test "Row.to: iterator" {
 
         try t.expectSlice(i32, &.{1}, try user2.parents.alloc(t.arena.allocator()));
         try t.expectStringSlice(&.{"9000"}, try user2.tags.?.alloc(t.arena.allocator()));
+    }
+}
+
+test "Row.to: array" {
+    const User = struct {
+        parents: []i32,
+        tags: ?[][]const u8,
+    };
+
+    defer t.reset();
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    {
+        var row = (try c.row("select array[1, 99]::integer[], array['over', '9000']::text[]", .{})).?;
+        const user = try row.to(User, .{ .allocator = t.allocator });
+        row.deinit() catch {};
+
+        defer {
+            t.allocator.free(user.tags.?[0]);
+            t.allocator.free(user.tags.?[1]);
+            t.allocator.free(user.tags.?);
+            t.allocator.free(user.parents);
+        }
+        try t.expectSlice(i32, &.{ 1, 99 }, user.parents);
+        try t.expectStringSlice(&.{ "over", "9000" }, user.tags.?);
+    }
+
+    {
+        var row = (try c.row("select array[1, 99]::integer[], null::text[]", .{})).?;
+        const user = try row.to(User, .{ .allocator = t.allocator });
+        row.deinit() catch {};
+
+        defer {
+            t.allocator.free(user.parents);
+        }
+        try t.expectSlice(i32, &.{ 1, 99 }, user.parents);
+        try t.expectEqual(null, user.tags);
     }
 }
 
