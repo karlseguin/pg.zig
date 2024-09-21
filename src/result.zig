@@ -1253,9 +1253,15 @@ test "Result: mutable [][]u8" {
     defer row.deinit() catch {};
 
     var values = try row.iterator([]u8, 0).alloc(t.allocator);
-    defer t.allocator.free(values);
+    defer {
+        t.allocator.free(values[0]);
+        t.allocator.free(values[1]);
+        t.allocator.free(values);
+    }
     values[0][0] = 'n';
     try t.expectString("neto", values[0]);
+    try t.expectString("Test", values[1]);
+
 }
 
 test "Row.to: ordinal" {

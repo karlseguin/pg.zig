@@ -280,7 +280,7 @@ while (names.next()) |name| {
 ### alloc(it: Iterator(T), allocator: std.mem.Allocator) ![]T
 Allocates a slice and populates it with all values. 
 
-If the slice is a `[]u8` or `[]const u8`, the string is also duplicated. It is the responsibility of the caller to free them.
+If the slice is a `[]u8` or `[]const u8`, the string is also duplicated. It is the responsibility of the caller to free the string values AND the slice.
 
 ### fill(it: Iterator(T), into: []T) void
 Fill `into` with values of the iterator. `into` can be smaller than `it.len`, in which case only `into.len` values will be filled. This can be a bit faster than calling `next()` multiple times. Values are not duplicated; they are only valid until the next iterations.
