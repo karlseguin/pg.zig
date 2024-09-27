@@ -728,14 +728,36 @@ test "Result: eager error" {
     }
 
     {
-        // some errors only happen whemn the result is read
+        // some errors only happen when the result is read
         try c.begin();
         defer c.rollback() catch {};
         const sql = "create temp table test1 (id int) on commit drop";
         _ = try c.exec(sql, .{});
         try t.expectError(error.PG, c.query(sql, .{}));
     }
+}
 
+// https://github.com/karlseguin/pg.zig/issues/44
+test "Result: eager error conn state" {
+    var pool = try lib.Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    {
+        var c = try pool.acquire();
+        defer c.release();
+
+        // duplicate it
+        _= try c.exec("insert into all_types (id) values ($1)", .{2000});
+        try t.expectError(error.PG, c.exec("insert into all_types (id) values ($1)", .{2000}));
+    }
+
+    {
+        // only 1 connection in our pool, so the fact that athe above fails and
+        // this one suceeds, means we're properly handling the failure
+        var c = try pool.acquire();
+        defer c.release();
+        _= try c.exec("insert into all_types (id) values ($1)", .{2001});
+    }
 }
 
 test "Result: ints" {

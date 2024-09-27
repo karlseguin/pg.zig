@@ -204,15 +204,16 @@ pub const Conn = struct {
             return err;
         };
 
-        errdefer stmt.deinit();
-
-        try stmt.prepare(sql);
-
-        inline for (values) |value| {
-            try stmt.bind(value);
+        {
+            errdefer stmt.deinit();
+            try stmt.prepare(sql);
+            inline for (values) |value| {
+                try stmt.bind(value);
+            }
         }
 
         return stmt.execute() catch |err| {
+            stmt.deinit();
             self.maybeRelease(opts.release_conn);
             return err;
         };
@@ -314,6 +315,7 @@ pub const Conn = struct {
     // Should not be called directly
     pub fn peekForError(self: *Conn) !void {
         const data = (try self._reader.peekForError()) orelse return;
+        self._state = .fail;
         return self.setErr(data);
     }
 
@@ -1453,12 +1455,12 @@ test "PG: large read" {
         try t.expectEqual(null, try rows.next());
     }
 
-    // {
-    //     // with a row
-    //     var row = (try c.row("select $1::text", .{"z" ** 1000})).?;
-    //     defer row.deinit() catch {};
-    //     try t.expectString("z" ** 1000, row.get([]u8, 0));
-    // }
+    {
+        // with a row
+        var row = (try c.row("select $1::text", .{"z" ** 1000})).?;
+        defer row.deinit() catch {};
+        try t.expectString("z" ** 1000, row.get([]u8, 0));
+    }
 }
 
 test "Conn: dynamic buffer freed on error" {
