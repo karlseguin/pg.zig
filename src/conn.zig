@@ -308,8 +308,35 @@ pub const Conn = struct {
         _ = try self.execOpts("commit", .{}, .{});
     }
 
+    // We don't use `execOpts` here because rollback can be called at any point
+    // and we want to send this command even if the conn is in a fail state.
+    // So we issue the rollback, no matter what state we're in.
+    // It's also possible rollback was called while we were reading results,
+    // so we need to keep reading replies until we get a ready to query state,
+    // just skipping over any data rows or any other in-flight messages there
+    // might be.
     pub fn rollback(self: *Conn) !void {
-        _ = try self.execOpts("rollback", .{}, .{});
+        var buf = &self._buf;
+        buf.reset();
+
+        const state = self._state;
+
+        const simple_query = proto.Query{ .sql = "rollback" };
+        try simple_query.write(buf);
+        try self.write(buf.string());
+        while (true) {
+            const msg = self.read() catch |err| {
+                if (state != .fail and err == error.PG) {
+                    self.readyForQuery() catch {};
+                }
+                return err;
+            };
+            switch (msg.type) {
+                'Z' => return,
+                'C', 'T', 'D', 'n' => {},
+                else => return self.unexpectedDBMessage(),
+            }
+        }
     }
 
     // Should not be called directly
@@ -1531,6 +1558,82 @@ test "PG: bind strictness" {
 
     // conn is still usable
     try t.expectEqual(4, t.scalar(&c, "select 4"));
+}
+
+test "PG: eager error" {
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    {
+        // Some errors happen when the prepared statement is executed
+        try t.expectError(error.PG, c.query("select * from invalid", .{}));
+        try t.expectString("relation \"invalid\" does not exist", c.err.?.message);
+    }
+
+    {
+        // some errors only happen when the result is read
+        try c.begin();
+        defer c.rollback() catch {};
+        const sql = "create temp table test1 (id int) on commit drop";
+        _ = try c.exec(sql, .{});
+        try t.expectError(error.PG, c.query(sql, .{}));
+    }
+}
+
+// https://github.com/karlseguin/pg.zig/issues/44
+test "PG: eager error conn state" {
+    var pool = try lib.Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    {
+        var c = try pool.acquire();
+        defer c.release();
+
+        // duplicate it
+        _= try c.exec("insert into all_types (id) values ($1)", .{2000});
+        try t.expectError(error.PG, c.exec("insert into all_types (id) values ($1)", .{2000}));
+    }
+
+    {
+        // only 1 connection in our pool, so the fact that the above fails and
+        // this one succeeds, means we're properly handling the failure
+        var c = try pool.acquire();
+        defer c.release();
+        _= try c.exec("insert into all_types (id) values ($1)", .{2001});
+    }
+}
+
+// https://github.com/karlseguin/pg.zig/issues/45
+test "PG: rollback during error" {
+    var pool = try lib.Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    _ = try pool.exec("truncate table all_types", .{});
+
+    {
+        var c = try pool.acquire();
+        defer c.release();
+
+        try c.begin();
+        // duplicate it
+        _= try c.exec("insert into all_types (id) values ($1)", .{3000});
+        try t.expectError(error.PG, c.exec("insert into all_types (id) values ($1)", .{3000}));
+        try c.rollback();
+    }
+
+    {
+        // only 1 connection in our pool, so the fact that the above fails and
+        // this one succeeds, means we're properly handling the failure
+        var c = try pool.acquire();
+        defer c.release();
+        _= try c.exec("insert into all_types (id) values ($1)", .{3001});
+    }
+
+    var result = try pool.query("select id from all_types order by id", .{});
+    defer result.deinit();
+
+    try t.expectEqual(3001, (try result.next()).?.get(i32, 0));
+    try t.expectEqual(null, (try result.next()));
 }
 
 test "open URI" {
