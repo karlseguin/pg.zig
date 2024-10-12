@@ -250,14 +250,14 @@ pub const Row = struct {
     pub fn get(self: *const Row, comptime T: type, col: usize) T {
         const value = self.values[col];
         const TT = switch (@typeInfo(T)) {
-            .optional => |opt| {
+            .Optional => |opt| {
                 if (value.is_null) {
                     return null;
                 } else {
                     return self.get(opt.child, col);
                 }
             },
-            .@"struct" => blk: {
+            .Struct => blk: {
                 if (@hasDecl(T, "fromPgzRow") == true) {
                     return T.fromPgzRow(value, self.oids[col]);
                 }
@@ -281,7 +281,7 @@ pub const Row = struct {
     pub fn iterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
         const value = self.values[col];
         const TT = switch (@typeInfo(T)) {
-            .optional => |opt| if (value.is_null) return null else opt.child,
+            .Optional => |opt| if (value.is_null) return null else opt.child,
             else => T,
         };
         return Iterator(TT).fromPgzRow(value, self.oids[col]);
@@ -365,7 +365,7 @@ pub const Row = struct {
 
         if (comptime isSlice(T)) |S| {
             const slice = blk: {
-                if (@typeInfo(T) == .optional) {
+                if (@typeInfo(T) == .Optional) {
                     break :blk self.get(?Iterator(S), column_index) orelse return null;
                 } else {
                     break :blk self.get(Iterator(S), column_index);
@@ -382,20 +382,20 @@ pub const Row = struct {
 
 fn isSlice(comptime T: type) ?type {
     switch(@typeInfo(T)) {
-        .pointer => |ptr| {
+        .Pointer => |ptr| {
             if (ptr.size != .Slice) {
                 compileHaltGetError(T);
             }
             return if (ptr.child == u8) null else ptr.child;
         },
-        .optional => |opt| return isSlice(opt.child),
+        .Optional => |opt| return isSlice(opt.child),
         else => return null,
     }
 }
 
 fn mapValue(comptime T: type, value: T, allocator: Allocator) !T {
     switch (@typeInfo(T)) {
-        .optional => |opt| {
+        .Optional => |opt| {
             if (value) |v| {
                 return try mapValue(opt.child, v, allocator);
             }
@@ -477,7 +477,7 @@ pub const QueryRow = struct {
 
 fn IteratorReturnType(comptime T: type) type {
     return switch (@typeInfo(T)) {
-        .optional => |opt| ?Iterator(opt.child),
+        .Optional => |opt| ?Iterator(opt.child),
         else => Iterator(T),
     };
 }
@@ -491,7 +491,7 @@ pub fn Iterator(comptime T: type) type {
 
         fn ItemType() type {
             return switch (@typeInfo(T)) {
-                .optional => |opt| opt.child,
+                .Optional => |opt| opt.child,
                 else => T,
             };
         }
@@ -505,7 +505,7 @@ pub fn Iterator(comptime T: type) type {
         // used internally by row.get(Iterator(T))
         fn fromPgzRow(value: Result.State.Value, oid: i32) Self {
             const TT = switch (@typeInfo(T)) {
-                .optional => |opt| opt.child,
+                .Optional => |opt| opt.child,
                 else => T,
             };
 
@@ -675,7 +675,7 @@ const Record = struct {
         const len = std.mem.readInt(i32, data[0..4], .big);
 
         const TT = switch (@typeInfo(T)) {
-            .optional => |opt| blk: {
+            .Optional => |opt| blk: {
                 if (len == -1) return null;
                 break :blk opt.child;
             },
@@ -707,7 +707,7 @@ fn getScalar(T: type, data: []const u8, oid: i32) T {
         types.Numeric => return types.Numeric.decode(data, oid),
         types.Cidr => return types.Cidr.decode(data, oid),
         else => switch (@typeInfo(T)) {
-            .@"enum" => {
+            .Enum => {
                 const str = types.Bytea.decode(data, oid);
                 return std.meta.stringToEnum(T, str).?;
             },
