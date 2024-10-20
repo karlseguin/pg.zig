@@ -557,7 +557,13 @@ pub fn Iterator(comptime T: type) type {
                     lib.assertDecodeType([]types.Cidr, &.{types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal}, oid);
                     break :blk &types.Cidr.decodeKnown;
                 },
-                else => compileHaltGetError(T),
+                else => switch (@typeInfo(TT)) {
+                    .Enum => blk: {
+                        lib.assertDecodeType([]const u8, &.{types.StringArray.oid.decimal}, oid);
+                        break :blk &EnumDecoder(TT).decodeKnown;
+                    },
+                    else => compileHaltGetError(T),
+                },
             };
 
             const data = value.data;
@@ -651,6 +657,14 @@ pub fn Iterator(comptime T: type) type {
                     into[i] = decoder(data[len_end..pos]);
                 }
             }
+        }
+    };
+}
+
+fn EnumDecoder(comptime T: type) type {
+    return struct {
+         pub fn decodeKnown(data: []const u8) T {
+            return std.meta.stringToEnum(T, data).?;
         }
     };
 }
@@ -1660,6 +1674,13 @@ test "Row.to: array" {
     const User = struct {
         parents: []i32,
         tags: ?[][]const u8,
+        choices: ?[]Choice,
+
+        const Choice = enum {
+            red,
+            blue,
+            green,
+        };
     };
 
     defer t.reset();
@@ -1667,7 +1688,7 @@ test "Row.to: array" {
     defer c.deinit();
 
     {
-        var row = (try c.row("select array[1, 99]::integer[], array['over', '9000']::text[]", .{})).?;
+        var row = (try c.row("select array[1, 99]::integer[], array['over', '9000']::text[], array['red', 'green']::text[]", .{})).?;
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
 
@@ -1676,13 +1697,15 @@ test "Row.to: array" {
             t.allocator.free(user.tags.?[1]);
             t.allocator.free(user.tags.?);
             t.allocator.free(user.parents);
+            t.allocator.free(user.choices.?);
         }
         try t.expectSlice(i32, &.{ 1, 99 }, user.parents);
         try t.expectStringSlice(&.{ "over", "9000" }, user.tags.?);
+        try t.expectSlice(User.Choice, &.{ .red, .green }, user.choices.?);
     }
 
     {
-        var row = (try c.row("select array[1, 99]::integer[], null::text[]", .{})).?;
+        var row = (try c.row("select array[1, 99]::integer[], null::text[], null::text[]", .{})).?;
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
 
@@ -1691,6 +1714,7 @@ test "Row.to: array" {
         }
         try t.expectSlice(i32, &.{ 1, 99 }, user.parents);
         try t.expectEqual(null, user.tags);
+        try t.expectEqual(null, user.choices);
     }
 }
 
