@@ -8,6 +8,7 @@ pub const Stmt = lib.Stmt;
 pub const Result = lib.Result;
 pub const Iterator = lib.Iterator;
 pub const QueryRow = lib.QueryRow;
+pub const Mapper = lib.Mapper;
 
 pub const Listener = @import("listener.zig").Listener;
 

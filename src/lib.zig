@@ -16,6 +16,7 @@ pub const Row = result.Row;
 pub const Result = result.Result;
 pub const Iterator = result.Iterator;
 pub const QueryRow = result.QueryRow;
+pub const Mapper = result.Mapper;
 
 const reader = @import("reader.zig");
 pub const Reader = reader.Reader;
