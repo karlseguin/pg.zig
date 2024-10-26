@@ -381,7 +381,7 @@ pub const Row = struct {
 };
 
 fn isSlice(comptime T: type) ?type {
-    switch(@typeInfo(T)) {
+    switch (@typeInfo(T)) {
         .pointer => |ptr| {
             if (ptr.size != .Slice) {
                 compileHaltGetError(T);
@@ -554,7 +554,7 @@ pub fn Iterator(comptime T: type) type {
                     break :blk &types.Numeric.decodeKnown;
                 },
                 types.Cidr => blk: {
-                    lib.assertDecodeType([]types.Cidr, &.{types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal}, oid);
+                    lib.assertDecodeType([]types.Cidr, &.{ types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal }, oid);
                     break :blk &types.Cidr.decodeKnown;
                 },
                 else => switch (@typeInfo(TT)) {
@@ -663,7 +663,7 @@ pub fn Iterator(comptime T: type) type {
 
 fn EnumDecoder(comptime T: type) type {
     return struct {
-         pub fn decodeKnown(data: []const u8) T {
+        pub fn decodeKnown(data: []const u8) T {
             return std.meta.stringToEnum(T, data).?;
         }
     };
@@ -1212,21 +1212,25 @@ test "Result: text[] alloc dupes" {
     var arr1: [][]const u8 = undefined;
     var arr2: [][]const u8 = undefined;
     defer {
-        for (arr1) |str| { t.allocator.free(str); }
+        for (arr1) |str| {
+            t.allocator.free(str);
+        }
         t.allocator.free(arr1);
 
-        for (arr2) |str| { t.allocator.free(str); }
+        for (arr2) |str| {
+            t.allocator.free(str);
+        }
         t.allocator.free(arr2);
     }
 
     {
-        var row = (try c.row("select array['Leto', 'Test']::text[]" , .{})) orelse unreachable;
+        var row = (try c.row("select array['Leto', 'Test']::text[]", .{})) orelse unreachable;
         defer row.deinit() catch {};
         arr1 = try row.iterator([]const u8, 0).alloc(t.allocator);
     }
 
     {
-        var row = (try c.row("select array['Ghanima', 'Goku']::text[]" , .{})) orelse unreachable;
+        var row = (try c.row("select array['Ghanima', 'Goku']::text[]", .{})) orelse unreachable;
         defer row.deinit() catch {};
         arr2 = try row.iterator([]const u8, 0).alloc(t.allocator);
     }
@@ -1286,7 +1290,6 @@ test "Result: mutable [][]u8" {
     values[0][0] = 'n';
     try t.expectString("neto", values[0]);
     try t.expectString("Test", values[1]);
-
 }
 
 test "Row.to: ordinal" {

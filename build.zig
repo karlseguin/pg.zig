@@ -53,7 +53,6 @@ pub fn build(b: *std.Build) !void {
         pg_module.addOptions("config", options);
     }
 
-
     {
         // test step
         const lib_test = b.addTest(.{

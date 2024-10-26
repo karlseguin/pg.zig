@@ -60,10 +60,8 @@ pub fn assertDecodeType(comptime T: type, comptime expected_oids: []const i32, a
         }
     }
 
-    log.warn(
-        "PostgreSQL value of type {s} cannot be read into a " ++ @typeName(T) ++ ". " ++
-        "pg.zig has strict type checking when reading value."
-    , .{types.oidToString(actual)});
+    log.warn("PostgreSQL value of type {s} cannot be read into a " ++ @typeName(T) ++ ". " ++
+        "pg.zig has strict type checking when reading value.", .{types.oidToString(actual)});
     unreachable;
 }
 
@@ -76,10 +74,8 @@ pub fn assertNotNull(comptime T: type, is_null: bool) void {
         return;
     }
 
-    log.warn(
-        "PostgreSQL null column cannot be read into non-optional type (" ++ @typeName(T) ++ "). " ++
-        "pg.zig has strict type checking when reading value."
-    , .{});
+    log.warn("PostgreSQL null column cannot be read into non-optional type (" ++ @typeName(T) ++ "). " ++
+        "pg.zig has strict type checking when reading value.", .{});
     unreachable;
 }
 
@@ -138,24 +134,21 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
     }
 
     const path = std.mem.trimLeft(u8, try uri.path.toRawMaybeAlloc(aa), "/");
-    return .{
-        .arena = arena,
-        .opts = .{
-            .size = size,
-            .auth = .{
-                .username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres",
-                .password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null,
-                .database = if (path.len == 0) null else path,
-                .timeout = tcp_user_timeout orelse 10_000,
-            },
-            .connect = .{
-                .tls = tls,
-                .port = uri.port orelse null,
-                .host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null,
-            },
-            .timeout = pool_timeout_ms,
-        }
-    };
+    return .{ .arena = arena, .opts = .{
+        .size = size,
+        .auth = .{
+            .username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres",
+            .password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null,
+            .database = if (path.len == 0) null else path,
+            .timeout = tcp_user_timeout orelse 10_000,
+        },
+        .connect = .{
+            .tls = tls,
+            .port = uri.port orelse null,
+            .host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null,
+        },
+        .timeout = pool_timeout_ms,
+    } };
 }
 
 pub fn initializeSSLContext() !*SSLCtx {

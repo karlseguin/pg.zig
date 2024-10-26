@@ -385,11 +385,11 @@ test "Pool: Row error" {
     var pool = try Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
-    _ = try pool.row("insert into all_types (id) values ($1)", .{ 200 });
+    _ = try pool.row("insert into all_types (id) values ($1)", .{200});
 
     // This would segfault:
     // https://github.com/karlseguin/pg.zig/issues/34
-    try t.expectError(error.PG, pool.row("insert into all_types (id) values ($1)", .{ 200 }));
+    try t.expectError(error.PG, pool.row("insert into all_types (id) values ($1)", .{200}));
 
     try t.expectEqual(1, pool._available);
 }

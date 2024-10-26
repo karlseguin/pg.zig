@@ -1602,7 +1602,7 @@ test "PG: eager error conn state" {
         defer c.release();
 
         // duplicate it
-        _= try c.exec("insert into all_types (id) values ($1)", .{2000});
+        _ = try c.exec("insert into all_types (id) values ($1)", .{2000});
         try t.expectError(error.PG, c.exec("insert into all_types (id) values ($1)", .{2000}));
     }
 
@@ -1611,7 +1611,7 @@ test "PG: eager error conn state" {
         // this one succeeds, means we're properly handling the failure
         var c = try pool.acquire();
         defer c.release();
-        _= try c.exec("insert into all_types (id) values ($1)", .{2001});
+        _ = try c.exec("insert into all_types (id) values ($1)", .{2001});
     }
 }
 
@@ -1628,7 +1628,7 @@ test "PG: rollback during error" {
 
         try c.begin();
         // duplicate it
-        _= try c.exec("insert into all_types (id) values ($1)", .{3000});
+        _ = try c.exec("insert into all_types (id) values ($1)", .{3000});
         try t.expectError(error.PG, c.exec("insert into all_types (id) values ($1)", .{3000}));
         try c.rollback();
     }
@@ -1638,7 +1638,7 @@ test "PG: rollback during error" {
         // this one succeeds, means we're properly handling the failure
         var c = try pool.acquire();
         defer c.release();
-        _= try c.exec("insert into all_types (id) values ($1)", .{3001});
+        _ = try c.exec("insert into all_types (id) values ($1)", .{3001});
     }
 
     var result = try pool.query("select id from all_types order by id", .{});

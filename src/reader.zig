@@ -160,7 +160,6 @@ fn ReaderT(comptime T: type) type {
             return if (message.type == 'E') message.data else null;
         }
 
-
         pub fn next(self: *Self) !Message {
             return self.buffered(self.pos, false) orelse self.read(false);
         }

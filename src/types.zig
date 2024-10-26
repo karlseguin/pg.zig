@@ -145,7 +145,7 @@ pub const Types = struct {
         }
 
         pub fn decode(data: []const u8, data_oid: i32) i64 {
-            lib.assertDecodeType(i64, &.{Timestamp.oid.decimal, TimestampTz.oid.decimal}, data_oid);
+            lib.assertDecodeType(i64, &.{ Timestamp.oid.decimal, TimestampTz.oid.decimal }, data_oid);
             return std.mem.readInt(i64, data[0..8], .big) + us_from_epoch_to_y2k;
         }
 

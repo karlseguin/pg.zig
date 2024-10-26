@@ -29,7 +29,7 @@ const TLSStream = struct {
         var ssl: ?*openssl.SSL = null;
         if (ctx_) |ctx| {
             // PostgreSQL TLS starts off as a plain connection which we upgrade
-            try writeSocket(socket, &.{0, 0, 0, 8, 4, 210, 22, 47});
+            try writeSocket(socket, &.{ 0, 0, 0, 8, 4, 210, 22, 47 });
             var buf = [1]u8{0};
             _ = try readSocket(socket, &buf);
             if (buf[0] != 'S') {
@@ -71,7 +71,7 @@ const TLSStream = struct {
             }
         }
 
-        return  .{
+        return .{
             .ssl = ssl,
             .valid = true,
             .socket = socket,
@@ -103,7 +103,7 @@ const TLSStream = struct {
 
     pub fn read(self: *Stream, buf: []u8) !usize {
         if (self.ssl) |ssl| {
-            var read_len : usize = undefined;
+            var read_len: usize = undefined;
             const result = openssl.SSL_read_ex(ssl, buf.ptr, @intCast(buf.len), &read_len);
             if (result <= 0) {
                 self.valid = false;
@@ -134,7 +134,7 @@ const PlainStream = struct {
         };
         errdefer posix.close(socket);
 
-        return  .{
+        return .{
             .socket = socket,
         };
     }
