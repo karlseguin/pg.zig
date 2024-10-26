@@ -33,7 +33,7 @@ pub const Listener = struct {
     _allocator: Allocator,
 
     pub fn open(allocator: Allocator, opts: Conn.Opts) !Listener {
-        const stream = try Stream.connect(allocator, opts, null);
+        var stream = try Stream.connect(allocator, opts, null);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
@@ -63,7 +63,7 @@ pub const Listener = struct {
     }
 
     pub fn auth(self: *Listener, opts: lib.auth.Opts) !void {
-        if (try lib.auth.auth(self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
+        if (try lib.auth.auth(&self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
 

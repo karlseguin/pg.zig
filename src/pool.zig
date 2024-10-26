@@ -22,6 +22,7 @@ pub const Pool = struct {
     _cond: Thread.Condition,
     _ssl_ctx: ?*lib.SSLCtx,
     _reconnector: Reconnector,
+    _arena: std.heap.ArenaAllocator,
 
     pub const Opts = struct {
         size: u16 = 10,
@@ -37,12 +38,13 @@ pub const Pool = struct {
     }
 
     pub fn init(allocator: Allocator, opts: Opts) !*Pool {
-        const pool = try allocator.create(Pool);
-        errdefer allocator.destroy(pool);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        const aa = arena.allocator();
+        errdefer arena.deinit();
 
+        const pool = try aa.create(Pool);
         const size = opts.size;
-        const conns = try allocator.alloc(*Conn, size);
-        errdefer allocator.free(conns);
+        const conns = try aa.alloc(*Conn, size);
 
         var opts_copy = opts;
         var ssl_ctx: ?*SSLCtx = null;
@@ -51,21 +53,16 @@ pub const Pool = struct {
                 ssl_ctx = try lib.initializeSSLContext();
             }
             if (opts.connect.host) |h| {
-                opts_copy.connect._hostz = try allocator.dupeZ(u8, h);
+                opts_copy.connect._hostz = try aa.dupeZ(u8, h);
             }
         }
-        errdefer {
-            lib.freeSSLContext(ssl_ctx);
-            if (opts_copy.connect._hostz) |h| {
-                allocator.free(h);
-            }
-        }
-
+        errdefer lib.freeSSLContext(ssl_ctx);
 
         pool.* = .{
             ._cond = .{},
             ._mutex = .{},
             ._conns = conns,
+            ._arena = arena,
             ._opts = opts_copy,
             ._available = size,
             ._ssl_ctx = ssl_ctx,
@@ -97,11 +94,7 @@ pub const Pool = struct {
             allocator.destroy(conn);
         }
         lib.freeSSLContext(self._ssl_ctx);
-        if (self._opts.connect._hostz) |h| {
-            allocator.free(h);
-        }
-        allocator.free(self._conns);
-        allocator.destroy(self);
+        self._arena.deinit();
     }
 
     pub fn acquire(self: *Pool) !*Conn {
