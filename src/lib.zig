@@ -1,6 +1,11 @@
 // Exposed within this library
 const std = @import("std");
 
+const openssl = @cImport({
+    @cInclude("openssl/ssl.h");
+    @cInclude("openssl/err.h");
+});
+
 pub const log = std.log.scoped(.pg);
 
 pub const types = @import("types.zig");
@@ -9,7 +14,10 @@ pub const auth = @import("auth.zig");
 pub const Conn = @import("conn.zig").Conn;
 pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
+pub const Stream = @import("Stream.zig").Stream;
 pub const metrics = @import("metrics.zig");
+pub const has_openssl = @import("config").openssl;
+pub const SSLCtx = if (has_openssl) openssl.SSL_CTX else void;
 
 const result = @import("result.zig");
 pub const Row = result.Row;
@@ -106,6 +114,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
     errdefer arena.deinit();
     const aa = arena.allocator();
 
+    var tls = false;
     var tcp_user_timeout: ?u32 = null;
     if (uri.query) |qry| {
         const query_string = try qry.toRawMaybeAlloc(aa);
@@ -116,6 +125,12 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
             const val = it2.rest();
             if (std.mem.eql(u8, key, "tcp_user_timeout")) {
                 tcp_user_timeout = try std.fmt.parseInt(u32, val, 10);
+            } else if (std.mem.eql(u8, key, "sslmode")) {
+                if (std.mem.eql(u8, val, "require")) {
+                    tls = true;
+                } else if (std.mem.eql(u8, val, "disable") == false) {
+                    return error.UnsupportedSSLModeValue;
+                }
             } else {
                 return error.UnsupportedConnectionParam;
             }
@@ -134,12 +149,68 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
                 .timeout = tcp_user_timeout orelse 10_000,
             },
             .connect = .{
-                .host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null,
+                .tls = tls,
                 .port = uri.port orelse null,
+                .host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null,
             },
             .timeout = pool_timeout_ms,
         }
     };
+}
+
+pub fn initializeSSLContext() !*SSLCtx {
+    // OpenSSL documentation says these are implicitly called, and only need to
+    // be called if you're doing something special
+
+    // if (openssl.OPENSSL_init_ssl(openssl.OPENSSL_INIT_LOAD_SSL_STRINGS | openssl.OPENSSL_INIT_LOAD_CRYPTO_STRINGS, null) != 1) {
+    //     return error.OpenSSLInitSslFailed;
+    // }
+
+    // if (openssl.OPENSSL_init_crypto(openssl.OPENSSL_INIT_ADD_ALL_CIPHERS | openssl.OPENSSL_INIT_ADD_ALL_DIGESTS | openssl.OPENSSL_INIT_LOAD_CRYPTO_STRINGS, null) != 1) {
+    //     return error.OpenSSLInitCryptoFailed;
+    // }
+
+    const ctx = openssl.SSL_CTX_new(openssl.TLS_client_method()) orelse {
+        return error.SSLContextNew;
+    };
+    errdefer openssl.SSL_CTX_free(ctx);
+
+    if (openssl.SSL_CTX_set_min_proto_version(ctx, openssl.TLS1_2_VERSION) != 1) {
+        return error.SSLMinVersion;
+    }
+
+    _ = openssl.SSL_CTX_set_mode(ctx, openssl.SSL_MODE_AUTO_RETRY);
+
+    if (openssl.SSL_CTX_set_default_verify_paths(ctx) != 1) {
+        return error.SSLVerityPaths;
+    }
+
+    return ctx;
+}
+
+pub fn freeSSLContext(ctx: ?*SSLCtx) void {
+    if (comptime has_openssl == false) {
+        return;
+    }
+
+    if (ctx) |c| {
+        openssl.SSL_CTX_free(c);
+    }
+}
+
+pub fn printSSLError() void {
+    if (comptime has_openssl == false) {
+        return;
+    }
+
+    const bio = openssl.BIO_new(openssl.BIO_s_mem());
+    defer _ = openssl.BIO_free(bio);
+    openssl.ERR_print_errors(bio);
+    var buf: [*]u8 = undefined;
+    const len: usize = @intCast(openssl.BIO_get_mem_data(bio, &buf));
+    if (len > 0) {
+        std.debug.print("{s}\n", .{buf[0..len]});
+    }
 }
 
 const TestCase = struct {

@@ -120,7 +120,7 @@ pub fn setup() !void {
 pub const Stream = struct {
     closed: bool,
     _read_index: usize,
-    handle: c_int = 0,
+    socket: c_int = 0,
     _to_read: std.ArrayList(u8),
     _received: std.ArrayList(u8),
 

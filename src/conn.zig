@@ -6,16 +6,22 @@ const proto = lib.proto;
 const types = lib.types;
 const Pool = lib.Pool;
 const Stmt = lib.Stmt;
+const SSLCtx = lib.SSLCtx;
 const Reader = lib.Reader;
 const Result = lib.Result;
+const Stream = lib.Stream;
 const Timeout = lib.Timeout;
 const QueryRow = lib.QueryRow;
+const has_openssl = lib.has_openssl;
 
 const os = std.os;
-const Stream = std.net.Stream;
 const Allocator = std.mem.Allocator;
 
 pub const Conn = struct {
+    // If we own the ssl context (which only happens if the connection is
+    // created directly and NOT through a pool), then we have to free it
+    _ssl_ctx: ?*SSLCtx,
+
     // If we get a postgreSQL error, this will be set.
     err: ?proto.Error,
 
@@ -71,6 +77,8 @@ pub const Conn = struct {
         write_buffer: ?u16 = null,
         read_buffer: ?u16 = null,
         result_state_size: u16 = 32,
+        tls: bool = false,
+        _hostz: ?[:0]const u8 = null,
     };
 
     pub const QueryOpts = struct {
@@ -100,18 +108,20 @@ pub const Conn = struct {
     }
 
     pub fn open(allocator: Allocator, opts: Opts) !Conn {
-        const stream = blk: {
-            if (opts.unix_socket) |path| {
-                if (comptime std.net.has_unix_sockets == false or std.posix.AF == void) {
-                    return error.UnixPathNotSupported;
-                }
-                break :blk try std.net.connectUnixSocket(path);
-            } else {
-                const host = opts.host orelse "127.0.0.1";
-                const port = opts.port orelse 5432;
-                break :blk try std.net.tcpConnectToHost(allocator, host, port);
+        var ssl_ctx: ?*SSLCtx = null;
+        if (comptime lib.has_openssl) {
+            if (opts.tls) {
+                ssl_ctx = try lib.initializeSSLContext();
             }
-        };
+        }
+        errdefer lib.freeSSLContext(ssl_ctx);
+        var conn = try openWithContext(allocator, opts, ssl_ctx);
+        conn._ssl_ctx = ssl_ctx;
+        return conn;
+    }
+
+    pub fn openWithContext(allocator: Allocator, opts: Opts, ssl_ctx: ?*SSLCtx) !Conn {
+        var stream = try Stream.connect(allocator, opts, ssl_ctx);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));
@@ -129,6 +139,7 @@ pub const Conn = struct {
         return .{
             .err = null,
             ._buf = buf,
+            ._ssl_ctx = null,
             ._reader = reader,
             ._stream = stream,
             ._err_data = null,
@@ -151,6 +162,7 @@ pub const Conn = struct {
 
         // try to send a Terminate to the DB
         self.write(&.{ 'X', 0, 0, 0, 4 }) catch {};
+        lib.freeSSLContext(self._ssl_ctx);
         self._stream.close();
     }
 
@@ -164,7 +176,7 @@ pub const Conn = struct {
     }
 
     pub fn auth(self: *Conn, opts: lib.auth.Opts) !void {
-        if (try lib.auth.auth(self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
+        if (try lib.auth.auth(&self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
 

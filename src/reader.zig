@@ -7,7 +7,7 @@ const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
 // to everyone else, this is our reader
-pub const Reader = ReaderT(std.net.Stream);
+pub const Reader = ReaderT(lib.Stream);
 
 const zero_timeval = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 0 });
 
@@ -75,10 +75,10 @@ fn ReaderT(comptime T: type) type {
                     .sec = @intCast(@divTrunc(ms, 1000)),
                     .usec = @intCast(@mod(ms, 1000) * 1000),
                 });
-                try posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
+                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
                 self.has_timeout = true;
             } else if (self.has_timeout) {
-                try posix.setsockopt(self.stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
+                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
                 self.has_timeout = false;
             }
 
@@ -166,7 +166,7 @@ fn ReaderT(comptime T: type) type {
         }
 
         fn read(self: *Self, error_peek: bool) !Message {
-            const stream = self.stream;
+            var stream = self.stream;
             // const spare = buf.len - pos; // how much space we have left in our buffer
 
             // Every PG message has 1 type byte followed by a 4 byte length prefix.

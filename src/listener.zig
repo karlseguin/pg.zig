@@ -7,7 +7,7 @@ const Conn = lib.Conn;
 const Reader = lib.Reader;
 const NotificationResponse = lib.proto.NotificationResponse;
 
-const Stream = std.net.Stream;
+const Stream = lib.Stream;
 const Allocator = std.mem.Allocator;
 
 const ListenError = union(enum) {
@@ -33,15 +33,7 @@ pub const Listener = struct {
     _allocator: Allocator,
 
     pub fn open(allocator: Allocator, opts: Conn.Opts) !Listener {
-        const stream = blk: {
-            if (opts.unix_socket) |path| {
-                break :blk try std.net.connectUnixSocket(path);
-            } else {
-                const host = opts.host orelse "127.0.0.1";
-                const port = opts.port orelse 5432;
-                break :blk try std.net.tcpConnectToHost(allocator, host, port);
-            }
-        };
+        const stream = try Stream.connect(allocator, opts, null);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);

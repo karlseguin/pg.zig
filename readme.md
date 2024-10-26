@@ -4,8 +4,37 @@ A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify)
 
 See or run [example/main.zig](https://github.com/karlseguin/pg.zig/blob/master/example/main.zig) for a number of examples.
 
-## TLS / sslmode
-This library does not support TLS / sslmode - Zig's TLS support is currently [incomplete/buggy](https://github.com/ziglang/zig/issues/14172).
+## Experimental TLS
+This branch has experimental TLS support via openssl. Custom certificates are not yet supported.
+
+When loading the module, you must enable openssl by including at least 1 openssl setting:
+
+```zig
+const pg_module = b.dependency("pg", .{
+  .target = target,
+  .optimize = optimize,
+  .openssl_lib_name = "ssl",
+  .openssl_lib_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/lib"},
+  .openssl_include_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/include"},
+}).module("pg")
+
+The system defaults are use for the library and include paths. These should only be set if openssl is installed in a non-default location. In most cases specifying `.openssl_lib_name = "ssl"` or, for some systems `.openssl_lib_name = "openssl"` should be enough.
+
+Set the connection's `tls` option to true, or specify `sslmode=required` when using a postgresql url path:
+
+```zig
+var pool = try pg.Pool.init(allocator, .{
+  .connect = .{ .port = 5432, .host = "ip_or_hostname", .tls = true},
+  .auth = .{ .... },
+  .size = 5,
+});
+
+// OR
+const uri = try std.Uri.parse("postgresql://user:password@hostname/DBNAME?sslmode=require");
+var pool = try pg.Pool.initUri(allocator, uri, 10, 5_000);
+```
+
+If you get an error, please call `pg.printSSLError();` to hopefully print an error message to stderr which can be included in a ticket. This can safely be called in a `catch` clause, and will display nothing if the error is NOT SSL-related.
 
 ## Install
 1) Add pg.zig as a dependency in your `build.zig.zon`:

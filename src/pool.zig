@@ -5,6 +5,7 @@ const log = lib.log;
 const auth = lib.auth;
 const Conn = lib.Conn;
 const Result = lib.Result;
+const SSLCtx = lib.SSLCtx;
 const QueryRow = lib.QueryRow;
 const Listener = @import("listener.zig").Listener;
 
@@ -19,6 +20,7 @@ pub const Pool = struct {
     _allocator: Allocator,
     _mutex: Thread.Mutex,
     _cond: Thread.Condition,
+    _ssl_ctx: ?*lib.SSLCtx,
     _reconnector: Reconnector,
 
     pub const Opts = struct {
@@ -42,12 +44,31 @@ pub const Pool = struct {
         const conns = try allocator.alloc(*Conn, size);
         errdefer allocator.free(conns);
 
+        var opts_copy = opts;
+        var ssl_ctx: ?*SSLCtx = null;
+        if (comptime lib.has_openssl) {
+            if (opts.connect.tls) {
+                ssl_ctx = try lib.initializeSSLContext();
+            }
+            if (opts.connect.host) |h| {
+                opts_copy.connect._hostz = try allocator.dupeZ(u8, h);
+            }
+        }
+        errdefer {
+            lib.freeSSLContext(ssl_ctx);
+            if (opts_copy.connect._hostz) |h| {
+                allocator.free(h);
+            }
+        }
+
+
         pool.* = .{
             ._cond = .{},
             ._mutex = .{},
-            ._opts = opts,
             ._conns = conns,
+            ._opts = opts_copy,
             ._available = size,
+            ._ssl_ctx = ssl_ctx,
             ._allocator = allocator,
             ._reconnector = Reconnector.init(pool),
             ._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
@@ -74,6 +95,10 @@ pub const Pool = struct {
         for (self._conns) |conn| {
             conn.deinit();
             allocator.destroy(conn);
+        }
+        lib.freeSSLContext(self._ssl_ctx);
+        if (self._opts.connect._hostz) |h| {
+            allocator.free(h);
         }
         allocator.free(self._conns);
         allocator.destroy(self);
