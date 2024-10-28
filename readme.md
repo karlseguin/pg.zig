@@ -4,38 +4,6 @@ A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify)
 
 See or run [example/main.zig](https://github.com/karlseguin/pg.zig/blob/master/example/main.zig) for a number of examples.
 
-## Experimental TLS
-This branch has experimental TLS support via openssl. Custom certificates are not yet supported.
-
-When loading the module, you must enable openssl by including at least 1 openssl setting:
-
-```zig
-const pg_module = b.dependency("pg", .{
-  .target = target,
-  .optimize = optimize,
-  .openssl_lib_name = "ssl",
-  .openssl_lib_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/lib"},
-  .openssl_include_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/include"},
-}).module("pg")
-
-The system defaults are use for the library and include paths. These should only be set if openssl is installed in a non-default location. In most cases specifying `.openssl_lib_name = "ssl"` or, for some systems `.openssl_lib_name = "openssl"` should be enough.
-
-Set the connection's `tls` option to true, or specify `sslmode=required` when using a postgresql url path:
-
-```zig
-var pool = try pg.Pool.init(allocator, .{
-  .connect = .{ .port = 5432, .host = "ip_or_hostname", .tls = true},
-  .auth = .{ .... },
-  .size = 5,
-});
-
-// OR
-const uri = try std.Uri.parse("postgresql://user:password@hostname/DBNAME?sslmode=require");
-var pool = try pg.Pool.initUri(allocator, uri, 10, 5_000);
-```
-
-If you get an error, please call `pg.printSSLError();` to hopefully print an error message to stderr which can be included in a ticket. This can safely be called in a `catch` clause, and will display nothing if the error is NOT SSL-related.
-
 ## Install
 1) Add pg.zig as a dependency in your `build.zig.zon`:
 
@@ -66,7 +34,7 @@ var pool = try pg.Pool.init(allocator, .{
   .auth = .{
     .username = "postgres",
     .database = "postgres",
-    .password = "root_pw",
+    .password = "postgres",
     .timeout = 10_000,
   }
 });
@@ -594,6 +562,36 @@ The metrics are:
 * `pg_alloc_params` - counts the number of parameter states that were allocated. This indicates that your queries have more parameters than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_columns` - counts the number of columns states that were allocated. This indicates that your queries are returning more columns than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_reader` - counts the number of bytes allocated while reading messages from PostgreSQL. This generally happens as a result of large result (e.g. selecting large text fields). Controlled by the `read_buffer` configuration option.
+
+## TLS (Experimental)
+TLS is supported via openssl. When loading the module, you must enable openssl by including at least 1 openssl setting:
+
+```zig
+const pg_module = b.dependency("pg", .{
+  .target = target,
+  .optimize = optimize,
+  .openssl_lib_name = "ssl",
+  .openssl_lib_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/lib"},
+  .openssl_include_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/include"},
+}).module("pg")
+
+When not specified, the system defaults are use for the library and include paths. These should only be set if openssl is installed in a non-default location. In most cases specifying `.openssl_lib_name = "ssl"` or, for some systems `.openssl_lib_name = "openssl"` should be enough.
+
+Set the connection's `tls` option to either `.required` or `.{verify_full = null}`. When using a custom root certificate, specify the path: `.{verify_full = "/path/to/root.crt"}`.
+
+```zig
+var pool = try pg.Pool.init(allocator, .{
+  .connect = .{ .port = 5432, .host = "ip_or_hostname", .tls = .{.verify_full = null}},
+  .auth = .{ .... },
+  .size = 5,
+});
+
+// OR
+const uri = try std.Uri.parse("postgresql://user:password@hostname/DBNAME?sslmode=require");
+var pool = try pg.Pool.initUri(allocator, uri, 10, 5_000);
+```
+
+In your main file, you can define a global `pub const pg_stderr_tls = true;` to have pg.zig print possible TLS-related errors to stderr. Alternatively, if you get an error, you `pg.printSSLError();` to hopefully print an error message to stderr which can be included in a ticket. This can safely be called in a `catch` clause, and will display nothing if the error is NOT SSL-related. Note that using the global `pg_stderr_tls` is more likely to print useful information in the case of certification verification problems.
 
 ## Tests
 

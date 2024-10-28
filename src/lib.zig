@@ -43,6 +43,13 @@ const _assert = blk: {
     }
 };
 
+pub const _stderr_tls = blk: {
+    if (@hasDecl(root, "pg_stderr_tls")) {
+        break :blk root.pg_stderr_tls;
+    }
+    break :blk false;
+};
+
 pub fn assert(ok: bool) void {
     if (comptime _assert) {
         std.debug.assert(ok);
@@ -110,7 +117,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
     errdefer arena.deinit();
     const aa = arena.allocator();
 
-    var tls = false;
+    var tls: Conn.Opts.TLS = .off;
     var tcp_user_timeout: ?u32 = null;
     if (uri.query) |qry| {
         const query_string = try qry.toRawMaybeAlloc(aa);
@@ -123,7 +130,9 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
                 tcp_user_timeout = try std.fmt.parseInt(u32, val, 10);
             } else if (std.mem.eql(u8, key, "sslmode")) {
                 if (std.mem.eql(u8, val, "require")) {
-                    tls = true;
+                    tls = .require;
+                } else if (std.mem.eql(u8, val, "verify-full")) {
+                    tls = .{.verify_full = null};
                 } else if (std.mem.eql(u8, val, "disable") == false) {
                     return error.UnsupportedSSLModeValue;
                 }
@@ -151,7 +160,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
     } };
 }
 
-pub fn initializeSSLContext() !*SSLCtx {
+pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
     // OpenSSL documentation says these are implicitly called, and only need to
     // be called if you're doing something special
 
@@ -174,8 +183,29 @@ pub fn initializeSSLContext() !*SSLCtx {
 
     _ = openssl.SSL_CTX_set_mode(ctx, openssl.SSL_MODE_AUTO_RETRY);
 
-    if (openssl.SSL_CTX_set_default_verify_paths(ctx) != 1) {
-        return error.SSLVerityPaths;
+    switch (config) {
+        .off, .require => {},
+        .verify_full => |path_to_root| {
+            if (path_to_root) |p| {
+                var pathz: [std.fs.max_path_bytes + 1]u8 = undefined;
+                @memcpy(pathz[0..p.len], p);
+                pathz[p.len] = 0;
+                if (openssl.SSL_CTX_load_verify_locations(ctx, pathz[0..p.len + 1].ptr, null) != 1) {
+                    if (comptime _stderr_tls) {
+                        printSSLError();
+                    }
+                    return error.SSLVerifyPaths;
+                }
+            } else {
+                if (openssl.SSL_CTX_set_default_verify_paths(ctx) != 1) {
+                    if (comptime _stderr_tls) {
+                        printSSLError();
+                    }
+                    return error.SSLDefaultVerifyPaths;
+                }
+            }
+            openssl.SSL_CTX_set_verify(ctx, openssl.SSL_VERIFY_PEER, null);
+        },
     }
 
     return ctx;

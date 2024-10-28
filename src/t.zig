@@ -51,9 +51,11 @@ pub fn setup() !void {
         \\ drop user if exists pgz_user_nopass;
         \\ drop user if exists pgz_user_clear;
         \\ drop user if exists pgz_user_scram_sha256;
+        \\ drop user if exists pgz_user_ssl;
         \\ create user pgz_user_nopass;
         \\ create user pgz_user_clear with password 'pgz_user_clear_pw';
         \\ create user pgz_user_scram_sha256 with password 'pgz_user_scram_sha256_pw';
+        \\ create user pgz_user_ssl with password 'pgz_user_ssl_pw';
     , .{}) catch |err| try fail(c, err);
 
     _ = c.exec(
@@ -199,6 +201,7 @@ pub fn connect(opts: anytype) Conn {
     const T = @TypeOf(opts);
 
     var c = Conn.open(allocator, .{
+        .tls = if (@hasField(T, "tls")) opts.tls else .off,
         .host = if (@hasField(T, "host")) opts.host else "localhost",
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
     }) catch unreachable;
@@ -217,7 +220,7 @@ pub fn authOpts(opts: anytype) auth.Opts {
     return .{
         .database = if (@hasField(T, "database")) opts.database else "postgres",
         .username = if (@hasField(T, "username")) opts.username else "postgres",
-        .password = if (@hasField(T, "password")) opts.password else "root_pw",
+        .password = if (@hasField(T, "password")) opts.password else "postgres",
     };
 }
 

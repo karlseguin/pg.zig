@@ -77,8 +77,14 @@ pub const Conn = struct {
         write_buffer: ?u16 = null,
         read_buffer: ?u16 = null,
         result_state_size: u16 = 32,
-        tls: bool = false,
+        tls: TLS = .off,
         _hostz: ?[:0]const u8 = null,
+
+        pub const TLS = union(enum) {
+            off: void,
+            require: void,
+            verify_full: ?[]const u8,
+        };
     };
 
     pub const QueryOpts = struct {
@@ -109,10 +115,14 @@ pub const Conn = struct {
 
     pub fn open(allocator: Allocator, opts: Opts) !Conn {
         var ssl_ctx: ?*SSLCtx = null;
-        if (comptime lib.has_openssl) {
-            if (opts.tls) {
-                ssl_ctx = try lib.initializeSSLContext();
-            }
+        switch (opts.tls) {
+            .off => {},
+            else => |tls_config| {
+                if (comptime lib.has_openssl == false) {
+                    return error.OpenSSLNotConfigured;
+                }
+                ssl_ctx = try lib.initializeSSLContext(tls_config);
+            },
         }
         errdefer lib.freeSSLContext(ssl_ctx);
         var conn = try openWithContext(allocator, opts, ssl_ctx);
@@ -449,7 +459,7 @@ test "Conn: auth unknown user" {
     var conn = try Conn.open(t.allocator, .{});
     defer conn.deinit();
     try t.expectError(error.PG, conn.auth(.{ .username = "does_not_exist" }));
-    try t.expectString("password authentication failed for user \"does_not_exist\"", conn.err.?.message);
+    try t.expectEqual(true, std.mem.indexOf(u8, conn.err.?.message, "user \"does_not_exist\"") != null);
 }
 
 test "Conn: auth cleartext password" {
@@ -1649,9 +1659,32 @@ test "PG: rollback during error" {
 }
 
 test "open URI" {
-    const uri = try std.Uri.parse("postgresql://postgres:root_pw@localhost:5432/postgres?tcp_user_timeout=5000");
+    const uri = try std.Uri.parse("postgresql://postgres:postgres@localhost:5432/postgres?tcp_user_timeout=5000");
     var conn = try Conn.openAndAuthUri(t.allocator, uri);
     conn.deinit();
+}
+
+test "Conn: TLS required" {
+    {
+        var conn = try Conn.open(t.allocator, .{.tls = .off});
+        defer conn.deinit();
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
+        try t.expectEqual(true, std.mem.indexOf(u8, conn.err.?.message, "no encryption") != null);
+    }
+
+    {
+        var conn = t.connect(.{.tls = .require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
+        defer conn.deinit();
+    }
+}
+
+test "Conn: TLS verify-full" {
+    try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.allocator, .{.tls = .{.verify_full = null}}));
+
+    {
+        var conn = t.connect(.{.tls = .{.verify_full = "tests/root.crt"}, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
+        defer conn.deinit();
+    }
 }
 
 fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {

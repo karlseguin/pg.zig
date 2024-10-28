@@ -56,6 +56,10 @@ const TLSStream = struct {
                         return error.SSLHostNameFailed;
                     }
                 }
+                switch (opts.tls) {
+                    .verify_full => openssl.SSL_set_verify(ssl, openssl.SSL_VERIFY_PEER, null),
+                    else => {},
+                }
             }
 
             if (openssl.SSL_set_fd(ssl, socket) != 1) {
@@ -65,7 +69,16 @@ const TLSStream = struct {
             {
                 const ret = openssl.SSL_connect(ssl);
                 if (ret != 1) {
-                    lib.printSSLError();
+                    const verification_code = openssl.SSL_get_verify_result(ssl);
+                    if (comptime lib._stderr_tls) {
+                        lib.printSSLError();
+                    }
+                    if (verification_code != openssl.X509_V_OK) {
+                        if (comptime lib._stderr_tls) {
+                            std.debug.print("ssl verification error: {s}\n", .{openssl.X509_verify_cert_error_string(verification_code)});
+                        }
+                        return error.SSLCertificationVerificationError;
+                    }
                     return error.SSLConnectFailed;
                 }
             }

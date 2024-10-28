@@ -49,11 +49,14 @@ pub const Pool = struct {
         var opts_copy = opts;
         var ssl_ctx: ?*SSLCtx = null;
         if (comptime lib.has_openssl) {
-            if (opts.connect.tls) {
-                ssl_ctx = try lib.initializeSSLContext();
-            }
-            if (opts.connect.host) |h| {
-                opts_copy.connect._hostz = try aa.dupeZ(u8, h);
+            switch (opts.connect.tls) {
+                .off => {},
+                else => |tls_config| {
+                    if (opts.connect.host) |h| {
+                       opts_copy.connect._hostz = try aa.dupeZ(u8, h);
+                    }
+                    ssl_ctx = try lib.initializeSSLContext(tls_config);
+                },
             }
         }
         errdefer lib.freeSSLContext(ssl_ctx);
@@ -322,7 +325,7 @@ test "Pool: Release" {
         .auth = .{
             .database = "postgres",
             .username = "postgres",
-            .password = "root_pw",
+            .password = "postgres",
         },
     });
     defer pool.deinit();

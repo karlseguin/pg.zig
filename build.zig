@@ -62,10 +62,14 @@ pub fn build(b: *std.Build) !void {
             .test_runner = b.path("test_runner.zig"),
         });
         addLibs(lib_test, modules);
+        lib_test.addLibraryPath(std.Build.LazyPath{.cwd_relative = "/opt/openssl/lib"});
+        lib_test.addIncludePath(std.Build.LazyPath{.cwd_relative = "/opt/openssl/include"});
+        lib_test.linkSystemLibrary("crypto");
+        lib_test.linkSystemLibrary("ssl");
 
         {
             const options = b.addOptions();
-            options.addOption(bool, "openssl", false);
+            options.addOption(bool, "openssl", true);
             lib_test.root_module.addOptions("config", options);
         }
 
