@@ -1673,7 +1673,7 @@ test "Conn: TLS required" {
     }
 
     {
-        var conn = t.connect(.{.tls = .require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
+        var conn = t.connect(.{.tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
         defer conn.deinit();
     }
 }
@@ -1682,7 +1682,7 @@ test "Conn: TLS verify-full" {
     try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.allocator, .{.tls = .{.verify_full = null}}));
 
     {
-        var conn = t.connect(.{.tls = .{.verify_full = "tests/root.crt"}, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
+        var conn = t.connect(.{.tls = Conn.Opts.TLS{.verify_full = "tests/root.crt"}, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
         defer conn.deinit();
     }
 }
