@@ -103,6 +103,7 @@ pub const Pool = struct {
     pub fn acquire(self: *Pool) !*Conn {
         const conns = self._conns;
         self._mutex.lock();
+        errdefer self._mutex.unlock();
         while (true) {
             const available = self._available;
             if (available == 0) {
