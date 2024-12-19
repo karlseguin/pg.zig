@@ -321,7 +321,7 @@ pub const Stmt = struct {
             ._release_conn = opts.release_conn,
             ._oids = state.oids[0..column_count],
             ._values = state.values[0..column_count],
-            .column_names = if (opts.column_names) state.names[0..column_count] else &[_][]const u8{},
+            .column_names = if (opts.column_names) state.names[0..column_count] else &[_][]u8{},
             .number_of_columns = column_count,
         };
         return result;
