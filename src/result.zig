@@ -186,7 +186,7 @@ pub const Result = struct {
         };
 
         pub fn init(allocator: Allocator, size: usize) !State {
-            const names = try allocator.alloc([]u8, size);
+            const names = try allocator.alloc([]const u8, size);
             errdefer allocator.free(names);
 
             const values = try allocator.alloc(Value, size);
