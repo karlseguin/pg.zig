@@ -11,7 +11,7 @@ pub const Result = struct {
     number_of_columns: usize,
 
     // will be empty unless the query was executed with the column_names = true option
-    column_names: [][]u8,
+    column_names: [][]const u8,
 
     _conn: *Conn,
     _arena: *ArenaAllocator,
@@ -169,7 +169,7 @@ pub const Result = struct {
     pub const State = struct {
         // The name for each returned column, we only populate this if we're told
         // to (since it requires us to dupe the data)
-        names: [][]u8,
+        names: [][]const u8,
 
         // This is different than the above. The above are set once per query
         // from the RowDescription response of our Describe message. This is set for
@@ -377,14 +377,6 @@ pub const Row = struct {
         const value = self.get(field.type, column_index);
         const a = allocator orelse return value;
         return mapValue(T, value, a);
-    }
-
-    pub fn columnCount(self: *const Row) usize {
-        return self._result.number_of_columns;
-    }
-
-    pub fn columName(self: *const Row, col: usize) []const u8 {
-        return self._result.column_names[col];
     }
 };
 
