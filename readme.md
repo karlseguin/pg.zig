@@ -574,6 +574,7 @@ const pg_module = b.dependency("pg", .{
   .openssl_lib_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/lib"},
   .openssl_include_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/include"},
 }).module("pg")
+```
 
 When not specified, the system defaults are use for the library and include paths. These should only be set if openssl is installed in a non-default location. In most cases specifying `.openssl_lib_name = "ssl"` or, for some systems `.openssl_lib_name = "openssl"` should be enough.
 
