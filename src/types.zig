@@ -1184,14 +1184,14 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
             else => return error.BindWrongType,
         },
         .pointer => |ptr| switch (ptr.size) {
-            .Slice => {
+            .slice => {
                 if (ptr.is_const) {
                     return bindSlice(oid, @as([]const ptr.child, value), buf, format_pos);
                 } else {
                     return bindSlice(oid, @as([]ptr.child, value), buf, format_pos);
                 }
             },
-            .One => switch (@typeInfo(ptr.child)) {
+            .one => switch (@typeInfo(ptr.child)) {
                 .array => {
                     const Slice = []const std.meta.Elem(ptr.child);
                     return bindSlice(oid, @as(Slice, value), buf, format_pos);
@@ -1315,7 +1315,7 @@ fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !
         },
         .bool => try Types.BoolArray.encode(value, buf, oid_pos),
         .pointer => |ptr| switch (ptr.size) {
-            .Slice => switch (ptr.child) {
+            .slice => switch (ptr.child) {
                 u8 => switch (oid) {
                     Types.StringArray.oid.decimal => try Types.StringArray.encode(value, buf, oid_pos),
                     Types.UUIDArray.oid.decimal => try Types.UUIDArray.encode(value, buf, oid_pos),
@@ -1345,7 +1345,7 @@ fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !
 fn isStringArray(comptime T: type) bool {
     switch (@typeInfo(T)) {
         .pointer => |ptr| switch (ptr.size) {
-            .Slice => switch (ptr.child) {
+            .slice => switch (ptr.child) {
                 []u8, []const u8 => return true,
                 else => return false,
             },
