@@ -357,7 +357,7 @@ pub const Row = struct {
     fn mapColumn(self: *const Row, field: *const std.builtin.Type.StructField, optional_column_index: ?usize, allocator: ?Allocator) !field.type {
         const T = field.type;
         const column_index = optional_column_index orelse {
-            if (field.default_value) |dflt| {
+            if (field.default_value_ptr) |dflt| {
                 return @as(*align(1) const field.type, @ptrCast(dflt)).*;
             }
             return error.FieldColumnMismatch;
@@ -383,7 +383,7 @@ pub const Row = struct {
 fn isSlice(comptime T: type) ?type {
     switch (@typeInfo(T)) {
         .pointer => |ptr| {
-            if (ptr.size != .Slice) {
+            if (ptr.size != .slice) {
                 compileHaltGetError(T);
             }
             return if (ptr.child == u8) null else ptr.child;
