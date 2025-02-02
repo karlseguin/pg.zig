@@ -15,6 +15,7 @@ pub const Listener = @import("listener.zig").Listener;
 pub const types = lib.types;
 pub const Cidr = types.Cidr;
 pub const Numeric = types.Numeric;
+pub const Error = lib.proto.Error;
 pub const printSSLError = lib.printSSLError;
 
 pub fn uuidToHex(uuid: []const u8) ![36]u8 {
