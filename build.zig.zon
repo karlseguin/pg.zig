@@ -1,7 +1,8 @@
 .{
-    .name = "pg",
+    .name = .pg,
     .paths = .{""},
     .version = "0.0.0",
+    .fingerprint = 0xbd309ff281fb9f5a,
     .dependencies = .{
         .buffer = .{
             .url = "https://github.com/karlseguin/buffer.zig/archive/e9c95a7719996ce5e1e6a9a6eb3945dda9d98e28.tar.gz",

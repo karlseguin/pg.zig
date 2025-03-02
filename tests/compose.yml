@@ -9,6 +9,7 @@ services:
     ports:
       - 5432:5432
     volumes:
+      - "./root.crt:/etc/postgresql/root.crt:ro"
       - "./server.crt:/etc/postgresql/server.crt:ro"
       - "./server.key:/etc/postgresql/server.key:ro"
       - "./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro"
