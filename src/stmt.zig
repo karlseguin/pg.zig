@@ -44,12 +44,46 @@ pub const Stmt = struct {
     // which is globally configured.
     result_state: Result.State,
 
+    // Name of the prepared statement. Empty == unnamed, so it won't be cached
+    // by the server
+    name: []const u8,
+
     pub fn init(conn: *Conn, opts: Conn.QueryOpts) !Stmt {
         const base_allocator = opts.allocator orelse conn._allocator;
         const arena = try base_allocator.create(ArenaAllocator);
         arena.* = ArenaAllocator.init(base_allocator);
 
-        return .{ .conn = conn, .opts = opts, .buf = &conn._buf, .arena = arena, .param_index = 0, .param_count = 0, .param_oids = conn._param_oids, .column_count = 0, .result_state = conn._result_state };
+        return .{
+            .conn = conn,
+            .opts = opts,
+            .buf = &conn._buf,
+            .arena = arena,
+            .param_index = 0,
+            .param_count = 0,
+            .param_oids = conn._param_oids,
+            .column_count = 0,
+            .result_state = conn._result_state,
+            .name = opts.cache_name orelse "",
+        };
+    }
+
+    pub fn fromDescribe(conn: *Conn, describe: *Describe, opts: Conn.QueryOpts) !Stmt {
+        const base_allocator = opts.allocator orelse conn._allocator;
+        const arena = try base_allocator.create(ArenaAllocator);
+        arena.* = ArenaAllocator.init(base_allocator);
+
+        return .{
+            .conn = conn,
+            .opts = opts,
+            .buf = &conn._buf,
+            .arena = arena,
+            .param_index = 0,
+            .param_count = @intCast(describe.param_oids.len),
+            .param_oids = describe.param_oids,
+            .column_count = @intCast(describe.result_state.oids.len),
+            .result_state = describe.result_state,
+            .name = opts.cache_name.?,
+        };
     }
 
     // Should only be called in an error case. In a normal case, where
@@ -69,66 +103,59 @@ pub const Stmt = struct {
         allocator.destroy(arena);
     }
 
-    pub fn prepare(self: *Stmt, sql: []const u8) !void {
+    // When describe_allocator != null, we intent to cache the query information
+    // (in conn.__prepared_statements).
+    pub fn prepare(self: *Stmt, sql: []const u8, describe_allocator: ?Allocator) !void {
         var conn = self.conn;
         const opts = &self.opts;
-        const aa = self.arena.allocator();
+        const statement_arena = self.arena.allocator();
 
-        try conn._reader.startFlow(aa, opts.timeout);
+        try conn._reader.startFlow(statement_arena, opts.timeout);
 
         var buf = self.buf;
         buf.reset();
+
+        const name = self.name;
 
         // This function will issue 3 commands: Parse, Describe, Sync
         // We need the response from describe to put together our Bind message.
         // Specifically, describe will tell us the type of the return columns, and
         // in Bind, we tell the server how we want it to encode each column (text
         // or binary) and to do that, we need to know what they are.
-
         {
             // Build the payload from our 3 commands
 
             // We can calculate exactly how many bytes our 3 messages are going to be
             // and make sure our buffer is big enough, thus avoiding some unecessary
             // bound checking
-            const bind_payload_len = 8 + sql.len;
+            const bind_payload_len = 8 + sql.len + name.len;
+            const describe_payload_len = 6 + name.len;
+            const sync_payload_len = 4;
 
-            // +1 for the type field, 'P'
-            // +7 for our Describe message
-            // +5 for our Sync message
-            const total_length = bind_payload_len + 13;
+            // the +3 for the initial byte message for each of the 3 messages
+            const total_length = 3 + bind_payload_len + describe_payload_len + sync_payload_len;
 
             try buf.ensureTotalCapacity(total_length);
             var view = buf.skip(total_length) catch unreachable;
 
+            // PARSE
             view.writeByte('P');
             view.writeIntBig(u32, @intCast(bind_payload_len));
-            view.writeByte(0); // unnamed stored procedure
+            view.write(name);
+            view.writeByte(0);
             view.write(sql);
             // null terminate sql string, and we'll be specifying 0 parameter types
             view.write(&.{ 0, 0, 0 });
 
-            // DESCRIBE UNNAMED PORTAL + SYNC
-            view.write(&.{
-                // Describe
-                'D',
-                // Describe payload length
-                0,
-                0,
-                0,
-                6,
-                // Describe a prepared statement
-                'S',
-                // Prepared statement name (unnamed)
-                0,
-                // Sync
-                'S',
-                // Sync payload length
-                0,
-                0,
-                0,
-                4,
-            });
+            // DESCRIBE
+            view.writeByte('D');
+            view.writeIntBig(u32, @intCast(describe_payload_len));
+            view.writeByte('S');  // Describe a prepared statement
+            view.write(name);
+            view.writeByte(0);    // null terminate our name
+
+            // SYNC
+            view.write(&.{'S', 0, 0, 0, 4});
             try conn.write(buf.string());
         }
 
@@ -161,9 +188,15 @@ pub const Stmt = struct {
             var param_oids = self.param_oids;
             const data = msg.data;
             param_count = std.mem.readInt(u16, data[0..2], .big);
-            if (param_count > param_oids.len) {
+            if (describe_allocator) |da| {
+                // If we plan on caching this prepared statement, then we need
+                // to allocate a new param_oids list which will outlive this
+                // statement
+                param_oids = try da.alloc(i32, param_count);
+                self.param_oids = param_oids;
+            } else if (param_count > param_oids.len) {
                 lib.metrics.allocParams(param_count);
-                param_oids = try aa.alloc(i32, param_count);
+                param_oids = try statement_arena.alloc(i32, param_count);
                 self.param_oids = param_oids;
             }
 
@@ -188,14 +221,21 @@ pub const Stmt = struct {
                     var state = self.result_state;
                     const data = msg.data;
                     const column_count = std.mem.readInt(u16, data[0..2], .big);
-                    if (column_count > state.oids.len) {
+                    if (describe_allocator) |da| {
+                        // If we plan on caching this prepared statement, then we need
+                        // to allocate a new param_oids list which will outlive this
+                        // statement
+                        state = try Result.State.init(da, column_count);
+                        self.result_state = state;
+
+                    } else if (column_count > state.oids.len) {
                         lib.metrics.allocColumns(column_count);
                         // we have more columns than our self._result_state can handle, we
                         // need to create a new Result.State specifically for this
-                        state = try Result.State.init(aa, column_count);
+                        state = try Result.State.init(statement_arena, column_count);
                         self.result_state = state;
                     }
-                    const a: ?Allocator = if (opts.column_names) aa else null;
+                    const a: ?Allocator = if (opts.column_names) (describe_allocator orelse statement_arena) else null;
                     try state.from(column_count, data, a);
                     self.column_count = column_count;
                 },
@@ -203,20 +243,32 @@ pub const Stmt = struct {
             }
         }
 
-        try conn.readyForQuery();
+        return self.prepareForBind(param_count);
+    }
 
-        // Get our buffer ready for binding parameters. We do this here so that we
-        // don't have to check "is this the first call to bind" in bind.
+    // We need to call Bind for every value we're binding. Rather than having
+    // to check "is this the first call to bind" each time, we make it the caller's
+    // responsibility to "prepareForBind" upfront.
+    pub fn prepareForBind(self: *Stmt, param_count: u16) !void {
+        try self.conn.readyForQuery();
+
+        var buf = self.buf;
         buf.resetRetainingCapacity();
+
+        const name = self.name;
 
         // Bind command = 'B'
         // 4 byte length placeholder - 0, 0, 0, 0
         // portal name (empty string, length 0) - 0
-        // prepared statement name (empty string, length 0) - 0
+        // prepared statement name  + null terminator
+        try buf.ensureTotalCapacity(1 + 4 + 1 + name.len + 1 + 2);
 
         // length of buffer is guaranteed to be 128, so it's safe to use
-        // writeAssumeCapacity
-        buf.writeAssumeCapacity(&.{ 'B', 0, 0, 0, 0, 0, 0 });
+        // writeAssumeCapacity (4 byte length placeholder, 1 byte empty portal)
+        buf.writeAssumeCapacity(&.{ 'B', 0, 0, 0, 0, 0 });
+
+        buf.writeAssumeCapacity(name);
+        buf.writeByteAssumeCapacity(0);
 
         // number of parameters types we're sending a
         try buf.writeIntBig(u16, param_count);
@@ -230,13 +282,15 @@ pub const Stmt = struct {
     }
 
     pub fn bind(self: *Stmt, value: anytype) !void {
+        const name = self.name;
+
         const param_index = self.param_index;
         lib.assert(param_index < self.param_count);
 
         // We tell PostgreSQL the format (text or binary) of each parameter. This
         // information is at the start of the message, always starts at byte 9
         // and each value is 2 bytes.
-        const format_offset = 9 + (param_index * 2);
+        const format_offset = 9 + (param_index * 2) + name.len;
 
         try types.bindValue(@TypeOf(value), self.param_oids[param_index], value, self.buf, format_offset);
         self.param_index = param_index + 1;
@@ -326,4 +380,11 @@ pub const Stmt = struct {
         };
         return result;
     }
+
+    pub const Describe = struct {
+        param_oids: []i32,
+        arena: ArenaAllocator,
+        result_state: Result.State,
+    };
 };
+

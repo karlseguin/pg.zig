@@ -16,6 +16,7 @@ const has_openssl = lib.has_openssl;
 
 const os = std.os;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub const Conn = struct {
     // If we own the ssl context (which only happens if the connection is
@@ -49,13 +50,16 @@ pub const Conn = struct {
     // needed.
     _result_state: Result.State,
 
-    // Holds informaiton describing the parameters that PG is expecting. If the
+    // Holds information describing the parameters that PG is expecting. If the
     // query has more parameters, than an appropriately sized one is created.
     // This is separate from _result_state because:
     //   (a) they are populated separately
     //   (b) have distinct lifetimes
     //   (c) they likely have different lengths;
     _param_oids: []i32,
+
+    // cache_name => data necessary to re-execute previously prepared statement.
+    _prepared_statements: std.StringHashMapUnmanaged(Stmt.Describe),
 
     const State = enum {
         idle,
@@ -97,6 +101,10 @@ pub const Conn = struct {
         // and the other pool utility wrappers, but applications might find it useful
         // to use in their own helpers
         release_conn: bool = false,
+
+        // When not null, the prepared statement will be cached and re-used
+        // by subsequent queries using the same name.
+        cache_name: ?[]const u8 = null,
     };
 
     pub fn openAndAuthUri(allocator: Allocator, uri: std.Uri) !Conn {
@@ -157,6 +165,7 @@ pub const Conn = struct {
             ._allocator = allocator,
             ._param_oids = param_oids,
             ._result_state = result_state,
+            ._prepared_statements = .{},
         };
     }
 
@@ -174,6 +183,12 @@ pub const Conn = struct {
         self.write(&.{ 'X', 0, 0, 0, 4 }) catch {};
         lib.freeSSLContext(self._ssl_ctx);
         self._stream.close();
+
+        var it = self._prepared_statements.valueIterator();
+        while (it.next()) |value_ptr| {
+            value_ptr.arena.deinit();
+        }
+        self._prepared_statements.deinit(self._allocator);
     }
 
     pub fn release(self: *Conn) void {
@@ -207,7 +222,7 @@ pub const Conn = struct {
     pub fn prepareOpts(self: *Conn, sql: []const u8, opts: QueryOpts) !Stmt {
         var stmt = try Stmt.init(self, opts);
         errdefer stmt.deinit();
-        try stmt.prepare(sql);
+        try stmt.prepare(sql, null);
         return stmt;
     }
 
@@ -221,18 +236,64 @@ pub const Conn = struct {
             return error.ConnectionBusy;
         }
 
-        var stmt = Stmt.init(self, opts) catch |err| {
-            self.maybeRelease(opts.release_conn);
-            return err;
-        };
+        var cached = false;
+        var stmt: Stmt = undefined;
+        const name = opts.cache_name;
+
+        if (name) |n| {
+            if (self._prepared_statements.getPtr(n)) |describe| {
+                cached = true;
+                stmt = try Stmt.fromDescribe(self, describe, opts);
+                errdefer stmt.deinit();
+
+                try self._reader.startFlow(stmt.arena.allocator(), opts.timeout);
+                // Send a "SYNC" command
+                try self.write(&.{'S', 0, 0, 0, 4});
+                stmt.buf.reset();
+                try stmt.prepareForBind(@intCast(describe.param_oids.len));
+            }
+        }
+
+        if (cached == false) {
+            // either this isn't supposed to be cached, or it is, but we don't
+            // have it in our cache
+            stmt = Stmt.init(self, opts) catch |err| {
+                self.maybeRelease(opts.release_conn);
+                return err;
+            };
+
+            errdefer stmt.deinit();
+            if (name) |n| {
+                var describe_arena = ArenaAllocator.init(self._allocator);
+                errdefer describe_arena.deinit();
+                try stmt.prepare(sql, describe_arena.allocator());
+
+                // When prepare is called with our describe arena, than its
+                // param_oids and result_state will be create with it specifically
+                // so that we can copy them here.
+                const owned_name = try describe_arena.allocator().dupe(u8, n);
+                try self._prepared_statements.put(self._allocator, owned_name, .{
+                    .arena = describe_arena,
+                    .param_oids = stmt.param_oids,
+                    .result_state = stmt.result_state,
+                });
+            } else {
+                try stmt.prepare(sql, null);
+            }
+        }
+
 
         {
             errdefer stmt.deinit();
-            try stmt.prepare(sql);
+            if (values.len != stmt.param_count) {
+                return error.WrongNumberOfParameters;
+            }
+
             inline for (values) |value| {
                 try stmt.bind(value);
             }
         }
+
 
         return stmt.execute() catch |err| {
             stmt.deinit();
@@ -359,6 +420,16 @@ pub const Conn = struct {
                 else => return self.unexpectedDBMessage(),
             }
         }
+    }
+
+    pub fn deallocate(self: *Conn, cache_name: []const u8) !void {
+        if (self._prepared_statements.fetchRemove(cache_name)) |kv| {
+            kv.value.arena.deinit();
+        }
+        const allocator = self._allocator;
+        const sql = try std.fmt.allocPrint(allocator, "deallocate {s}", .{cache_name});
+        defer allocator.free(sql);
+        _ = try self.execOpts(sql, .{}, .{});
     }
 
     // Should not be called directly
@@ -1684,6 +1755,75 @@ test "Conn: TLS verify-full" {
     {
         var conn = t.connect(.{.tls = Conn.Opts.TLS{.verify_full = "tests/root.crt"}, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
         defer conn.deinit();
+    }
+}
+
+test "PG: cached query" {
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    {
+        var result = try c.queryOpts("select $1::int as id, $2::text as name", .{1, "leto"}, .{.cache_name = "c1"});
+        try t.expectEqual(0, result.column_names.len);
+        const row = (try result.next()) orelse unreachable;
+        try t.expectEqual(1, row.get(i32, 0));
+        try t.expectString("leto", row.get([]u8, 1));
+
+        try t.expectEqual(null, try result.next());
+        result.deinit();
+    }
+
+    {
+        var result = try c.queryOpts("slc", .{2, "ghanima"}, .{.cache_name = "c1"});
+        try t.expectEqual(0, result.column_names.len);
+        const row = (try result.next()) orelse unreachable;
+        try t.expectEqual(2, row.get(i32, 0));
+        try t.expectString("ghanima", row.get([]u8, 1));
+
+        try t.expectEqual(null, try result.next());
+        result.deinit();
+    }
+
+    try c.deallocate("c1");
+
+    {
+        try t.expectError(error.PG, c.queryOpts("slc", .{2, "ghanima"}, .{.cache_name = "c1"}));
+        try t.expectEqual(true, std.mem.indexOf(u8, c.err.?.message, "syntax error at or near \"slc\"") != null);
+
+    }
+
+}
+
+test "PG: cached query with column names" {
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    {
+        var result = try c.queryOpts("select $1::int as id, $2::text as name", .{1, "leto"}, .{.cache_name = "c2", .column_names = true});
+        try t.expectEqual(2, result.column_names.len);
+        try t.expectString("id", result.column_names[0]);
+        try t.expectString("name", result.column_names[1]);
+
+        const row = (try result.next()) orelse unreachable;
+        try t.expectEqual(1, row.get(i32, 0));
+        try t.expectString("leto", row.get([]u8, 1));
+
+        try t.expectEqual(null, try result.next());
+        result.deinit();
+    }
+
+    {
+        var result = try c.queryOpts("", .{2, "ghanima"}, .{.cache_name = "c2", .column_names = true});
+        try t.expectEqual(2, result.column_names.len);
+        try t.expectString("id", result.column_names[0]);
+        try t.expectString("name", result.column_names[1]);
+
+        const row = (try result.next()) orelse unreachable;
+        try t.expectEqual(2, row.get(i32, 0));
+        try t.expectString("ghanima", row.get([]u8, 1));
+
+        try t.expectEqual(null, try result.next());
+        result.deinit();
     }
 }
 

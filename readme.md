@@ -353,6 +353,37 @@ The main reason to do this is to have more flexibility in binding parameters (e.
 
 Note that `stmt.deinit()` should only be called if `stmt.execute()` is not called or returns an error. Once `stmt.execute()` returns a [Result](#result), `stmt` should be considered invalid. As we can see in the above example, `stmt.deinit()` is only called on `errdefer`.
 
+## Caching Prepared Statements
+When you execute a statement with parameters, we first ask PostgreSQL to "parse" the statement (which creates an execution plan) and then describe it. We can then bind the parameters and execute the statement.
+
+If you plan on executing the same query(ies) repeatedly, it's possible to have PostgreSQL cache the execution plan and pg.zig cache the description. However, there are some caveats with this approach (which are not specific to pg.zig). First, if you're using a connection pooler (like pgpool or PgBouncer), make sure to read the documentation and configure it to work properly with cached prepared statements. Historically, cached prepared statements and connection poolers have not worked well together.
+
+Secondly, note that the cache is per-connection. If you have a pool of 50 connections, and you execute the query against connections from the pool, then you should expect the full parse -> describe -> bind -> execute flow for those 50 connections (plus whatever new connections the pool might open).
+
+Caching is enabled by passing the `cache_name` option:
+
+```zig
+const result = try conn.queryOpts(
+    "select * from saiyans where power > $1", 
+    .{9000}, 
+    .{.cache_name = "super"}
+);
+```
+
+Technically, once cached, the SQL statement is ignored. So, after executing the above, you could execute the following **on the same connection**:
+
+```zig
+const result = try conn.queryOpts(
+    "this isn't valid SQL", 
+    .{1000}, 
+    .{.cache_name = "super"}
+);
+```
+
+And it **will** work. But you're playing with fire, and you should just include the same SQL and the same cache name for each execution. If you want to use the `.column_names = true` option, then it _must_ be included in the first query which generated the cache entry (again, in short, just _always_ use the same SQL and the same options).
+
+You can call `try conn.deallocate("super")` to remove a cache entry. But this is only done for the connection on which it is called. This would make sense, for example, if you get a connection from the pool, execute the same query multiple times, deallocate the cached entry, and return the connection back to the pool. Note that the name to deallocate, `super`, is not sanitized and is open to SQL injection - don't pass a user-supplied value to `deallocte`.
+
 ## Important Notice 1 - Bind vs Read
 When you read a value, such as `row.get(i32, 0)`, the library assumes you know what you're doing and that column 0 really is a non-null 32-bit integer. `row.get` doesn't return an error union. There are some assertions, but these are disabled in ReleaseFast and ReleaseSmall. You can also disable these assertions in Debug/ReleaseSafe by placing `pub const pg_assert = false;` in your root, (e.g. `main.zig`):
 

@@ -164,7 +164,7 @@ pub const Result = struct {
 
     // For every query, we need to store the type of each column (so we know
     // how to parse the data). Optionally, we might need the name of each column.
-    // The connection has a default Result.STate for a max # of columns, and we'll use
+    // The connection has a default Result.State for a max # of columns, and we'll use
     // that whenever we can. Otherwise, we'll create this dynamically.
     pub const State = struct {
         // The name for each returned column, we only populate this if we're told

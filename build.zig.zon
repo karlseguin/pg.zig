@@ -6,11 +6,11 @@
     .dependencies = .{
         .buffer = .{
             .url = "https://github.com/karlseguin/buffer.zig/archive/e9c95a7719996ce5e1e6a9a6eb3945dda9d98e28.tar.gz",
-            .hash = "1220aab1cba5e34a4d37e59475642e19208e627c9780a5d1c4eab3661994a2872ca0"
+            .hash = "N-V-__8AAAOLAACqscul40pNN-WUdWQuGSCOYnyXgKXRxOqz"
         },
         .metrics = .{
             .url = "https://github.com/karlseguin/metrics.zig/archive/cf2797bcb3aea7e5cdaf4de39c5550c70796e7b1.tar.gz",
-            .hash = "122061f30077ef518dd435d397598ab3c45daa3d2c25e6b45383fb94d0bd2c3af1af"
+            .hash = "N-V-__8AAHOzAQBh8wB371GN1DXTl1mKs8Rdqj0sJea0U4P7"
         }
     },
 }

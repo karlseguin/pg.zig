@@ -77,7 +77,7 @@ pub fn main() !void {
         const result = t.func();
         current_test = null;
 
-        const ns_taken = slowest.endTiming(friendly_name);
+        const ns_taken = slowest.endTiming(friendly_name, is_unnamed_test);
 
         if (std.testing.allocator_instance.deinit() == .leak) {
             leak += 1;
@@ -85,7 +85,9 @@ pub fn main() !void {
         }
 
         if (result) |_| {
-            pass += 1;
+            if (is_unnamed_test == false) {
+                pass += 1;
+            }
         } else |err| switch (err) {
             error.SkipZigTest => {
                 skip += 1;
@@ -104,11 +106,13 @@ pub fn main() !void {
             },
         }
 
-        if (env.verbose) {
-            const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
-            printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
-        } else {
-            printer.status(status, ".", .{});
+        if (!is_unnamed_test) {
+            if (env.verbose) {
+                const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
+                printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
+            } else {
+                printer.status(status, ".", .{});
+            }
         }
     }
 
@@ -200,10 +204,12 @@ const SlowTracker = struct {
         self.timer.reset();
     }
 
-    fn endTiming(self: *SlowTracker, test_name: []const u8) u64 {
+    fn endTiming(self: *SlowTracker, test_name: []const u8, is_unnamed_test: bool) u64 {
         var timer = self.timer;
         const ns = timer.lap();
-
+        if (is_unnamed_test) {
+            return ns;
+        }
         var slowest = &self.slowest;
 
         if (slowest.count() < self.max) {
