@@ -108,7 +108,7 @@ pub const Conn = struct {
     };
 
     pub fn openAndAuthUri(allocator: Allocator, uri: std.Uri) !Conn {
-        var po = try lib.parseOpts(uri, allocator, 0, 0);
+        var po = try lib.parseOpts(uri, allocator);
         defer po.deinit();
         return try openAndAuth(allocator, po.opts.connect, po.opts.auth);
     }

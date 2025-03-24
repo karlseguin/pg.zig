@@ -108,7 +108,7 @@ pub const ParsedOpts = struct {
     }
 };
 
-pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_timeout_ms: u32) !ParsedOpts {
+pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
     if (!std.mem.eql(u8, uri.scheme, "postgresql")) {
         return error.InvalidUriScheme;
     }
@@ -144,7 +144,8 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
 
     const path = std.mem.trimLeft(u8, try uri.path.toRawMaybeAlloc(aa), "/");
     return .{ .arena = arena, .opts = .{
-        .size = size,
+        .size = 0,
+        .timeout = 0,
         .auth = .{
             .username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres",
             .password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null,
@@ -156,7 +157,6 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator, size: u16, pool_tim
             .port = uri.port orelse null,
             .host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null,
         },
-        .timeout = pool_timeout_ms,
     } };
 }
 
@@ -242,8 +242,8 @@ const TestCase = struct {
 };
 
 const valid_tcs: [2]TestCase = .{
-    .{ .uri = "postgresql:///", .expected_opts = .{ .size = 10, .auth = .{ .username = "postgres" }, .connect = .{}, .timeout = 5000 } },
-    .{ .uri = "postgresql://user:pass@somehost:1234/somedb?tcp_user_timeout=5678", .expected_opts = .{ .size = 10, .auth = .{
+    .{ .uri = "postgresql:///", .expected_opts = .{ .size = 0, .auth = .{ .username = "postgres" }, .connect = .{}, .timeout = 0 } },
+    .{ .uri = "postgresql://user:pass@somehost:1234/somedb?tcp_user_timeout=5678", .expected_opts = .{ .size = 0, .auth = .{
         .username = "user",
         .password = "pass",
         .database = "somedb",
@@ -251,13 +251,13 @@ const valid_tcs: [2]TestCase = .{
     }, .connect = .{
         .host = "somehost",
         .port = 1234,
-    }, .timeout = 5000 } },
+    }, .timeout = 0 } },
 };
 
 test "URI: parse valid" {
     const a = std.testing.allocator;
     for (valid_tcs) |tc| {
-        var po = parseOpts(try std.Uri.parse(tc.uri), a, 10, 5000) catch |e| {
+        var po = parseOpts(try std.Uri.parse(tc.uri), a) catch |e| {
             std.log.err("failed to parse URI {s}", .{tc.uri});
             return e;
         };
@@ -267,9 +267,9 @@ test "URI: parse valid" {
 }
 
 test "URI: invalid scheme" {
-    try std.testing.expectError(error.InvalidUriScheme, parseOpts(try std.Uri.parse("foobar:///"), std.testing.allocator, 0, 0));
+    try std.testing.expectError(error.InvalidUriScheme, parseOpts(try std.Uri.parse("foobar:///"), std.testing.allocator));
 }
 
 test "URI: invalid params" {
-    try std.testing.expectError(error.UnsupportedConnectionParam, parseOpts(try std.Uri.parse("postgresql:///?bar=baz"), std.testing.allocator, 0, 0));
+    try std.testing.expectError(error.UnsupportedConnectionParam, parseOpts(try std.Uri.parse("postgresql:///?bar=baz"), std.testing.allocator));
 }

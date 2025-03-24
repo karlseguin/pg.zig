@@ -29,11 +29,15 @@ pub const Pool = struct {
         auth: auth.Opts = .{},
         connect: Conn.Opts = .{},
         timeout: u32 = 10 * std.time.ms_per_s,
+        connect_on_init_count: ?u16 = null,
     };
 
-    pub fn initUri(allocator: Allocator, uri: std.Uri, size: u16, pool_timeout_ms: u32) !*Pool {
-        var po = try lib.parseOpts(uri, allocator, size, pool_timeout_ms);
+
+    pub fn initUri(allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
+        var po = try lib.parseOpts(uri, allocator);
         defer po.deinit();
+        po.size = opts.size;
+        po.timeout = opts.timeout;
         return Pool.init(allocator, po.opts);
     }
 
@@ -60,6 +64,7 @@ pub const Pool = struct {
             }
         }
         errdefer lib.freeSSLContext(ssl_ctx);
+        const connect_on_init_count = opts.connect_on_init_count orelse size;
 
         pool.* = .{
             ._cond = .{},
@@ -67,9 +72,9 @@ pub const Pool = struct {
             ._conns = conns,
             ._arena = arena,
             ._opts = opts_copy,
-            ._available = size,
             ._ssl_ctx = ssl_ctx,
             ._allocator = allocator,
+            ._available = connect_on_init_count,
             ._reconnector = Reconnector.init(pool),
             ._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
         };
@@ -81,9 +86,14 @@ pub const Pool = struct {
             }
         }
 
-        for (0..size) |i| {
+        for (0..connect_on_init_count) |i| {
             conns[i] = try newConnection(pool, true);
             opened_connections += 1;
+        }
+
+        const lazy_start_count = size - connect_on_init_count;
+        for (0..lazy_start_count) |_| {
+            try pool._reconnector.reconnect();
         }
 
         return pool;
@@ -218,6 +228,7 @@ const Reconnector = struct {
         const retry_delay = 2 * std.time.ns_per_s;
 
         self.mutex.lock();
+        defer self.mutex.unlock();
         loop: while (self.count > 0) {
             const stopped = self.stopped;
             self.mutex.unlock();
@@ -235,6 +246,9 @@ const Reconnector = struct {
             self.mutex.lock();
             self.count -= 1;
         }
+
+        self.thread.?.detach();
+        self.thread = null;
     }
 
     fn stop(self: *Reconnector) void {
@@ -248,11 +262,11 @@ const Reconnector = struct {
 
     fn reconnect(self: *Reconnector) !void {
         self.mutex.lock();
+        defer self.mutex.unlock();
         self.count += 1;
         if (self.thread == null) {
             self.thread = try Thread.spawn(.{ .stack_size = 1024 * 1024 }, Reconnector.run, .{self});
         }
-        self.mutex.unlock();
     }
 };
 
@@ -291,6 +305,7 @@ test "Pool" {
     var pool = try Pool.init(t.allocator, .{
         .size = 2,
         .auth = t.authOpts(.{}),
+        .connect_on_init_count = 1,
     });
     defer pool.deinit();
 
