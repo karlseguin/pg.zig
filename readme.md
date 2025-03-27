@@ -602,7 +602,7 @@ TLS is supported via openssl. When loading the module, you must enable openssl b
 const pg_module = b.dependency("pg", .{
   .target = target,
   .optimize = optimize,
-  .openssl_lib_name = "ssl",
+  .openssl_lib_name = @as([]const u8, "ssl"),
   .openssl_lib_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/lib"},
   .openssl_include_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/include"},
 }).module("pg")
