@@ -1,7 +1,8 @@
 .{
-	.name = "example",
+	.name = .example,
 	.paths = .{""},
 	.version = "0.0.0",
+        .fingerprint = 0x6eec9b9fcafa54bf,
 	.dependencies = .{
 		.pg = .{
 			.path = ".."
