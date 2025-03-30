@@ -435,7 +435,7 @@ pub const Conn = struct {
     // Should not be called directly
     pub fn peekForError(self: *Conn) !void {
         const data = (try self._reader.peekForError()) orelse return;
-        self._state = .fail;
+        try self.readyForQuery();
         return self.setErr(data);
     }
 
@@ -1557,6 +1557,12 @@ test "PG: isUnique" {
     {
         _ = try c.exec("insert into all_types (id) values ($1)", .{7});
         _ = try t.expectError(error.PG, c.exec("insert into all_types (id) values ($1)", .{7}));
+        try t.expectEqual(true, c.err.?.isUnique());
+    }
+
+    {
+        // can still use the connection after the error
+        _ = try t.expectError(error.PG, c.row("insert into all_types (id) values ($1) returning id", .{7}));
         try t.expectEqual(true, c.err.?.isUnique());
     }
 }

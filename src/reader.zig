@@ -149,7 +149,7 @@ fn ReaderT(comptime T: type) type {
         // returned once you try to read the result.
         //
         // This difference results in an inconsistent api: some error are returned
-        // immediatelyby conn.query() and some errors are only returned when
+        // immediately by conn.query() and some errors are only returned when
         // result.next() is first called.
         //
         // Here we attempt to fix this by eagerly reading the next message. If it's
