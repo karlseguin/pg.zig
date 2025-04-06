@@ -62,7 +62,7 @@ pub const Listener = struct {
         self._stream.close();
     }
 
-    pub fn auth(self: *Listener, opts: lib.auth.Opts) !void {
+    pub fn auth(self: *Listener, opts: Conn.AuthOpts) !void {
         if (try lib.auth.auth(&self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }

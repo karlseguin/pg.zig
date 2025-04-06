@@ -8,7 +8,7 @@ const Stream = lib.Stream;
 
 const Allocator = std.mem.Allocator;
 
-pub const Opts = struct { username: []const u8 = "postgres", password: ?[]const u8 = null, database: ?[]const u8 = null, timeout: u32 = 10_000, application_name: ?[]const u8 = null, startup_parameters: ?std.StringHashMap([]const u8) = null };
+const Opts = lib.Conn.AuthOpts;
 
 // Weird return (but Zig has no error payloads, so..)
 // null on success

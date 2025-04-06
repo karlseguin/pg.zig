@@ -150,12 +150,12 @@ pub const Stmt = struct {
             // DESCRIBE
             view.writeByte('D');
             view.writeIntBig(u32, @intCast(describe_payload_len));
-            view.writeByte('S');  // Describe a prepared statement
+            view.writeByte('S'); // Describe a prepared statement
             view.write(name);
-            view.writeByte(0);    // null terminate our name
+            view.writeByte(0); // null terminate our name
 
             // SYNC
-            view.write(&.{'S', 0, 0, 0, 4});
+            view.write(&.{ 'S', 0, 0, 0, 4 });
             try conn.write(buf.string());
         }
 
@@ -227,7 +227,6 @@ pub const Stmt = struct {
                         // statement
                         state = try Result.State.init(da, column_count);
                         self.result_state = state;
-
                     } else if (column_count > state.oids.len) {
                         lib.metrics.allocColumns(column_count);
                         // we have more columns than our self._result_state can handle, we
@@ -387,4 +386,3 @@ pub const Stmt = struct {
         result_state: Result.State,
     };
 };
-

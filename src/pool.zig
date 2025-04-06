@@ -2,7 +2,6 @@ const std = @import("std");
 const lib = @import("lib.zig");
 
 const log = lib.log;
-const auth = lib.auth;
 const Conn = lib.Conn;
 const Result = lib.Result;
 const SSLCtx = lib.SSLCtx;
@@ -26,12 +25,11 @@ pub const Pool = struct {
 
     pub const Opts = struct {
         size: u16 = 10,
-        auth: auth.Opts = .{},
+        auth: Conn.AuthOpts = .{},
         connect: Conn.Opts = .{},
         timeout: u32 = 10 * std.time.ms_per_s,
         connect_on_init_count: ?u16 = null,
     };
-
 
     pub fn initUri(allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
         var po = try lib.parseOpts(uri, allocator);
@@ -57,7 +55,7 @@ pub const Pool = struct {
                 .off => {},
                 else => |tls_config| {
                     if (opts.connect.host) |h| {
-                       opts_copy.connect._hostz = try aa.dupeZ(u8, h);
+                        opts_copy.connect._hostz = try aa.dupeZ(u8, h);
                     }
                     ssl_ctx = try lib.initializeSSLContext(tls_config);
                 },

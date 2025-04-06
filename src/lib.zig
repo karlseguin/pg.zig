@@ -132,7 +132,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
                 if (std.mem.eql(u8, val, "require")) {
                     tls = .require;
                 } else if (std.mem.eql(u8, val, "verify-full")) {
-                    tls = .{.verify_full = null};
+                    tls = .{ .verify_full = null };
                 } else if (std.mem.eql(u8, val, "disable") == false) {
                     return error.UnsupportedSSLModeValue;
                 }
@@ -190,7 +190,7 @@ pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
                 var pathz: [std.fs.max_path_bytes + 1]u8 = undefined;
                 @memcpy(pathz[0..p.len], p);
                 pathz[p.len] = 0;
-                if (openssl.SSL_CTX_load_verify_locations(ctx, pathz[0..p.len + 1].ptr, null) != 1) {
+                if (openssl.SSL_CTX_load_verify_locations(ctx, pathz[0 .. p.len + 1].ptr, null) != 1) {
                     if (comptime _stderr_tls) {
                         printSSLError();
                     }

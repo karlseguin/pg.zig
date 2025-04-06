@@ -91,6 +91,15 @@ pub const Conn = struct {
         };
     };
 
+    pub const AuthOpts = struct {
+        username: []const u8 = "postgres",
+        password: ?[]const u8 = null,
+        database: ?[]const u8 = null,
+        timeout: u32 = 10_000,
+        application_name: ?[]const u8 = null,
+        startup_parameters: ?std.StringHashMap([]const u8) = null,
+    };
+
     pub const QueryOpts = struct {
         timeout: ?u32 = null,
         column_names: bool = false,
@@ -113,7 +122,7 @@ pub const Conn = struct {
         return try openAndAuth(allocator, po.opts.connect, po.opts.auth);
     }
 
-    pub fn openAndAuth(allocator: Allocator, opts: Opts, ao: lib.auth.Opts) !Conn {
+    pub fn openAndAuth(allocator: Allocator, opts: Opts, ao: AuthOpts) !Conn {
         var conn = try open(allocator, opts);
         errdefer conn.deinit();
 
@@ -200,7 +209,7 @@ pub const Conn = struct {
         pool.release(self);
     }
 
-    pub fn auth(self: *Conn, opts: lib.auth.Opts) !void {
+    pub fn auth(self: *Conn, opts: AuthOpts) !void {
         if (try lib.auth.auth(&self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
@@ -248,7 +257,7 @@ pub const Conn = struct {
 
                 try self._reader.startFlow(stmt.arena.allocator(), opts.timeout);
                 // Send a "SYNC" command
-                try self.write(&.{'S', 0, 0, 0, 4});
+                try self.write(&.{ 'S', 0, 0, 0, 4 });
                 stmt.buf.reset();
                 try stmt.prepareForBind(@intCast(describe.param_oids.len));
             }
@@ -282,7 +291,6 @@ pub const Conn = struct {
             }
         }
 
-
         {
             errdefer stmt.deinit();
             if (values.len != stmt.param_count) {
@@ -293,7 +301,6 @@ pub const Conn = struct {
                 try stmt.bind(value);
             }
         }
-
 
         return stmt.execute() catch |err| {
             stmt.deinit();
@@ -1743,23 +1750,23 @@ test "open URI" {
 
 test "Conn: TLS required" {
     {
-        var conn = try Conn.open(t.allocator, .{.tls = .off});
+        var conn = try Conn.open(t.allocator, .{ .tls = .off });
         defer conn.deinit();
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
         try t.expectEqual(true, std.mem.indexOf(u8, conn.err.?.message, "no encryption") != null);
     }
 
     {
-        var conn = t.connect(.{.tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
+        var conn = t.connect(.{ .tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
         defer conn.deinit();
     }
 }
 
 test "Conn: TLS verify-full" {
-    try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.allocator, .{.tls = .{.verify_full = null}}));
+    try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.allocator, .{ .tls = .{ .verify_full = null } }));
 
     {
-        var conn = t.connect(.{.tls = Conn.Opts.TLS{.verify_full = "tests/root.crt"}, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw"});
+        var conn = t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
         defer conn.deinit();
     }
 }
@@ -1769,7 +1776,7 @@ test "PG: cached query" {
     defer c.deinit();
 
     {
-        var result = try c.queryOpts("select $1::int as id, $2::text as name", .{1, "leto"}, .{.cache_name = "c1"});
+        var result = try c.queryOpts("select $1::int as id, $2::text as name", .{ 1, "leto" }, .{ .cache_name = "c1" });
         try t.expectEqual(0, result.column_names.len);
         const row = (try result.next()) orelse unreachable;
         try t.expectEqual(1, row.get(i32, 0));
@@ -1780,7 +1787,7 @@ test "PG: cached query" {
     }
 
     {
-        var result = try c.queryOpts("slc", .{2, "ghanima"}, .{.cache_name = "c1"});
+        var result = try c.queryOpts("slc", .{ 2, "ghanima" }, .{ .cache_name = "c1" });
         try t.expectEqual(0, result.column_names.len);
         const row = (try result.next()) orelse unreachable;
         try t.expectEqual(2, row.get(i32, 0));
@@ -1793,11 +1800,9 @@ test "PG: cached query" {
     try c.deallocate("c1");
 
     {
-        try t.expectError(error.PG, c.queryOpts("slc", .{2, "ghanima"}, .{.cache_name = "c1"}));
+        try t.expectError(error.PG, c.queryOpts("slc", .{ 2, "ghanima" }, .{ .cache_name = "c1" }));
         try t.expectEqual(true, std.mem.indexOf(u8, c.err.?.message, "syntax error at or near \"slc\"") != null);
-
     }
-
 }
 
 test "PG: cached query with column names" {
@@ -1805,7 +1810,7 @@ test "PG: cached query with column names" {
     defer c.deinit();
 
     {
-        var result = try c.queryOpts("select $1::int as id, $2::text as name", .{1, "leto"}, .{.cache_name = "c2", .column_names = true});
+        var result = try c.queryOpts("select $1::int as id, $2::text as name", .{ 1, "leto" }, .{ .cache_name = "c2", .column_names = true });
         try t.expectEqual(2, result.column_names.len);
         try t.expectString("id", result.column_names[0]);
         try t.expectString("name", result.column_names[1]);
@@ -1819,7 +1824,7 @@ test "PG: cached query with column names" {
     }
 
     {
-        var result = try c.queryOpts("", .{2, "ghanima"}, .{.cache_name = "c2", .column_names = true});
+        var result = try c.queryOpts("", .{ 2, "ghanima" }, .{ .cache_name = "c2", .column_names = true });
         try t.expectEqual(2, result.column_names.len);
         try t.expectString("id", result.column_names[0]);
         try t.expectString("name", result.column_names[1]);
