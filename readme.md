@@ -340,7 +340,7 @@ For most queries, you should use the `conn.query(...)`, `conn.row(...)` or `conn
 var stmt = try Stmt.init(conn, opts)
 errdefer stmt.deinit();
 
-try stmt.prepare(sql);
+try stmt.prepare(sql, null);
 inline for (parameters) |param| {
   try stmt.bind(param);
 }

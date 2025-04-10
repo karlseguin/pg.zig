@@ -103,7 +103,7 @@ pub const Stmt = struct {
         allocator.destroy(arena);
     }
 
-    // When describe_allocator != null, we intent to cache the query information
+    // When describe_allocator != null, we intend to cache the query information
     // (in conn.__prepared_statements).
     pub fn prepare(self: *Stmt, sql: []const u8, describe_allocator: ?Allocator) !void {
         var conn = self.conn;
