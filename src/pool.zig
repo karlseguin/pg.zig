@@ -34,8 +34,8 @@ pub const Pool = struct {
     pub fn initUri(allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
         var po = try lib.parseOpts(uri, allocator);
         defer po.deinit();
-        po.size = opts.size;
-        po.timeout = opts.timeout;
+        po.opts.size = opts.size;
+        po.opts.timeout = opts.timeout;
         return Pool.init(allocator, po.opts);
     }
 
