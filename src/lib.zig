@@ -109,7 +109,7 @@ pub const ParsedOpts = struct {
 };
 
 pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
-    if (!std.mem.eql(u8, uri.scheme, "postgresql")) {
+    if (!std.mem.eql(u8, uri.scheme, "postgresql") and !std.mem.eql(u8, uri.scheme, "postgres")) {
         return error.InvalidUriScheme;
     }
 
