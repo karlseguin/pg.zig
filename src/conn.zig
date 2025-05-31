@@ -102,7 +102,7 @@ pub const Conn = struct {
 
     pub const QueryOpts = struct {
         timeout: ?u32 = null,
-        column_names: bool = false,
+        column_names: bool = lib.default_column_names,
 
         allocator: ?Allocator = null,
         // Whether a call to result.deinit() should automatically release the
