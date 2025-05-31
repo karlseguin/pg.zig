@@ -133,7 +133,7 @@ Executes the query with arguments, returns [Result](#result). `deinit`, and poss
 Same as `query` but takes options:
 
 - `timeout: ?u32` - This is not reliable and should probably not be used. Currently it simply puts a recv socket timeout. On timeout, the connection will likely no longer be valid (which the pool will detect and handle when the connection is released) and the underlying query will likely still execute. Defaults to `null`
-- `column_names: bool` - Whether or not the `result.column_names` should be populated. When true, this requires memory allocation (duping the column names). Defaults to `false`
+- `column_names: bool` - Whether or not the `result.column_names` should be populated. When true, this requires memory allocation (duping the column names). Defaults to `false` unless the `column_names` build option was set to true.
 - `allocator` - The allocator to use for any allocations needed when executing the query and reading the results. When `null` this will default to the connection's allocator. If you were executing a query in a web-request and each web-request had its own arena tied to the lifetime of the request, it might make sense to use that arena. Defaults to `null`.
 - `release_conn: bool` - Whether or not to call `conn.release()` when `result.deinit()` is called. Useful for writing a function that acquires a connection from a `Pool` and returns a `Result`. When `query` or `row` are called from a `Pool` this is forced to `true`. Otherwise, defaults to `false`. 
 
@@ -163,7 +163,7 @@ The `conn.query` and `conn.queryOpts` methods return a `pg.Result` which is used
 
 ### Fields
 * `number_of_columns: usize` - Number of columns in the result
-* `column_names: [][]const u8` - Names of the column, empty unless the query was executed with the `column_names = true` option.
+* `column_names: [][]const u8` - Names of the column, empty unless the query was executed with the `column_names = true` option or the `column_names` build option was set to true.
 
 ### deinit(result: \*Result) void
 Releases resources associated with the result.
@@ -177,7 +177,7 @@ Why can't `deinit` handle this? If `deinit` also drained, you'd have to handle a
 Iterates to the next row of the result, or returns null if there are no more rows.
 
 ### columnIndex(result: \*Result, name: []const u8) ?usize
-Returns the index of the column with the given name. This is only valid when the query is executed with the `column_names = true` option.
+Returns the index of the column with the given name. This is only valid when the query is executed with the `column_names = true` option or the `column_names` build option was set to true.
 
 ### mapper(result: \*Result, T: type, opts: MapperOpts) Mapper(T)
 Returns a Mapper which can be used to create a T for each row. Mapping from column to field is done by name. This is an optimized version of [row.to](#tot-type-opts-toopts-t) when iterating through multiple rows with the `{.map = .name}`.
@@ -211,7 +211,7 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `pg.Cidr` - See CIDR/INET section
 
 ### getCol(comptime T: type, column_name: []const u8) T
-Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts`.
+Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts` or the `column_names` build option was set to true.
 
 This relies on calling `result.columnIndex` which iterates through `result.column_names` fields. In some cases, this is more efficient than `StringHashMap` lookup, in others, it is worse. For performance-sensitive code, prefer using `get`, or cache the column index in a local variables outside of the `next()` loop:
 
@@ -255,7 +255,7 @@ Setting `allocator` implies `dupe`, but uses the specified allocator rather than
 
 When `.map = .ordinal`, the default, the order of the field names must match the order of the columns. 
 
-When `.map = .name`, the query must be executed with the  `{.column_names = true}` option. Columns with no field equivalent are ignored. Fields with no column equivalent are set to their default value; if they do not have a default value the function will return `error.FieldColumnMismatch`. If you're going to use this in a loop with a `result`, consider using a [Mapper](#mapper) to avoid the name->index lookup on each iteration.
+When `.map = .name`, the query must be executed with the  `{.column_names = true}` option or the `column_names` build option must be set. Columns with no field equivalent are ignored. Fields with no column equivalent are set to their default value; if they do not have a default value the function will return `error.FieldColumnMismatch`. If you're going to use this in a loop with a `result`, consider using a [Mapper](#mapper) to avoid the name->index lookup on each iteration.
 
 Slice fields can either be mapped to a `pg.Iterator(T)` or a slice. When mapped to a `slice`, an allocator MUST be provided. When mapping to an array of strings (i.e. [][]const u8), the values are duped, and thus both the values and the slice itself must be freed. When mapping to a slice of primitives (i.e. []i32) the slice must be freed. When mapping to an `pg.Iterator(T)` with a custom allocator (`.{.allocator = allocator}`), the iterator must be freed by calling `iteartor.deinit(allocator)`. Whether you're mapping to an `pg.Iterator(T)` or a slice, I Strongly suggest you use an ArenaAllocator.
 
@@ -305,7 +305,7 @@ Gets the next column in the record. This behaves similarly [row.get](#getcomptim
 ## Mapper
 A mapper is used to iterate through a result and turn a row into an instance of `T`. When converting a single row, or using ordinal mapping, prefer using [row.to](#tot-type-opts-toopts-t). The mapper is an optimization over `row.to` with the `{.map = .name}` option which only has to do the name -> index lookup once.
 
-To use a mapper, the `{.column_names = true}` option must be passed to the query/row function.
+To use a mapper, the `{.column_names = true}` option must be passed to the query/row function or the `column_names` build option must be set.
 
 ```zig
 const User = struct {
@@ -625,6 +625,18 @@ var pool = try pg.Pool.initUri(allocator, uri, 10, 5_000);
 ```
 
 In your main file, you can define a global `pub const pg_stderr_tls = true;` to have pg.zig print possible TLS-related errors to stderr. Alternatively, if you get an error, you `pg.printSSLError();` to hopefully print an error message to stderr which can be included in a ticket. This can safely be called in a `catch` clause, and will display nothing if the error is NOT SSL-related. Note that using the global `pg_stderr_tls` is more likely to print useful information in the case of certification verification problems.
+
+## Enabling Column Names by Default
+
+To execute all queries as if the `column_names` option was set to true, you can provide the `column_names` argument to `b.dependency()`:
+
+```zig
+const pg_module = b.dependency("pg", .{
+  .target = target,
+  .optimize = optimize,
+  .column_names = true,
+}).module("pg");
+```
 
 ## Tests
 

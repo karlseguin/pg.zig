@@ -6,6 +6,8 @@ const openssl = @cImport({
     @cInclude("openssl/err.h");
 });
 
+const build_config = @import("config");
+
 pub const log = std.log.scoped(.pg);
 
 pub const types = @import("types.zig");
@@ -16,8 +18,9 @@ pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
 pub const Stream = @import("stream.zig").Stream;
 pub const metrics = @import("metrics.zig");
-pub const has_openssl = @import("config").openssl;
+pub const has_openssl = build_config.openssl;
 pub const SSLCtx = if (has_openssl) openssl.SSL_CTX else void;
+pub const default_column_names = build_config.column_names;
 
 const result = @import("result.zig");
 pub const Row = result.Row;
