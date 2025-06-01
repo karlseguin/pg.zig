@@ -47,9 +47,17 @@ pub fn build(b: *std.Build) !void {
         pg_module.linkSystemLibrary(openssl_lib_name orelse "ssl", .{});
     }
 
+    var column_names = false;
+    const column_names_opt = b.option(bool, "column_names", "");
+
+    if (column_names_opt) |val| {
+        column_names = val;
+    }
+
     {
         const options = b.addOptions();
         options.addOption(bool, "openssl", openssl);
+        options.addOption(bool, "column_names", column_names);
         pg_module.addOptions("config", options);
     }
 
@@ -62,8 +70,8 @@ pub fn build(b: *std.Build) !void {
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
         });
         addLibs(lib_test, modules);
-        lib_test.addLibraryPath(std.Build.LazyPath{.cwd_relative = "/opt/openssl/lib"});
-        lib_test.addIncludePath(std.Build.LazyPath{.cwd_relative = "/opt/openssl/include"});
+        lib_test.addLibraryPath(std.Build.LazyPath{ .cwd_relative = "/opt/openssl/lib" });
+        lib_test.addIncludePath(std.Build.LazyPath{ .cwd_relative = "/opt/openssl/include" });
         lib_test.linkSystemLibrary("crypto");
         lib_test.linkSystemLibrary("ssl");
 
