@@ -259,7 +259,9 @@ pub const Row = struct {
             },
             .@"struct" => blk: {
                 if (@hasDecl(T, "fromPgzRow") == true) {
-                    return T.fromPgzRow(value.data, self.oids[col]);
+                    return T.fromPgzRow(value.data, self.oids[col]) catch {
+                        std.debug.panic("PostgreSQL value of type {s} could not be read into a " ++ @typeName(T) ++ ".", .{types.oidToString(self.oids[col])});
+                    };
                 }
                 break :blk T;
             },
@@ -284,7 +286,7 @@ pub const Row = struct {
             .optional => |opt| if (value.is_null) return null else opt.child,
             else => T,
         };
-        return Iterator(TT).fromPgzRow(value.data, self.oids[col]);
+        return Iterator(TT).fromPgzRow(value.data, self.oids[col]) catch @panic("Could not get iterator of type " ++ @typeName(T) ++ " for row.");
     }
 
     pub fn iteratorCol(self: *const Row, comptime T: type, name: []const u8) IteratorReturnType(T) {
@@ -503,7 +505,7 @@ pub fn Iterator(comptime T: type) type {
         }
 
         // used internally by row.get(Iterator(T))
-        fn fromPgzRow(data: []const u8, oid: i32) Self {
+        fn fromPgzRow(data: []const u8, oid: i32) !Self {
             const TT = switch (@typeInfo(T)) {
                 .optional => |opt| opt.child,
                 else => T,
