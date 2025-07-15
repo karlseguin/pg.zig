@@ -1,10 +1,7 @@
 const std = @import("std");
 const lib = @import("lib.zig");
 
-const openssl = @cImport({
-    @cInclude("openssl/ssl.h");
-    @cInclude("openssl/err.h");
-});
+const openssl = lib.openssl;
 
 const posix = std.posix;
 

@@ -5,12 +5,12 @@
     .fingerprint = 0xbd309ff281fb9f5a,
     .dependencies = .{
         .buffer = .{
-            .url = "https://github.com/karlseguin/buffer.zig/archive/e9c95a7719996ce5e1e6a9a6eb3945dda9d98e28.tar.gz",
-            .hash = "N-V-__8AAAOLAACqscul40pNN-WUdWQuGSCOYnyXgKXRxOqz"
+            .url = "https://github.com/karlseguin/buffer.zig/archive/e2e6262a5c3cbe686dc8a0b19e23ba67a9c8fb56.tar.gz",
+            .hash = "N-V-__8AAPWQAACyLlBg9deZFnarBJfnKfrFKOafTaaeCSsq"
         },
         .metrics = .{
-            .url = "https://github.com/karlseguin/metrics.zig/archive/cf2797bcb3aea7e5cdaf4de39c5550c70796e7b1.tar.gz",
-            .hash = "N-V-__8AAHOzAQBh8wB371GN1DXTl1mKs8Rdqj0sJea0U4P7"
+            .url = "https://github.com/karlseguin/metrics.zig/archive/13d8706e1ae921a8cc0d2f88283c1b5412c73e2f.tar.gz",
+            .hash = "metrics-0.0.0-W7G4eP2_AQBKsaql3dhLJ-pkf-RdP-zV3vflJy4N34jC"
         }
     },
 }

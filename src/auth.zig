@@ -139,15 +139,14 @@ fn md5PasswordAuth(salt: []const u8, stream: *Stream, buf: *Buffer, opts: Opts) 
     }
 
     {
-        var hex_buf: [32]u8 = undefined;
-        const hex_hash = try std.fmt.bufPrint(&hex_buf, "{}", .{std.fmt.fmtSliceHexLower(&hash)});
+        const hex_hash = std.fmt.bytesToHex(&hash, .lower);
         var hasher = std.crypto.hash.Md5.init(.{});
-        hasher.update(hex_hash);
+        hasher.update(&hex_hash);
         hasher.update(salt);
         hasher.final(&hash);
     }
     var hashed_password: [35]u8 = undefined;
-    const password = try std.fmt.bufPrint(&hashed_password, "md5{}", .{std.fmt.fmtSliceHexLower(&hash)});
+    const password = try std.fmt.bufPrint(&hashed_password, "md5{s}", .{&std.fmt.bytesToHex(&hash, .lower)});
     try passwordAuth(password, stream, buf);
 }
 

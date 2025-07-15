@@ -64,9 +64,7 @@ pub fn build(b: *std.Build) !void {
     {
         // test step
         const lib_test = b.addTest(.{
-            .root_source_file = b.path("src/pg.zig"),
-            .target = target,
-            .optimize = optimize,
+            .root_module = pg_module,
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
         });
         addLibs(lib_test, modules);

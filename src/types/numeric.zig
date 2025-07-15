@@ -74,7 +74,7 @@ pub const Numeric = struct {
         var str_buf: [512]u8 = undefined;
         var stream = std.io.fixedBufferStream(&str_buf);
 
-        try std.fmt.formatType(value, "d", .{}, stream.writer(), 0);
+        try std.fmt.format(stream.writer(), "{d}", .{value});
         return encodeValidString(stream.getWritten(), buf);
     }
 
@@ -151,7 +151,7 @@ pub const Numeric = struct {
         return l;
     }
 
-    pub fn toString(self: Numeric, buf: []u8) []u8 {
+    pub fn toString(self: Numeric, buf: []u8) ![]u8 {
         switch (self.sign) {
             .nan => {
                 @memcpy(buf[0..3], "nan");
@@ -196,7 +196,7 @@ pub const Numeric = struct {
                     pos = end;
                 } else {
                     const t = std.mem.readInt(i16, digits[0..2], .big);
-                    pos += std.fmt.formatIntBuf(buf[pos..], t, 10, .lower, .{});
+                    pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{t})).len;
                     digits = digits[2..];
                 }
                 weight -= 1;
@@ -226,7 +226,7 @@ pub const Numeric = struct {
                     buf[pos] = '0';
                     pos += 1;
                 }
-                pos += std.fmt.formatIntBuf(buf[pos..], t, 10, .lower, .{});
+                pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{t})).len;
                 digits = digits[2..];
             }
         }

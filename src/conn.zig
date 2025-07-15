@@ -1840,11 +1840,11 @@ test "PG: cached query with column names" {
 
 fn expectNumeric(numeric: types.Numeric, expected: []const u8) !void {
     var str_buf: [50]u8 = undefined;
-    try t.expectString(expected, numeric.toString(&str_buf));
+    try t.expectString(expected, try numeric.toString(&str_buf));
 
     const a = try t.allocator.alloc(u8, numeric.estimatedStringLen());
     defer t.allocator.free(a);
-    try t.expectString(expected, numeric.toString(a));
+    try t.expectString(expected, try numeric.toString(a));
 
     if (std.mem.eql(u8, expected, "nan")) {
         try t.expectEqual(true, std.math.isNan(numeric.toFloat()));

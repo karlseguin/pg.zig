@@ -645,7 +645,8 @@ pub const MacAddrArray = struct {
 
     fn writeOneAsText(value: []const u8, buf: *buffer.Buffer) void {
         if (value.len == 6) {
-            std.fmt.format(buf.writer(), "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5] }) catch unreachable;
+            var writer = buf.writer();
+            writer.interface.print("{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5] }) catch unreachable;
         } else {
             buf.writeAssumeCapacity(value);
         }
@@ -669,7 +670,8 @@ pub const MacAddr8Array = struct {
 
     fn writeOneAsText(value: []const u8, buf: *buffer.Buffer) void {
         if (value.len == 8) {
-            std.fmt.format(buf.writer(), "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7] }) catch unreachable;
+            var writer = buf.writer();
+            writer.interface.print("{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7] }) catch unreachable;
         } else {
             buf.writeAssumeCapacity(value);
         }

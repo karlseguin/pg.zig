@@ -1,7 +1,7 @@
 // Exposed within this library
 const std = @import("std");
 
-const openssl = @cImport({
+pub const openssl = @cImport({
     @cInclude("openssl/ssl.h");
     @cInclude("openssl/err.h");
 });

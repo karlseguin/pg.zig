@@ -235,7 +235,7 @@ const Reconnector = struct {
             }
 
             const conn = newConnection(pool, false) catch {
-                std.time.sleep(retry_delay);
+                std.Thread.sleep(retry_delay);
                 self.mutex.lock();
                 continue :loop;
             };
