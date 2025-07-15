@@ -5,8 +5,8 @@
     .fingerprint = 0xbd309ff281fb9f5a,
     .dependencies = .{
         .buffer = .{
-            .url = "https://github.com/karlseguin/buffer.zig/archive/e2e6262a5c3cbe686dc8a0b19e23ba67a9c8fb56.tar.gz",
-            .hash = "N-V-__8AAPWQAACyLlBg9deZFnarBJfnKfrFKOafTaaeCSsq"
+            .url = "https://github.com/karlseguin/buffer.zig/archive/fdd342308ba62c7f0711a51b6c5d40fa919b12e8.tar.gz",
+            .hash = "N-V-__8AAJaPAADn1nH8gJVVmeux3PwtBLkMr5M9tNy1w2jY"
         },
         .metrics = .{
             .url = "https://github.com/karlseguin/metrics.zig/archive/13d8706e1ae921a8cc0d2f88283c1b5412c73e2f.tar.gz",
