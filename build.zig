@@ -78,6 +78,7 @@ pub fn build(b: *std.Build) !void {
         {
             const options = b.addOptions();
             options.addOption(bool, "openssl", true);
+            options.addOption(bool, "column_names", false);
             lib_test.root_module.addOptions("config", options);
         }
 
