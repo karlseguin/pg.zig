@@ -337,7 +337,7 @@ Setting `allocator` implies `dupe`, but uses the specified allocator rather than
 For most queries, you should use the `conn.query(...)`, `conn.row(...)` or `conn.exec(...)` methods. For queries with parameters, these methods look like:
 
 ```zig
-var stmt = try Stmt.init(conn, opts)
+var stmt = try Stmt.init(conn, opts);
 errdefer stmt.deinit();
 
 try stmt.prepare(sql, null);
