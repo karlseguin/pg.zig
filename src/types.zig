@@ -414,7 +414,8 @@ pub const JSON = struct {
     fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
         buf.writeAt(JSON.encoding, format_pos);
         const state = try Encode.variableLengthStart(buf);
-        try std.json.stringify(value, .{}, buf.writer());
+        var writer = buf.writer().interface;
+        try std.json.Stringify.value(value, .{}, &writer);
         Encode.variableLengthFill(buf, state);
     }
 };
@@ -436,7 +437,8 @@ pub const JSONB = struct {
         buf.writeAt(JSON.encoding, format_pos);
         const state = try Encode.variableLengthStart(buf);
         try buf.writeByte(1); // jsonb version
-        try std.json.stringify(value, .{}, buf.writer());
+        var writer = buf.writer().interface;
+        try std.json.Stringify.value(value, .{}, &writer);
         Encode.variableLengthFill(buf, state);
     }
 
