@@ -93,7 +93,7 @@ pub const Int32 = struct {
     }
 
     pub fn decode(data: []const u8, data_oid: i32) i32 {
-        lib.assertDecodeType(i32, &.{Int32.oid.decimal}, data_oid);
+        lib.assertDecodeType(i32, &.{Int32.oid.decimal, Xid.oid.decimal}, data_oid);
         return Int32.decodeKnown(data);
     }
 
@@ -119,9 +119,9 @@ pub const Int64 = struct {
 
     pub fn decode(data: []const u8, data_oid: i32) i64 {
         switch (data_oid) {
-            Timestamp.oid.decimal, TimestampTz.oid.decimal => return Timestamp.decode(data, data_oid),
+            Timestamp.oid.decimal, TimestampTz.oid.decimal => return Timestamp.decodeKnown(data),
             else => {
-                lib.assertDecodeType(i64, &.{Int64.oid.decimal}, data_oid);
+                lib.assertDecodeType(i64, &.{Int64.oid.decimal, PgLSN.oid.decimal, Xid8.oid.decimal}, data_oid);
                 return Int64.decodeKnown(data);
             },
         }
@@ -366,6 +366,21 @@ pub const UUID = struct {
         }
         return out;
     }
+};
+
+pub const PgLSN = struct {
+    pub const oid = OID.make(3220);
+    const encoding = &binary_encoding;
+};
+
+pub const Xid = struct {
+    pub const oid = OID.make(28);
+    const encoding = &binary_encoding;
+};
+
+pub const Xid8 = struct {
+    pub const oid = OID.make(5069);
+    const encoding = &binary_encoding;
 };
 
 pub const MacAddr = struct {
@@ -1137,7 +1152,7 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
                 if (value > 255 or value < 0) return error.IntWontFit;
                 return Char.encode(@intCast(value), buf, format_pos);
             },
-            Int64.oid.decimal => return Int64.encode(@intCast(value), buf, format_pos),
+            Int64.oid.decimal, PgLSN.oid.decimal => return Int64.encode(@intCast(value), buf, format_pos),
             else => return error.BindWrongType,
         },
         .int => switch (oid) {
