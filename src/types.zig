@@ -1152,7 +1152,7 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
                 if (value > 255 or value < 0) return error.IntWontFit;
                 return Char.encode(@intCast(value), buf, format_pos);
             },
-            Int64.oid.decimal, PgLSN.oid.decimal => return Int64.encode(@intCast(value), buf, format_pos),
+            Int64.oid.decimal, PgLSN.oid.decimal, Xid8.oid.decimal => return Int64.encode(@intCast(value), buf, format_pos),
             else => return error.BindWrongType,
         },
         .int => switch (oid) {
@@ -1160,7 +1160,7 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
                 if (value > 32767 or value < -32768) return error.IntWontFit;
                 return Int16.encode(@intCast(value), buf, format_pos);
             },
-            Int32.oid.decimal => {
+            Int32.oid.decimal, Xid.oid.decimal => {
                 if (value > 2147483647 or value < -2147483648) return error.IntWontFit;
                 return Int32.encode(@intCast(value), buf, format_pos);
             },
@@ -1170,7 +1170,7 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
                 if (value > 255 or value < 0) return error.IntWontFit;
                 return Char.encode(@intCast(value), buf, format_pos);
             },
-            Int64.oid.decimal => {
+            Int64.oid.decimal, PgLSN.oid.decimal, Xid8.oid.decimal => {
                 if (value > 9223372036854775807 or value < -9223372036854775808) {
                     return error.IntWontFit;
                 }
