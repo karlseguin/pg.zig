@@ -337,7 +337,7 @@ Setting `allocator` implies `dupe`, but uses the specified allocator rather than
 For most queries, you should use the `conn.query(...)`, `conn.row(...)` or `conn.exec(...)` methods. For queries with parameters, these methods look like:
 
 ```zig
-var stmt = try Stmt.init(conn, opts)
+var stmt = try Stmt.init(conn, opts);
 errdefer stmt.deinit();
 
 try stmt.prepare(sql, null);
@@ -518,6 +518,11 @@ When binding to an array of JSON or JSONB, automatic serialization is not suppor
 
 When reading a `JSON` or `JSONB` column with `[]u8`, the serialized JSON will be returned.
 
+### PgLSN, xid8, xid
+PgLSN and xid8 can be bound and read as i64.
+
+xid can be bound and read as i32.
+
 ## Listen / Notify
 You can create a `pg.Listener` either from an existing `Pool` or directly.
 
@@ -538,8 +543,8 @@ try listener.auth(.{
 });
 
 // add 1 or more channels to listen to
-try listener.listen("chan_1");
-try listener.listen("chan_2");
+try listener.listen("chan_1", .{});
+try listener.listen("chan_2", .{});
 
 // .next() blocks until there's a notification or an error
 while (listener.next()) |notification| {
@@ -564,6 +569,15 @@ try listener.listen("chan_1");
 
 // same as above
 ```
+
+### Listen Timeout
+When calling `listen`, a timeout in milliseconds can be specified:
+
+```zig
+try listener.listen("chan_1", .{});
+```
+
+If multiple calls to `listen` are made, the last timeout will be used. If no message is received in `timeout` milliseconds, `next()` will return `null` and `listener.err.?.err == error.WouldBlock`.
 
 ## Reconnects
 A listener will not automatically reconnect on error/disconnect. The pub/sub nature of LISTEN/NOTIFY mean that delivery is at-most-once and auto-reconnecting can hide that fact. Put the above code in a `while (true) {...}` loop.

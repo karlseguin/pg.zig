@@ -78,7 +78,10 @@ pub const Listener = struct {
         }
     }
 
-    pub fn listen(self: *Listener, channel: []const u8) !void {
+    const ListenOpts = struct {
+        timeout: u32 = 0,
+    };
+    pub fn listen(self: *Listener, channel: []const u8, opts: ListenOpts) !void {
         // LISTEN doesn't support parameterized queries. It has to be a simple query.
         // We don't use proto.Query because we want to quote the identifier.
 
@@ -135,6 +138,8 @@ pub const Listener = struct {
                 else => return error.UnexpectedDBMessage,
             }
         }
+
+        try self._reader.startFlow(null, opts.timeout);
     }
 
     pub fn next(self: *Listener) ?NotificationResponse {
@@ -209,8 +214,8 @@ test "Listener: from Pool" {
 }
 
 fn testListener(l: *Listener) !void {
-    try l.listen("chan-1");
-    try l.listen("chan_2");
+    try l.listen("chan-1", .{});
+    try l.listen("chan_2", .{});
 
     const thrd = try std.Thread.spawn(.{}, testNotifier, .{});
     {
