@@ -518,6 +518,11 @@ When binding to an array of JSON or JSONB, automatic serialization is not suppor
 
 When reading a `JSON` or `JSONB` column with `[]u8`, the serialized JSON will be returned.
 
+### PgLSN, xid8, xid
+PgLSN and xid8 can be bound and read as i64.
+
+xid can be bound and read as i32.
+
 ## Listen / Notify
 You can create a `pg.Listener` either from an existing `Pool` or directly.
 
