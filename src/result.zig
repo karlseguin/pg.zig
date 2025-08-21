@@ -1252,6 +1252,17 @@ test "Result: UUID" {
     try t.expectSlice(u8, &.{ 174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222 }, row.get([]u8, 1));
 }
 
+test "Result: lsn" {
+    var c = t.connect(.{});
+    defer c.deinit();
+    const sql = "select $1::pg_lsn + 1";
+    var result = try c.query(sql, .{ 32788447688 });
+    defer result.deinit();
+
+    const row = (try result.next()).?;
+    try t.expectEqual(32788447689, row.get(i64, 0));
+}
+
 test "Row: column names" {
     var c = t.connect(.{});
     defer c.deinit();
