@@ -429,8 +429,7 @@ pub const JSON = struct {
     fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
         buf.writeAt(JSON.encoding, format_pos);
         const state = try Encode.variableLengthStart(buf);
-        var writer = buf.writer().interface;
-        try std.json.Stringify.value(value, .{}, &writer);
+        try std.json.Stringify.value(value, .{}, &buf.interface);
         Encode.variableLengthFill(buf, state);
     }
 };
@@ -452,8 +451,7 @@ pub const JSONB = struct {
         buf.writeAt(JSON.encoding, format_pos);
         const state = try Encode.variableLengthStart(buf);
         try buf.writeByte(1); // jsonb version
-        var writer = buf.writer().interface;
-        try std.json.Stringify.value(value, .{}, &writer);
+        try std.json.Stringify.value(value, .{}, &buf.interface);
         Encode.variableLengthFill(buf, state);
     }
 
@@ -662,8 +660,7 @@ pub const MacAddrArray = struct {
 
     fn writeOneAsText(value: []const u8, buf: *buffer.Buffer) void {
         if (value.len == 6) {
-            var writer = buf.writer();
-            writer.interface.print("{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5] }) catch unreachable;
+            buf.interface.print("{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5] }) catch unreachable;
         } else {
             buf.writeAssumeCapacity(value);
         }
@@ -687,8 +684,7 @@ pub const MacAddr8Array = struct {
 
     fn writeOneAsText(value: []const u8, buf: *buffer.Buffer) void {
         if (value.len == 8) {
-            var writer = buf.writer();
-            writer.interface.print("{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7] }) catch unreachable;
+            buf.interface.print("{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7] }) catch unreachable;
         } else {
             buf.writeAssumeCapacity(value);
         }

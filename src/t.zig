@@ -130,15 +130,15 @@ pub const Stream = struct {
         s.* = .{
             .closed = false,
             ._read_index = 0,
-            ._to_read = std.ArrayList(u8).init(allocator),
-            ._received = std.ArrayList(u8).init(allocator),
+            ._to_read = .empty,
+            ._received = .empty,
         };
         return s;
     }
 
     pub fn deinit(self: *Stream) void {
-        self._to_read.deinit();
-        self._received.deinit();
+        self._to_read.deinit(allocator);
+        self._received.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -153,7 +153,7 @@ pub const Stream = struct {
     }
 
     pub fn add(self: *Stream, value: []const u8) void {
-        self._to_read.appendSlice(value) catch unreachable;
+        self._to_read.appendSlice(allocator, value) catch unreachable;
     }
 
     pub fn read(self: *Stream, buf: []u8) !usize {
@@ -188,7 +188,7 @@ pub const Stream = struct {
 
     // store messages that are written to the stream
     pub fn writeAll(self: *Stream, data: []const u8) !void {
-        self._received.appendSlice(data) catch unreachable;
+        self._received.appendSlice(allocator, data) catch unreachable;
     }
 
     pub fn close(self: *Stream) void {
