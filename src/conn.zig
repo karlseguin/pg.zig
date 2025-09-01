@@ -1550,6 +1550,28 @@ test "PG: bind []const u8" {
     try t.expectString("hello", row.get([]u8, 1));
 }
 
+test "PG: binary wrapper" {
+    defer t.reset();
+
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    _ = try c.exec(
+        \\ create extension if not exists postgis;
+        \\ create table if not exists places (
+        \\     id int not null,
+        \\     location geography not null
+        \\ );
+    , .{});
+
+    const data = lib.Binary{
+        .data = &.{1, 1, 0, 0, 32, 230, 16, 0, 0, 43, 107, 238, 243, 22, 122, 82, 192, 60, 20, 204, 226, 238, 89, 68, 64},
+    };
+    var row = (try c.row("select $1::geography", .{data})).?;
+    defer row.deinit() catch {};
+    try t.expectString(data.data, row.get([]const u8, 0));
+}
+
 test "PG: isUnique" {
     defer t.reset();
 

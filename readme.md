@@ -523,6 +523,13 @@ PgLSN and xid8 can be bound and read as i64.
 
 xid can be bound and read as i32.
 
+### Arbitrary Binary Encoding
+For other types, either open an issue (ideally, with a sample query/data), or you can use binary encoding directly. 
+
+For reading, you can use `[]u8` to get the raw binary encoded data and parse it yourself.
+
+For writing, wrap your raw encoded data in `pg.Binary{.data = ....}`.
+
 ## Listen / Notify
 You can create a `pg.Listener` either from an existing `Pool` or directly.
 

@@ -1210,7 +1210,14 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
                 .@"struct" => switch (oid) {
                     JSON.oid.decimal => return JSON.encode(value, buf, format_pos),
                     JSONB.oid.decimal => return JSONB.encode(value, buf, format_pos),
-                    else => return error.CannotBindStruct,
+                    else => {
+                        if (ptr.child != lib.Binary) {
+                            return error.CannotBindStruct;
+                        }
+                        buf.writeAt(&binary_encoding, format_pos);
+                        try buf.writeIntBig(i32, @intCast(value.data.len));
+                        return buf.write(value.data);
+                    },
                 },
                 else => compileHaltBindError(T),
             },

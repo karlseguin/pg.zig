@@ -239,6 +239,10 @@ pub fn printSSLError() void {
     }
 }
 
+pub const Binary = struct {
+    data: []const u8,
+};
+
 const TestCase = struct {
     uri: []const u8,
     expected_opts: Pool.Opts,
