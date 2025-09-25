@@ -72,10 +72,10 @@ pub const Numeric = struct {
 
         // turn our float into a string
         var str_buf: [512]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&str_buf);
+        var writer = std.Io.Writer.fixed(&str_buf);
 
-        try std.fmt.format(stream.writer(), "{d}", .{value});
-        return encodeValidString(stream.getWritten(), buf);
+        try writer.print("{d}", .{value});
+        return encodeValidString(writer.buffered(), buf);
     }
 
     pub fn decode(data: []const u8, data_oid: i32) Numeric {
