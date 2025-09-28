@@ -163,14 +163,20 @@ const PlainStream = struct {
 };
 
 fn readSocket(socket: posix.socket_t, buf: []u8) !usize {
-    return posix.read(socket, buf);
+    const stream: std.net.Stream = .{ .handle = socket };
+    var vecs: [1][]u8 = .{buf};
+    var reader = stream.reader(&.{});
+    const r = reader.interface();
+    return try r.readVec(&vecs);
 }
 
 fn writeSocket(socket: posix.socket_t, data: []const u8) !void {
-    var i: usize = 0;
-    while (i < data.len) {
-        i += try posix.write(socket, data[i..]);
-    }
+    const stream: std.net.Stream = .{ .handle = socket };
+    var buf: [1024]u8 = undefined;
+    var writer = stream.writer(&buf);
+    const w = &writer.interface;
+    try w.writeAll(data);
+    try w.flush();
 }
 
 fn isHostName(host: []const u8) bool {
