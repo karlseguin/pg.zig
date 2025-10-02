@@ -58,18 +58,37 @@ pub const Numeric = struct {
     }
 
     pub fn encodeBuf(value: anytype, buf: *buffer.Buffer) !void {
-        if (@TypeOf(value) != comptime_float) {
-            if (math.isNan(value)) {
-                return encodeNaN(buf);
-            }
-            if (math.isNegativeInf(value)) {
-                return encodeNegativeInf(buf);
-            }
-            if (math.isInf(value)) {
-                return encodeInf(buf);
-            }
+        const T = @TypeOf(value);
+        if (T == comptime_float) {
+            return encodeValue(value, buf);
         }
 
+        const TT = switch (@typeInfo(T)) {
+            .optional => |opt| opt.child,
+            else => T,
+        };
+
+        var v: TT = undefined;
+        if (comptime @typeInfo(T) == .optional) {
+            v = value orelse return encodeValidString("null", buf);
+        } else {
+            v = value;
+        }
+
+        if (math.isNan(v)) {
+            return encodeNaN(buf);
+        }
+        if (math.isNegativeInf(v)) {
+            return encodeNegativeInf(buf);
+        }
+        if (math.isInf(v)) {
+            return encodeInf(buf);
+        }
+
+        return encodeValue(v, buf);
+    }
+
+    fn encodeValue(value: anytype, buf: *buffer.Buffer) !void {
         // turn our float into a string
         var str_buf: [512]u8 = undefined;
         var stream = std.io.fixedBufferStream(&str_buf);
