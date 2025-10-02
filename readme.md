@@ -225,14 +225,14 @@ while (try result.next()) |row| {
 ### Array Columns
 Use `row.get(pg.Iterator(i32))` to return an [Iterator](#iteratort) over an array column. Supported array types are:
 
-* `u8` - `char[]`
-* `i16` - `smallint[]`
-* `i32` - `int[]`
-* `i64` - `bigint[]` or `timestamp(tz)[]` (see `get`)
-* `f32` - `float4`
-* `f64` - `float8`
-* `bool` - `bool[]`
-* `[]const u8` - More strict than `get([]u8)`). Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`
+* `u8` and `?u8` - `char[]`
+* `i16` and `?i16` - `smallint[]`
+* `i32` and `?i32` - `int[]`
+* `i64` and `?i64` - `bigint[]` or `timestamp(tz)[]` (see `get`)
+* `f32` and `?f32` - `float4`
+* `f64` and `?f64` - `float8`
+* `bool` and `?bool` - `bool[]`
+* `[]const u8` and `[]?const u8` - More strict than `get([]u8)`). Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`
 * `[]u8` - Same as `[]const u8` but returns mutable value.
 * `pg.Numeric` - See numeric section
 * `pg.Cidr` - See CIDR/INET section
@@ -274,6 +274,7 @@ while (names.next()) |name| {
 
 ### Fields
 * `len` - the number of values in the iterator
+* `is_null` - Whether the array itself was null
 
 ### alloc(it: Iterator(T), allocator: std.mem.Allocator) ![]T
 Allocates a slice and populates it with all values. 

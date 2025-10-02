@@ -280,16 +280,15 @@ pub const Row = struct {
         return self.get(T, col.?);
     }
 
-    pub fn iterator(self: *const Row, comptime T: type, col: usize) IteratorReturnType(T) {
+    pub fn iterator(self: *const Row, comptime T: type, col: usize) Iterator(T) {
         const value = self.values[col];
-        const TT = switch (@typeInfo(T)) {
-            .optional => |opt| if (value.is_null) return null else opt.child,
-            else => T,
-        };
-        return Iterator(TT).fromPgzRow(value.data, self.oids[col]) catch @panic("Could not get iterator of type " ++ @typeName(T) ++ " for row.");
+        if (value.is_null) {
+            return Iterator(T).asNull();
+        }
+        return Iterator(T).fromPgzRow(value.data, self.oids[col]) catch @panic("Could not get iterator of type " ++ @typeName(T) ++ " for row.");
     }
 
-    pub fn iteratorCol(self: *const Row, comptime T: type, name: []const u8) IteratorReturnType(T) {
+    pub fn iteratorCol(self: *const Row, comptime T: type, name: []const u8) Iterator(T) {
         const col = self._result.columnIndex(name);
         lib.assertColumnName(name, col != null);
         return self.iterator(T, col.?);
@@ -451,11 +450,11 @@ pub const QueryRow = struct {
         return self.row.getCol(T, name);
     }
 
-    pub fn iterator(self: *const QueryRow, comptime T: type, col: usize) IteratorReturnType(T) {
+    pub fn iterator(self: *const QueryRow, comptime T: type, col: usize) Iterator(T) {
         return self.row.iterator(T, col);
     }
 
-    pub fn iteratorCol(self: *const QueryRow, comptime T: type, name: []const u8) IteratorReturnType(T) {
+    pub fn iteratorCol(self: *const QueryRow, comptime T: type, name: []const u8) Iterator(T) {
         return self.row.iteratorCol(T, name);
     }
 
@@ -477,15 +476,9 @@ pub const QueryRow = struct {
     }
 };
 
-fn IteratorReturnType(comptime T: type) type {
-    return switch (@typeInfo(T)) {
-        .optional => |opt| ?Iterator(opt.child),
-        else => Iterator(T),
-    };
-}
-
 pub fn Iterator(comptime T: type) type {
     return struct {
+        is_null: bool,
         _len: usize,
         _pos: usize,
         _data: []const u8,
@@ -502,6 +495,20 @@ pub fn Iterator(comptime T: type) type {
 
         pub fn len(self: Self) usize {
             return self._len;
+        }
+
+        fn asNull() Self {
+            return .{
+                .is_null = true,
+                ._len = 0,
+                ._pos = 0,
+                ._data = &.{},
+                ._decoder = struct {
+                    fn noop(_: []const u8) ItemType() {
+                        unreachable;
+                    }
+                }.noop,
+            };
         }
 
         // used internally by row.get(Iterator(T))
@@ -569,8 +576,9 @@ pub fn Iterator(comptime T: type) type {
             };
 
             if (data.len == 12) {
-                // we have an empty
+                // we have an empty array
                 return .{
+                    .is_null = false,
                     ._len = 0,
                     ._pos = 0,
                     ._data = &[_]u8{},
@@ -584,13 +592,14 @@ pub fn Iterator(comptime T: type) type {
             lib.assert(dimensions == 1);
 
             const has_nulls = std.mem.readInt(i32, data[4..8][0..4], .big);
-            lib.assert(has_nulls == 0);
+            lib.assert(has_nulls == 0 or @typeInfo(T) == .optional);
 
             // const oid = std.mem.readInt(i32, data[8..12][0..4], .big);
             const l = std.mem.readInt(i32, data[12..16][0..4], .big);
             // const lower_bound = std.mem.readInt(i32, data[16..20][0..4], .big);
 
             return .{
+                .is_null = false,
                 ._len = @intCast(l),
                 ._pos = 0,
                 ._data = data[20..],
@@ -600,6 +609,7 @@ pub fn Iterator(comptime T: type) type {
 
         pub fn pgzMoveOwner(self: Self, allocator: Allocator) !Self {
             return .{
+                .is_null = false,
                 ._len = self._len,
                 ._pos = self._pos,
                 ._data = try allocator.dupe(u8, self._data),
@@ -651,11 +661,17 @@ pub fn Iterator(comptime T: type) type {
                 // TODO: for fixed length types, we don't need to decode the length
                 const len_end = pos + 4;
                 const data_len = std.mem.readInt(i32, data[pos..len_end][0..4], .big);
-                pos = len_end + @as(usize, @intCast(data_len));
-                if (comptime should_dupe and (T == []u8 or T == []const u8)) {
-                    into[i] = try allocator.dupe(u8, decoder(data[len_end..pos]));
+
+                if ((comptime @typeInfo(T) == .optional) and data_len == -1) {
+                    pos = len_end;
+                    into[i] = null;
                 } else {
-                    into[i] = decoder(data[len_end..pos]);
+                    pos = len_end + @as(usize, @intCast(data_len));
+                    if (comptime should_dupe and (T == []u8 or T == []const u8)) {
+                        into[i] = try allocator.dupe(u8, decoder(data[len_end..pos]));
+                    } else {
+                        into[i] = decoder(data[len_end..pos]);
+                    }
                 }
             }
         }
@@ -1082,8 +1098,9 @@ test "Result: null iterator" {
 
         var row = (try result.next()).?;
 
-        const iterator = row.iterator(?i32, 0);
-        try t.expectEqual(null, iterator);
+        var iterator = row.iterator(i32, 0);
+        try t.expectEqual(true, iterator.is_null);
+        try t.expectEqual(null, iterator.next());
         try result.drain();
     }
 
@@ -1094,8 +1111,9 @@ test "Result: null iterator" {
 
         var row = (try result.next()).?;
 
-        const iterator = row.iterator(?[]u8, 0);
-        try t.expectEqual(null, iterator);
+        var iterator = row.iterator([]u8, 0);
+        try t.expectEqual(true, iterator.is_null);
+        try t.expectEqual(null, iterator.next());
         try result.drain();
     }
 }
@@ -1121,11 +1139,6 @@ test "Result: int[]" {
     const v3 = try row.iterator(i64, 2).alloc(t.allocator);
     defer t.allocator.free(v3);
     try t.expectSlice(i64, &.{ 944949338498392, -2 }, v3);
-
-    // row 1, but fetch it as a nullable
-    const v4 = try row.iterator(?i16, 0).?.alloc(t.allocator);
-    defer t.allocator.free(v4);
-    try t.expectSlice(i16, &.{ -303, 9449, 2 }, v4);
 }
 
 test "Result: float[]" {
@@ -1193,17 +1206,6 @@ test "Result: text[] & bytea[]" {
     try t.expectString(&arr1, v2[0]);
     try t.expectString(&arr2, v2[1]);
     try t.expectEqual(2, v2.len);
-
-    // column 0 but fetched as nullable
-    const v3 = try row.iterator(?[]u8, 0).?.alloc(t.allocator);
-    defer {
-        t.allocator.free(v3[0]);
-        t.allocator.free(v3[1]);
-        t.allocator.free(v3);
-    }
-    try t.expectString("over", v3[0]);
-    try t.expectString("9000", v3[1]);
-    try t.expectEqual(2, v3.len);
 }
 
 test "Result: text[] alloc dupes" {
@@ -1256,7 +1258,7 @@ test "Result: lsn" {
     var c = t.connect(.{});
     defer c.deinit();
     const sql = "select $1::pg_lsn + 1";
-    var result = try c.query(sql, .{ 32788447688 });
+    var result = try c.query(sql, .{32788447688});
     defer result.deinit();
 
     const row = (try result.next()).?;
