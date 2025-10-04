@@ -17,6 +17,7 @@ const ListenError = union(enum) {
 
 pub const Listener = struct {
     err: ?ListenError = null,
+    closed: bool = false,
 
     _stream: Stream,
 
@@ -56,6 +57,14 @@ pub const Listener = struct {
         }
         self._buf.deinit();
         self._reader.deinit();
+
+        self.stop();
+    }
+
+    pub fn stop(self: *Listener) void {
+        if (@atomicRmw(bool, &self.closed, .Xchg, true, .monotonic) == true) {
+            return;
+        }
 
         // try to send a Terminate to the DB
         self._stream.writeAll(&.{ 'X', 0, 0, 0, 4 }) catch {};
@@ -214,6 +223,15 @@ test "Listener: from Pool" {
 }
 
 fn testListener(l: *Listener) !void {
+    var reset: std.Thread.ResetEvent = .{};
+    var tt = try std.Thread.spawn(.{}, struct {
+        fn shutdown(ll: *Listener, r: *std.Thread.ResetEvent) void {
+            r.wait();
+            ll.stop();
+        }
+    }.shutdown, .{ l, &reset });
+    tt.detach();
+
     try l.listen("chan-1", .{});
     try l.listen("chan_2", .{});
 
@@ -236,6 +254,8 @@ fn testListener(l: *Listener) !void {
         try t.expectString("", notification.payload);
     }
 
+    reset.set();
+    try t.expectEqual(null, l.next());
     thrd.join();
 }
 
