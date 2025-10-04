@@ -587,8 +587,11 @@ try listener.listen("chan_1", .{});
 
 If multiple calls to `listen` are made, the last timeout will be used. If no message is received in `timeout` milliseconds, `next()` will return `null` and `listener.err.?.err == error.WouldBlock`.
 
-## Reconnects
+### Reconnects
 A listener will not automatically reconnect on error/disconnect. The pub/sub nature of LISTEN/NOTIFY mean that delivery is at-most-once and auto-reconnecting can hide that fact. Put the above code in a `while (true) {...}` loop.
+
+### Stop
+It is safe to call `listener.stop()` from a different thread. When called, `next()` will return `null` and `listener.stopped` will be `true`.
 
 ## Errors
 The handling of errors isn't great. Blame Zig's lack of error payloads and the awkwardness of using `try` within a `while` condition.
