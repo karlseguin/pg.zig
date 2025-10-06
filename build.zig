@@ -1,28 +1,21 @@
 const std = @import("std");
 
-const ModuleMap = std.StringArrayHashMap(*std.Build.Module);
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // setup our dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
-    const allocator = gpa.allocator();
-
-    var modules = ModuleMap.init(allocator);
-    defer modules.deinit();
-
-    try modules.put("buffer", b.dependency("buffer", dep_opts).module("buffer"));
-    try modules.put("metrics", b.dependency("metrics", dep_opts).module("metrics"));
 
     // Expose this as a module that others can import
     const pg_module = b.addModule("pg", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/pg.zig"),
-        .imports = &.{ .{ .name = "buffer", .module = modules.get("buffer").? }, .{ .name = "metrics", .module = modules.get("metrics").? } },
+        .imports = &.{
+            .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
+            .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
+        },
     });
 
     var openssl = false;
@@ -45,6 +38,7 @@ pub fn build(b: *std.Build) !void {
     if (openssl) {
         pg_module.linkSystemLibrary("crypto", .{});
         pg_module.linkSystemLibrary(openssl_lib_name orelse "ssl", .{});
+        pg_module.link_libc = true;
     }
 
     var column_names = false;
@@ -64,13 +58,21 @@ pub fn build(b: *std.Build) !void {
     {
         // test step
         const lib_test = b.addTest(.{
-            .root_module = pg_module,
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/pg.zig"),
+                .imports = &.{
+                    .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
+                    .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
+                },
+            }),
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
         });
-        addLibs(lib_test, modules);
-        lib_test.linkLibC();
-        lib_test.addLibraryPath(std.Build.LazyPath{ .cwd_relative = "/opt/openssl/lib" });
-        lib_test.addIncludePath(std.Build.LazyPath{ .cwd_relative = "/opt/openssl/include" });
+        if (openssl_lib_path) |p|
+            lib_test.addLibraryPath(p);
+        if (openssl_include_path) |p|
+            lib_test.addIncludePath(p);
         lib_test.linkSystemLibrary("crypto");
         lib_test.linkSystemLibrary("ssl");
 
@@ -86,12 +88,5 @@ pub fn build(b: *std.Build) !void {
 
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_test.step);
-    }
-}
-
-fn addLibs(step: *std.Build.Step.Compile, modules: ModuleMap) void {
-    var it = modules.iterator();
-    while (it.next()) |m| {
-        step.root_module.addImport(m.key_ptr.*, m.value_ptr.*);
     }
 }
