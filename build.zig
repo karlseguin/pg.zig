@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -39,6 +38,7 @@ pub fn build(b: *std.Build) !void {
     if (openssl) {
         pg_module.linkSystemLibrary("crypto", .{});
         pg_module.linkSystemLibrary(openssl_lib_name orelse "ssl", .{});
+        pg_module.link_libc = true;
     }
 
     var column_names = false;
@@ -69,10 +69,10 @@ pub fn build(b: *std.Build) !void {
             }),
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
         });
-
-        lib_test.linkLibC();
-        lib_test.addLibraryPath(std.Build.LazyPath{ .cwd_relative = "/opt/openssl/lib" });
-        lib_test.addIncludePath(std.Build.LazyPath{ .cwd_relative = "/opt/openssl/include" });
+        if (openssl_lib_path) |p|
+            lib_test.addLibraryPath(p);
+        if (openssl_include_path) |p|
+            lib_test.addIncludePath(p);
         lib_test.linkSystemLibrary("crypto");
         lib_test.linkSystemLibrary("ssl");
 
@@ -90,4 +90,3 @@ pub fn build(b: *std.Build) !void {
         test_step.dependOn(&run_test.step);
     }
 }
-

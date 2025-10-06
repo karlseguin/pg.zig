@@ -59,7 +59,7 @@ const TLSStream = struct {
                 }
             }
 
-            if (openssl.SSL_set_fd(ssl, socket) != 1) {
+            if (openssl.SSL_set_fd(ssl, if (@import("builtin").os.tag == .windows) @intCast(@intFromPtr(socket)) else socket) != 1) {
                 return error.SSLSetFdFailed;
             }
 
