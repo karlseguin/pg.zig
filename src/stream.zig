@@ -131,16 +131,15 @@ const PlainStream = struct {
 
     pub fn connect(allocator: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
         const socket = blk: {
-            if (opts.unix_socket) |path| {
+            const host = opts.host orelse DEFAULT_HOST;
+            if (host.len > 0 and host[0] == '/') {
                 if (comptime std.net.has_unix_sockets == false or std.posix.AF == void) {
                     return error.UnixPathNotSupported;
                 }
-                break :blk (try std.net.connectUnixSocket(path)).handle;
-            } else {
-                const host = opts.host orelse DEFAULT_HOST;
-                const port = opts.port orelse 5432;
-                break :blk (try std.net.tcpConnectToHost(allocator, host, port)).handle;
+                break :blk (try std.net.connectUnixSocket(host)).handle;
             }
+            const port = opts.port orelse 5432;
+            break :blk (try std.net.tcpConnectToHost(allocator, host, port)).handle;
         };
         errdefer posix.close(socket);
 

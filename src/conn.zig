@@ -77,7 +77,6 @@ pub const Conn = struct {
     pub const Opts = struct {
         host: ?[]const u8 = null,
         port: ?u16 = null,
-        unix_socket: ?[]const u8 = null,
         write_buffer: ?u16 = null,
         read_buffer: ?u16 = null,
         result_state_size: u16 = 32,
