@@ -146,19 +146,26 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
     }
 
     const path = std.mem.trimLeft(u8, try uri.path.toRawMaybeAlloc(aa), "/");
+    const host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null;
+    const username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres";
+    const password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null;
+
+    // don't use `aa` after this point, we're about to copy `arena` and any usage
+    // of `aa` will leak
+
     return .{ .arena = arena, .opts = .{
         .size = 0,
         .timeout = 0,
         .auth = .{
-            .username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres",
-            .password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null,
+            .username = username,
+            .password = password,
             .database = if (path.len == 0) null else path,
             .timeout = tcp_user_timeout orelse 10_000,
         },
         .connect = .{
             .tls = tls,
             .port = uri.port orelse null,
-            .host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null,
+            .host = host,
         },
     } };
 }
