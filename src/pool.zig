@@ -16,6 +16,7 @@ pub const Pool = struct {
     _timeout: u64,
     _conns: []*Conn,
     _available: usize,
+    _missing: usize,
     _allocator: Allocator,
     _mutex: Thread.Mutex,
     _cond: Thread.Condition,
@@ -29,6 +30,13 @@ pub const Pool = struct {
         connect: Conn.Opts = .{},
         timeout: u32 = 10 * std.time.ms_per_s,
         connect_on_init_count: ?u16 = null,
+    };
+
+    pub const Stats = struct {
+        size: usize,
+        available: usize,
+        missing: usize,
+        in_use: usize,
     };
 
     pub fn initUri(allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
@@ -71,6 +79,7 @@ pub const Pool = struct {
             ._arena = arena,
             ._opts = opts_copy,
             ._ssl_ctx = ssl_ctx,
+            ._missing = 0,
             ._allocator = allocator,
             ._available = connect_on_init_count,
             ._reconnector = Reconnector.init(pool),
@@ -90,6 +99,7 @@ pub const Pool = struct {
         }
 
         const lazy_start_count = size - connect_on_init_count;
+        pool._missing = lazy_start_count;
         for (0..lazy_start_count) |_| {
             try pool._reconnector.reconnect();
         }
@@ -110,15 +120,35 @@ pub const Pool = struct {
 
     pub fn acquire(self: *Pool) !*Conn {
         const conns = self._conns;
+        const deadline = std.time.nanoTimestamp() + @as(i64, @intCast(self._timeout));
+
         self._mutex.lock();
         errdefer self._mutex.unlock();
+
         while (true) {
             const available = self._available;
+            const missing = self._missing;
+
             if (available == 0) {
+                // Check if pool is completely exhausted
+                const total_alive = self._conns.len - missing;
+                if (total_alive == 0) {
+                    return error.PoolExhausted;
+                }
+
                 lib.metrics.poolEmpty();
-                try self._cond.timedWait(&self._mutex, self._timeout);
+
+                // Calculate remaining timeout
+                const now = std.time.nanoTimestamp();
+                if (now >= deadline) {
+                    return error.Timeout;
+                }
+                const remaining_ns: u64 = @intCast(deadline - now);
+
+                try self._cond.timedWait(&self._mutex, remaining_ns);
                 continue;
             }
+
             const index = available - 1;
             const conn = conns[index];
             self._available = index;
@@ -140,9 +170,14 @@ pub const Pool = struct {
             self._allocator.destroy(conn);
 
             conn_to_add = newConnection(self, true) catch |err1| {
-                // we failed to create the connection, let the background reconnector try
+                // we failed to create the connection, track it as missing and let
+                // the background reconnector try
+                self._mutex.lock();
+                self._missing += 1;
+                self._mutex.unlock();
+
                 self._reconnector.reconnect() catch |err2| {
-                    log.err("Re-opening connection failed ({}) and background reconnector failed to start ({}) ", .{ err1, err2 });
+                    log.err("Re-opening connection failed ({}) and background reconnector failed to start ({})", .{ err1, err2 });
                 };
                 return;
             };
@@ -161,6 +196,22 @@ pub const Pool = struct {
         var listener = try Listener.open(self._allocator, self._opts.connect);
         try listener.auth(self._opts.auth);
         return listener;
+    }
+
+    pub fn stats(self: *Pool) Stats {
+        self._mutex.lock();
+        defer self._mutex.unlock();
+
+        const available = self._available;
+        const missing = self._missing;
+        const size = self._conns.len;
+
+        return .{
+            .size = size,
+            .available = available,
+            .missing = missing,
+            .in_use = size - available - missing,
+        };
     }
 
     pub fn exec(self: *Pool, sql: []const u8, values: anytype) !?i64 {
@@ -239,6 +290,12 @@ const Reconnector = struct {
                 self.mutex.lock();
                 continue :loop;
             };
+
+            // Decrement missing count when successfully recreated
+            pool._mutex.lock();
+            std.debug.assert(pool._missing > 0);
+            pool._missing -= 1;
+            pool._mutex.unlock();
 
             conn.release(); // inserts it into the pool
             self.mutex.lock();
@@ -347,6 +404,63 @@ test "Pool: Release" {
     const c1 = try pool.acquire();
     c1._state = .query;
     pool.release(c1);
+}
+
+test "Pool: stats" {
+    var pool = try Pool.init(t.allocator, .{
+        .size = 3,
+        .auth = t.authOpts(.{}),
+    });
+    defer pool.deinit();
+
+    // Initial state: all connections available
+    {
+        const s = pool.stats();
+        try t.expectEqual(3, s.size);
+        try t.expectEqual(3, s.available);
+        try t.expectEqual(0, s.missing);
+        try t.expectEqual(0, s.in_use);
+    }
+
+    // Acquire one connection
+    const c1 = try pool.acquire();
+    {
+        const s = pool.stats();
+        try t.expectEqual(3, s.size);
+        try t.expectEqual(2, s.available);
+        try t.expectEqual(0, s.missing);
+        try t.expectEqual(1, s.in_use);
+    }
+
+    // Acquire another
+    const c2 = try pool.acquire();
+    {
+        const s = pool.stats();
+        try t.expectEqual(3, s.size);
+        try t.expectEqual(1, s.available);
+        try t.expectEqual(0, s.missing);
+        try t.expectEqual(2, s.in_use);
+    }
+
+    // Release one
+    pool.release(c1);
+    {
+        const s = pool.stats();
+        try t.expectEqual(3, s.size);
+        try t.expectEqual(2, s.available);
+        try t.expectEqual(0, s.missing);
+        try t.expectEqual(1, s.in_use);
+    }
+
+    // Release the other
+    pool.release(c2);
+    {
+        const s = pool.stats();
+        try t.expectEqual(3, s.size);
+        try t.expectEqual(3, s.available);
+        try t.expectEqual(0, s.missing);
+        try t.expectEqual(0, s.in_use);
+    }
 }
 
 test "Pool: exec" {
