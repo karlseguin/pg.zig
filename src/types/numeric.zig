@@ -89,12 +89,8 @@ pub const Numeric = struct {
     }
 
     fn encodeValue(value: anytype, buf: *buffer.Buffer) !void {
-        // turn our float into a string
         var str_buf: [512]u8 = undefined;
-        var writer = std.Io.Writer.fixed(&str_buf);
-
-        try writer.print("{d}", .{value});
-        return encodeValidString(writer.buffered(), buf);
+        return encodeValidString(try std.fmt.bufPrint(&str_buf, "{d}", .{value}), buf);
     }
 
     pub fn decode(data: []const u8, data_oid: i32) Numeric {

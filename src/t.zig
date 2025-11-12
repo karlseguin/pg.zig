@@ -198,10 +198,11 @@ pub const Stream = struct {
 
 pub fn connect(opts: anytype) Conn {
     const T = @TypeOf(opts);
+    const io = std.testing.io;
 
-    var c = Conn.open(allocator, .{
+    var c = Conn.open(allocator, io, .{
         .tls = if (@hasField(T, "tls")) opts.tls else .off,
-        .host = if (@hasField(T, "host")) opts.host else "localhost",
+        .host = if (@hasField(T, "host")) opts.host else "127.0.0.1",
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
     }) catch unreachable;
 
