@@ -4,23 +4,24 @@ const lib = @import("lib.zig");
 const log = lib.log;
 const Conn = lib.Conn;
 const Result = lib.Result;
-const SSLCtx = lib.SSLCtx;
 const QueryRow = lib.QueryRow;
 const Listener = @import("listener.zig").Listener;
 
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
+const Io = std.Io;
+
 pub const Pool = struct {
+    _io: Io,
     _opts: Opts,
     _timeout: u64,
     _conns: []*Conn,
     _available: usize,
     _missing: usize,
     _allocator: Allocator,
-    _mutex: Thread.Mutex,
-    _cond: Thread.Condition,
-    _ssl_ctx: ?*lib.SSLCtx,
+    _mutex: Io.Mutex,
+    _cond: Io.Condition,
     _reconnector: Reconnector,
     _arena: std.heap.ArenaAllocator,
 
@@ -47,7 +48,7 @@ pub const Pool = struct {
         return Pool.init(allocator, po.opts);
     }
 
-    pub fn init(allocator: Allocator, opts: Opts) !*Pool {
+    pub fn init(allocator: Allocator, io: Io, opts: Opts) !*Pool {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const aa = arena.allocator();
         errdefer arena.deinit();
@@ -56,33 +57,19 @@ pub const Pool = struct {
         const size = opts.size;
         const conns = try aa.alloc(*Conn, size);
 
-        var opts_copy = opts;
-        var ssl_ctx: ?*SSLCtx = null;
-        if (comptime lib.has_openssl) {
-            switch (opts.connect.tls) {
-                .off => {},
-                else => |tls_config| {
-                    if (opts.connect.host) |h| {
-                        opts_copy.connect._hostz = try aa.dupeZ(u8, h);
-                    }
-                    ssl_ctx = try lib.initializeSSLContext(tls_config);
-                },
-            }
-        }
-        errdefer lib.freeSSLContext(ssl_ctx);
         const connect_on_init_count = opts.connect_on_init_count orelse size;
 
         pool.* = .{
+            ._io = io,
             ._cond = .{},
-            ._mutex = .{},
+            ._mutex = .init,
             ._conns = conns,
             ._arena = arena,
-            ._opts = opts_copy,
-            ._ssl_ctx = ssl_ctx,
+            ._opts = opts,
             ._missing = 0,
             ._allocator = allocator,
             ._available = connect_on_init_count,
-            ._reconnector = Reconnector.init(pool),
+            ._reconnector = Reconnector.init(pool, io),
             ._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
         };
 
@@ -94,7 +81,7 @@ pub const Pool = struct {
         }
 
         for (0..connect_on_init_count) |i| {
-            conns[i] = try newConnection(pool, true);
+            conns[i] = try newConnection(pool, io, true);
             opened_connections += 1;
         }
 
@@ -114,16 +101,14 @@ pub const Pool = struct {
             conn.deinit();
             allocator.destroy(conn);
         }
-        lib.freeSSLContext(self._ssl_ctx);
         self._arena.deinit();
     }
 
     pub fn acquire(self: *Pool) !*Conn {
         const conns = self._conns;
-        const deadline = std.time.nanoTimestamp() + @as(i64, @intCast(self._timeout));
 
-        self._mutex.lock();
-        errdefer self._mutex.unlock();
+        try self._mutex.lock(self._io);
+        errdefer self._mutex.unlock(self._io);
 
         while (true) {
             const available = self._available;
@@ -137,22 +122,14 @@ pub const Pool = struct {
                 }
 
                 lib.metrics.poolEmpty();
-
-                // Calculate remaining timeout
-                const now = std.time.nanoTimestamp();
-                if (now >= deadline) {
-                    return error.Timeout;
-                }
-                const remaining_ns: u64 = @intCast(deadline - now);
-
-                try self._cond.timedWait(&self._mutex, remaining_ns);
+                try self._cond.wait(self._io, &self._mutex);
                 continue;
             }
 
             const index = available - 1;
             const conn = conns[index];
             self._available = index;
-            self._mutex.unlock();
+            self._mutex.unlock(self._io);
             return conn;
         }
     }
@@ -169,38 +146,39 @@ pub const Pool = struct {
             conn.deinit();
             self._allocator.destroy(conn);
 
-            conn_to_add = newConnection(self, true) catch |err1| {
+            conn_to_add = newConnection(self, self._io, true) catch |err1| {
                 // we failed to create the connection, track it as missing and let
                 // the background reconnector try
-                self._mutex.lock();
+                self._mutex.lockUncancelable(self._io);
                 self._missing += 1;
-                self._mutex.unlock();
+                self._mutex.unlock(self._io);
 
+                // we failed to create the connection, let the background reconnector try
                 self._reconnector.reconnect() catch |err2| {
-                    log.err("Re-opening connection failed ({}) and background reconnector failed to start ({})", .{ err1, err2 });
+                    log.err("Re-opening connection failed ({}) and background reconnector failed to start ({}) ", .{ err1, err2 });
                 };
                 return;
             };
         }
 
         var conns = self._conns;
-        self._mutex.lock();
+        self._mutex.lockUncancelable(self._io);
         const available = self._available;
         conns[available] = conn_to_add;
         self._available = available + 1;
-        self._mutex.unlock();
-        self._cond.signal();
+        self._mutex.unlock(self._io);
+        self._cond.signal(self._io);
     }
 
     pub fn newListener(self: *Pool) !Listener {
-        var listener = try Listener.open(self._allocator, self._opts.connect);
+        var listener = try Listener.open(self._allocator, self._io, self._opts.connect);
         try listener.auth(self._opts.auth);
         return listener;
     }
 
-    pub fn stats(self: *Pool) Stats {
-        self._mutex.lock();
-        defer self._mutex.unlock();
+    pub fn stats(self: *Pool) !Stats {
+        try self._mutex.lock(self._io);
+        defer self._mutex.unlock(self._io);
 
         const available = self._available;
         const missing = self._missing;
@@ -257,48 +235,51 @@ const Reconnector = struct {
     stopped: bool,
 
     pool: *Pool,
-    mutex: Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     // the thread, if any, that the monitor is running in
     thread: ?Thread,
 
-    fn init(pool: *Pool) Reconnector {
+    io: Io,
+
+    fn init(pool: *Pool, io: Io) Reconnector {
         return .{
             .pool = pool,
             .count = 0,
-            .mutex = .{},
+            .mutex = .init,
             .stopped = false,
             .thread = null,
+            .io = io,
         };
     }
 
-    fn run(self: *Reconnector) void {
+    fn run(self: *Reconnector) !void {
         const pool = self.pool;
         const retry_delay = 2 * std.time.ns_per_s;
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
         loop: while (self.count > 0) {
             const stopped = self.stopped;
-            self.mutex.unlock();
+            self.mutex.unlock(self.io);
             if (stopped == true) {
                 return;
             }
 
-            const conn = newConnection(pool, false) catch {
-                std.Thread.sleep(retry_delay);
-                self.mutex.lock();
+            const conn = newConnection(pool, self.io, false) catch {
+                try self.io.sleep(.fromNanoseconds(retry_delay), .awake);
+                try self.mutex.lock(self.io);
                 continue :loop;
             };
 
             // Decrement missing count when successfully recreated
-            pool._mutex.lock();
+            try pool._mutex.lock(self.io);
             std.debug.assert(pool._missing > 0);
             pool._missing -= 1;
-            pool._mutex.unlock();
+            pool._mutex.unlock(self.io);
 
             conn.release(); // inserts it into the pool
-            self.mutex.lock();
+            try self.mutex.lock(self.io);
             self.count -= 1;
         }
 
@@ -307,17 +288,17 @@ const Reconnector = struct {
     }
 
     fn stop(self: *Reconnector) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
         self.stopped = true;
-        self.mutex.unlock();
+        self.mutex.unlock(self.io);
         if (self.thread) |thrd| {
             thrd.join();
         }
     }
 
     fn reconnect(self: *Reconnector) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
         self.count += 1;
         if (self.thread == null) {
             self.thread = try Thread.spawn(.{ .stack_size = 1024 * 1024 }, Reconnector.run, .{self});
@@ -325,7 +306,7 @@ const Reconnector = struct {
     }
 };
 
-fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
+fn newConnection(pool: *Pool, io: Io, log_failure: bool) !*Conn {
     const opts = &pool._opts;
     const allocator = pool._allocator;
 
@@ -335,7 +316,7 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
     };
     errdefer allocator.destroy(conn);
 
-    conn.* = Conn.open(allocator, opts.connect) catch |err| {
+    conn.* = Conn.open(allocator, io, opts.connect) catch |err| {
         if (log_failure) log.err("connect error: {}", .{err});
         return err;
     };
@@ -357,7 +338,8 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
 
 const t = lib.testing;
 test "Pool" {
-    var pool = try Pool.init(t.allocator, .{
+    const io = std.testing.io;
+    var pool = try Pool.init(t.allocator, io, .{
         .size = 2,
         .auth = t.authOpts(.{}),
         .connect_on_init_count = 1,
@@ -391,7 +373,8 @@ test "Pool" {
 }
 
 test "Pool: Release" {
-    var pool = try Pool.init(t.allocator, .{
+    const io = std.testing.io;
+    var pool = try Pool.init(t.allocator, io, .{
         .size = 2,
         .auth = .{
             .database = "postgres",
@@ -407,7 +390,8 @@ test "Pool: Release" {
 }
 
 test "Pool: stats" {
-    var pool = try Pool.init(t.allocator, .{
+    const io = std.testing.io;
+    var pool = try Pool.init(t.allocator, io, .{
         .size = 3,
         .auth = t.authOpts(.{}),
     });
@@ -415,7 +399,7 @@ test "Pool: stats" {
 
     // Initial state: all connections available
     {
-        const s = pool.stats();
+        const s = try pool.stats();
         try t.expectEqual(3, s.size);
         try t.expectEqual(3, s.available);
         try t.expectEqual(0, s.missing);
@@ -425,7 +409,7 @@ test "Pool: stats" {
     // Acquire one connection
     const c1 = try pool.acquire();
     {
-        const s = pool.stats();
+        const s = try pool.stats();
         try t.expectEqual(3, s.size);
         try t.expectEqual(2, s.available);
         try t.expectEqual(0, s.missing);
@@ -435,7 +419,7 @@ test "Pool: stats" {
     // Acquire another
     const c2 = try pool.acquire();
     {
-        const s = pool.stats();
+        const s = try pool.stats();
         try t.expectEqual(3, s.size);
         try t.expectEqual(1, s.available);
         try t.expectEqual(0, s.missing);
@@ -445,7 +429,7 @@ test "Pool: stats" {
     // Release one
     pool.release(c1);
     {
-        const s = pool.stats();
+        const s = try pool.stats();
         try t.expectEqual(3, s.size);
         try t.expectEqual(2, s.available);
         try t.expectEqual(0, s.missing);
@@ -455,7 +439,7 @@ test "Pool: stats" {
     // Release the other
     pool.release(c2);
     {
-        const s = pool.stats();
+        const s = try pool.stats();
         try t.expectEqual(3, s.size);
         try t.expectEqual(3, s.available);
         try t.expectEqual(0, s.missing);
@@ -464,7 +448,8 @@ test "Pool: stats" {
 }
 
 test "Pool: exec" {
-    var pool = try Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    const io = std.testing.io;
+    var pool = try Pool.init(t.allocator, io, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -480,7 +465,8 @@ test "Pool: exec" {
 }
 
 test "Pool: Query/Row" {
-    var pool = try Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    const io = std.testing.io;
+    var pool = try Pool.init(t.allocator, io, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -513,7 +499,8 @@ test "Pool: Query/Row" {
 }
 
 test "Pool: Row error" {
-    var pool = try Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    const io = std.testing.io;
+    var pool = try Pool.init(t.allocator, io, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     _ = try pool.row("insert into all_types (id) values ($1)", .{200});

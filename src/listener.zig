@@ -9,6 +9,7 @@ const NotificationResponse = lib.proto.NotificationResponse;
 
 const Stream = lib.Stream;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 const ListenError = union(enum) {
     err: anyerror,
@@ -33,8 +34,8 @@ pub const Listener = struct {
 
     _allocator: Allocator,
 
-    pub fn open(allocator: Allocator, opts: Conn.Opts) !Listener {
-        var stream = try Stream.connect(allocator, opts, null);
+    pub fn open(allocator: Allocator, io: Io, opts: Conn.Opts) !Listener {
+        var stream = try Stream.connect(io, opts);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
@@ -91,6 +92,7 @@ pub const Listener = struct {
         timeout: u32 = 0,
     };
     pub fn listen(self: *Listener, channel: []const u8, opts: ListenOpts) !void {
+        _ = opts; // autofix
         // LISTEN doesn't support parameterized queries. It has to be a simple query.
         // We don't use proto.Query because we want to quote the identifier.
 
@@ -148,7 +150,7 @@ pub const Listener = struct {
             }
         }
 
-        try self._reader.startFlow(null, opts.timeout);
+        try self._reader.startFlow(null);
     }
 
     pub fn next(self: *Listener) ?NotificationResponse {
@@ -203,14 +205,16 @@ pub const Listener = struct {
 
 const t = lib.testing;
 test "Listener" {
-    var l = try Listener.open(t.allocator, .{ .host = "localhost" });
+    const io = std.testing.io;
+    var l = try Listener.open(t.allocator, io, .{ .host = "127.0.0.1" });
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
 }
 
 test "Listener: from Pool" {
-    var pool = try lib.Pool.init(t.allocator, .{
+    const io = std.testing.io;
+    var pool = try lib.Pool.init(t.allocator, io, .{
         .size = 1,
         .auth = t.authOpts(.{}),
     });
@@ -223,7 +227,7 @@ test "Listener: from Pool" {
 }
 
 fn testListener(l: *Listener) !void {
-    var reset: std.Thread.ResetEvent = .{};
+    var reset: std.Thread.ResetEvent = .unset;
     var tt = try std.Thread.spawn(.{}, struct {
         fn shutdown(ll: *Listener, r: *std.Thread.ResetEvent) void {
             r.wait();

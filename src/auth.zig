@@ -18,7 +18,7 @@ const Opts = lib.Conn.AuthOpts;
 //     (we expect our caller to clone the value)
 // a normal zig error on any other error
 pub fn auth(stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
-    try reader.startFlow(null, opts.timeout);
+    try reader.startFlow(null);
 
     // ignore errors on endFlow, because it's troublesome to handle, and only
     // something really bad (like OOM) can happen, and that'll surface again

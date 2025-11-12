@@ -1,11 +1,6 @@
 // Exposed within this library
 const std = @import("std");
 
-pub const openssl = @cImport({
-    @cInclude("openssl/ssl.h");
-    @cInclude("openssl/err.h");
-});
-
 const build_config = @import("config");
 
 pub const log = std.log.scoped(.pg);
@@ -18,8 +13,6 @@ pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
 pub const Stream = @import("stream.zig").Stream;
 pub const metrics = @import("metrics.zig");
-pub const has_openssl = build_config.openssl;
-pub const SSLCtx = if (has_openssl) openssl.SSL_CTX else void;
 pub const default_column_names = build_config.column_names;
 
 const result = @import("result.zig");
@@ -170,81 +163,9 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
     } };
 }
 
-pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
-    // OpenSSL documentation says these are implicitly called, and only need to
-    // be called if you're doing something special
-
-    // if (openssl.OPENSSL_init_ssl(openssl.OPENSSL_INIT_LOAD_SSL_STRINGS | openssl.OPENSSL_INIT_LOAD_CRYPTO_STRINGS, null) != 1) {
-    //     return error.OpenSSLInitSslFailed;
-    // }
-
-    // if (openssl.OPENSSL_init_crypto(openssl.OPENSSL_INIT_ADD_ALL_CIPHERS | openssl.OPENSSL_INIT_ADD_ALL_DIGESTS | openssl.OPENSSL_INIT_LOAD_CRYPTO_STRINGS, null) != 1) {
-    //     return error.OpenSSLInitCryptoFailed;
-    // }
-
-    const ctx = openssl.SSL_CTX_new(openssl.TLS_client_method()) orelse {
-        return error.SSLContextNew;
-    };
-    errdefer openssl.SSL_CTX_free(ctx);
-
-    if (openssl.SSL_CTX_set_min_proto_version(ctx, openssl.TLS1_2_VERSION) != 1) {
-        return error.SSLMinVersion;
-    }
-
-    _ = openssl.SSL_CTX_set_mode(ctx, openssl.SSL_MODE_AUTO_RETRY);
-
-    switch (config) {
-        .off, .require => {},
-        .verify_full => |path_to_root| {
-            if (path_to_root) |p| {
-                var pathz: [std.fs.max_path_bytes + 1]u8 = undefined;
-                @memcpy(pathz[0..p.len], p);
-                pathz[p.len] = 0;
-                if (openssl.SSL_CTX_load_verify_locations(ctx, pathz[0 .. p.len + 1].ptr, null) != 1) {
-                    if (comptime _stderr_tls) {
-                        printSSLError();
-                    }
-                    return error.SSLVerifyPaths;
-                }
-            } else {
-                if (openssl.SSL_CTX_set_default_verify_paths(ctx) != 1) {
-                    if (comptime _stderr_tls) {
-                        printSSLError();
-                    }
-                    return error.SSLDefaultVerifyPaths;
-                }
-            }
-            openssl.SSL_CTX_set_verify(ctx, openssl.SSL_VERIFY_PEER, null);
-        },
-    }
-
-    return ctx;
-}
-
-pub fn freeSSLContext(ctx: ?*SSLCtx) void {
-    if (comptime has_openssl == false) {
-        return;
-    }
-
-    if (ctx) |c| {
-        openssl.SSL_CTX_free(c);
-    }
-}
-
-pub fn printSSLError() void {
-    if (comptime has_openssl == false) {
-        return;
-    }
-
-    const bio = openssl.BIO_new(openssl.BIO_s_mem());
-    defer _ = openssl.BIO_free(bio);
-    openssl.ERR_print_errors(bio);
-    var buf: [*]u8 = undefined;
-    const len: usize = @intCast(openssl.BIO_get_mem_data(bio, &buf));
-    if (len > 0) {
-        std.debug.print("{s}\n", .{buf[0..len]});
-    }
-}
+pub const Binary = struct {
+    data: []const u8,
+};
 
 const TestCase = struct {
     uri: []const u8,

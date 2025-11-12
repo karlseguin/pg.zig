@@ -110,7 +110,7 @@ pub const Stmt = struct {
         const opts = &self.opts;
         const statement_arena = self.arena.allocator();
 
-        try conn._reader.startFlow(statement_arena, opts.timeout);
+        try conn._reader.startFlow(statement_arena);
 
         var buf = self.buf;
         buf.reset();

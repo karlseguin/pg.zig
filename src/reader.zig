@@ -69,19 +69,7 @@ fn ReaderT(comptime T: type) type {
         // dynamic buffer it creates. The idea beind this is that if reading 1 row
         // requires more than static.len other rows within the same result might
         // as well.
-        pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
-            if (timeout_ms) |ms| {
-                const timeval = std.mem.toBytes(posix.timeval{
-                    .sec = @intCast(@divTrunc(ms, 1000)),
-                    .usec = @intCast(@mod(ms, 1000) * 1000),
-                });
-                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
-                self.has_timeout = true;
-            } else if (self.has_timeout) {
-                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
-                self.has_timeout = false;
-            }
-
+        pub fn startFlow(self: *Self, allocator: ?Allocator) !void {
             self.allocator = allocator orelse self.default_allocator;
         }
 
@@ -226,10 +214,10 @@ fn ReaderT(comptime T: type) type {
                     }
                 }
 
-                const n = try stream.read(buf[pos..]);
-                if (n == 0) {
-                    return error.Closed;
-                }
+                const n = stream.read(buf[pos..]) catch |e| switch (e) {
+                    error.EndOfStream => return error.Closed,
+                    else => return e,
+                };
                 pos += n;
                 if (self.buffered(pos, error_peek)) |msg| {
                     return msg;
@@ -454,7 +442,7 @@ test "Reader: fuzz" {
 
             const allocator: ?Allocator = if (random.uintAtMost(usize, 1) == 1) arena.allocator() else null;
 
-            try reader.startFlow(allocator, null);
+            try reader.startFlow(allocator);
             defer reader.endFlow() catch unreachable;
 
             {
@@ -582,7 +570,7 @@ test "Reader: start/endFlow basic" {
     var reader = R.init(t.allocator, 5, s) catch unreachable;
     defer reader.deinit();
 
-    try reader.startFlow(null, null);
+    try reader.startFlow(null);
     const msg1 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
 
@@ -614,7 +602,7 @@ test "Reader: start/endFlow overread into static" {
     var reader = R.init(t.allocator, 7, s) catch unreachable;
     defer reader.deinit();
 
-    try reader.startFlow(null, null);
+    try reader.startFlow(null);
     const msg1 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
 
@@ -652,7 +640,7 @@ test "Reader: start/endFlow large overread" {
     var reader = R.init(t.allocator, 7, s) catch unreachable;
     defer reader.deinit();
 
-    try reader.startFlow(null, null);
+    try reader.startFlow(null);
     const msg1 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
 
@@ -691,7 +679,7 @@ test "Reader: start/endFlow large overread with flow-specific allocator" {
     var reader = R.init(t.allocator, 7, s) catch unreachable;
     defer reader.deinit();
 
-    try reader.startFlow(t.arena.allocator(), null);
+    try reader.startFlow(t.arena.allocator());
     const msg1 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
 
@@ -721,7 +709,7 @@ test "Reader: startFlow with dynamic allocation into deinit " {
     var reader = R.init(t.allocator, 7, s) catch unreachable;
     defer reader.deinit();
 
-    try reader.startFlow(t.arena.allocator(), null);
+    try reader.startFlow(t.arena.allocator());
     const msg1 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
 }
