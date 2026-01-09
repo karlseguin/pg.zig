@@ -133,7 +133,7 @@ const PlainStream = struct {
         const socket = blk: {
             const host = opts.host orelse DEFAULT_HOST;
             if (host.len > 0 and host[0] == '/') {
-                if (comptime std.net.has_unix_sockets == false or std.posix.AF == void) {
+                if (comptime std.Io.net.has_unix_sockets == false or std.posix.AF == void) {
                     return error.UnixPathNotSupported;
                 }
                 break :blk (try std.net.connectUnixSocket(host)).handle;

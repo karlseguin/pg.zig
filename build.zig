@@ -69,12 +69,14 @@ pub fn build(b: *std.Build) !void {
             }),
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
         });
-        if (openssl_lib_path) |p|
-            lib_test.addLibraryPath(p);
-        if (openssl_include_path) |p|
-            lib_test.addIncludePath(p);
-        lib_test.linkSystemLibrary("crypto");
-        lib_test.linkSystemLibrary("ssl");
+        if (openssl_lib_path) |p| {
+            lib_test.root_module.addLibraryPath(p);
+        }
+        if (openssl_include_path) |p|{
+            lib_test.root_module.addIncludePath(p);
+        }
+        lib_test.root_module.linkSystemLibrary("crypto", .{});
+        lib_test.root_module.linkSystemLibrary("ssl", .{});
 
         {
             const options = b.addOptions();
