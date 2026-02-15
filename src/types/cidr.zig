@@ -17,10 +17,13 @@ pub const Cidr = struct {
         v6,
     };
 
-    pub fn decode(data: []const u8, data_oid: i32) Cidr {
-        lib.assertDecodeType(Cidr, &.{ Cidr.oid.decimal, Cidr.inet_oid.decimal }, data_oid);
-        lib.assert(data.len == 8 or data.len == 20);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) Cidr else lib.TypeError!Cidr {
+        lib.verifyDecodeType(fail_mode, Cidr, &.{ Cidr.oid.decimal, Cidr.inet_oid.decimal }, data_oid) catch |err| {
+            if (fail_mode == .unsafe) unreachable;
+            return err;
+        };
 
+        lib.assert(data.len == 8 or data.len == 20);
         return decodeKnown(data);
     }
 

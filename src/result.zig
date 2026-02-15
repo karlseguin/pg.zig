@@ -76,6 +76,13 @@ pub const Result = struct {
     }
 
     pub fn next(self: *Result) !?Row {
+        return self._next(.safe);
+    }
+    pub fn nextUnsafe(self: *Result) !?RowUnsafe {
+        return self._next(.unsafe);
+    }
+
+    fn _next(self: *Result, comptime fail_mode: lib.FailMode) !(if (fail_mode == .safe) ?Row else ?RowUnsafe) {
         if (self._conn._state != .query) {
             // Possibly weird state. Most likely cause is calling next() multiple times
             // despite null being returned.
@@ -242,144 +249,165 @@ pub const Result = struct {
     };
 };
 
-pub const Row = struct {
-    _result: *Result,
-    oids: []i32,
-    values: []Result.State.Value,
+pub const Row = RowT(.safe);
+pub const RowUnsafe = RowT(.unsafe);
 
-    pub fn get(self: *const Row, comptime T: type, col: usize) T {
-        const value = self.values[col];
-        const TT = switch (@typeInfo(T)) {
-            .optional => |opt| {
-                if (value.is_null) {
-                    return null;
-                } else {
-                    return self.get(opt.child, col);
-                }
-            },
-            .@"struct" => blk: {
-                if (@hasDecl(T, "fromPgzRow") == true) {
-                    return T.fromPgzRow(value.data, self.oids[col]) catch {
-                        std.debug.panic("PostgreSQL value of type {s} could not be read into a " ++ @typeName(T) ++ ".", .{types.oidToString(self.oids[col])});
+pub fn RowT(comptime fail_mode: lib.FailMode) type {
+    return struct {
+        _result: *Result,
+        oids: []i32,
+        values: []Result.State.Value,
+
+        const Self = @This();
+
+        pub fn get(self: *const Self, comptime T: type, col: usize) if (fail_mode == .safe) lib.TypeError!T else T {
+            const value = self.values[col];
+            const TT = switch (@typeInfo(T)) {
+                .optional => |opt| {
+                    if (value.is_null) {
+                        return null;
+                    }
+                    const val = self.get(opt.child, col);
+                    if (comptime fail_mode == .safe) {
+                        return try val;
+                    }
+                    return val;
+                },
+                .@"struct" => blk: {
+                    if (@hasDecl(T, "fromPgzRow") == true) {
+                        return T.fromPgzRow(value.data, self.oids[col]) catch |err| {
+                            if (comptime fail_mode == .safe) {
+                                return err;
+                            }
+                            std.debug.panic("PostgreSQL value of type {s} could not be read into a " ++ @typeName(T) ++ ".", .{types.oidToString(self.oids[col])});
+                        };
+                    }
+                    break :blk T;
+                },
+                else => blk: {
+                    lib.verifyNotNull(fail_mode, T, value.is_null) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
                     };
-                }
-                break :blk T;
-            },
-            else => blk: {
-                lib.assertNotNull(T, value.is_null);
-                break :blk T;
-            },
-        };
-
-        return getScalar(TT, value.data, self.oids[col]);
-    }
-
-    pub fn getCol(self: *const Row, comptime T: type, name: []const u8) T {
-        const col = self._result.columnIndex(name);
-        lib.assertColumnName(name, col != null);
-        return self.get(T, col.?);
-    }
-
-    pub fn iterator(self: *const Row, comptime T: type, col: usize) Iterator(T) {
-        const value = self.values[col];
-        if (value.is_null) {
-            return Iterator(T).asNull();
-        }
-        return Iterator(T).fromPgzRow(value.data, self.oids[col]) catch @panic("Could not get iterator of type " ++ @typeName(T) ++ " for row.");
-    }
-
-    pub fn iteratorCol(self: *const Row, comptime T: type, name: []const u8) Iterator(T) {
-        const col = self._result.columnIndex(name);
-        lib.assertColumnName(name, col != null);
-        return self.iterator(T, col.?);
-    }
-
-    pub fn record(self: *const Row, col: usize) Record {
-        const data = self.values[col].data;
-        const number_of_columns = std.mem.readInt(i32, data[0..4], .big);
-        return .{
-            .data = data[4..],
-            .number_of_columns = @intCast(number_of_columns),
-        };
-    }
-
-    pub fn recordCol(self: *const Row, name: []const u8) Record {
-        const col = self._result.columnIndex(name);
-        lib.assertColumnName(name, col != null);
-        return self.record(col);
-    }
-
-    const ToOpts = struct {
-        dupe: bool = false,
-        map: Mapping = .ordinal,
-        allocator: ?Allocator = null,
-
-        const Mapping = enum {
-            name,
-            ordinal,
-        };
-    };
-
-    pub fn to(self: *const Row, T: type, opts: ToOpts) !T {
-        // if we're given an allocator, use that.
-        // if we're not given an allocator, but asked to dupe use our arena and thus
-        // tie the lifetime of the returned T to the lifetime of the DB result object.
-        var allocator: ?Allocator = null;
-        if (opts.allocator) |a| {
-            allocator = a;
-        } else if (opts.dupe) {
-            allocator = self._result._arena.allocator();
-        }
-
-        return switch (opts.map) {
-            .ordinal => self.toUsingOrdinal(T, allocator),
-            .name => return self.toUsingName(T, allocator),
-        };
-    }
-
-    fn toUsingOrdinal(self: *const Row, T: type, allocator: ?Allocator) !T {
-        var value: T = undefined;
-        inline for (std.meta.fields(T), 0..) |field, column_index| {
-            @field(value, field.name) = try self.mapColumn(&field, column_index, allocator);
-        }
-        return value;
-    }
-
-    fn toUsingName(self: *const Row, T: type, allocator: ?Allocator) !T {
-        var value: T = undefined;
-        const result = self._result;
-        inline for (std.meta.fields(T)) |field| {
-            const name = field.name;
-            @field(value, name) = try self.mapColumn(&field, result.columnIndex(name), allocator);
-        }
-        return value;
-    }
-
-    fn mapColumn(self: *const Row, field: *const std.builtin.Type.StructField, optional_column_index: ?usize, allocator: ?Allocator) !field.type {
-        const T = field.type;
-        const column_index = optional_column_index orelse {
-            if (field.default_value_ptr) |dflt| {
-                return @as(*align(1) const field.type, @ptrCast(dflt)).*;
-            }
-            return error.FieldColumnMismatch;
-        };
-
-        if (comptime isSlice(T)) |S| {
-            const slice = blk: {
-                if (@typeInfo(T) == .optional) {
-                    break :blk self.get(?Iterator(S), column_index) orelse return null;
-                } else {
-                    break :blk self.get(Iterator(S), column_index);
-                }
+                    break :blk T;
+                },
             };
-            return try slice.alloc(allocator orelse return error.AllocatorRequiredForSliceMapping);
+
+            return getScalar(fail_mode, TT, value.data, self.oids[col]);
         }
 
-        const value = self.get(field.type, column_index);
-        const a = allocator orelse return value;
-        return mapValue(T, value, a);
-    }
-};
+        pub fn getCol(self: *const Self, comptime T: type, name: []const u8) if (fail_mode == .safe) lib.TypeError!T else T {
+            const col = self._result.columnIndex(name);
+            try lib.verifyColumnName(fail_mode, name, col != null);
+            return self.get(T, col.?);
+        }
+
+        pub fn iterator(self: *const Self, comptime T: type, col: usize) if (fail_mode == .safe) lib.TypeError!Iterator(T) else IteratorUnsafe(T) {
+            const value = self.values[col];
+            if (value.is_null) {
+                return IteratorT(fail_mode, T).asNull();
+            }
+            return IteratorT(fail_mode, T).fromPgzRow(value.data, self.oids[col]) catch |err| {
+                if (comptime fail_mode == .safe) {
+                    return err;
+                }
+                @panic("Could not get iterator of type " ++ @typeName(T) ++ " for row.");
+            };
+        }
+
+        pub fn iteratorCol(self: *const Self, comptime T: type, name: []const u8) if (fail_mode == .safe) lib.TypeError!Iterator(T) else IteratorUnsafe(T) {
+            const col = self._result.columnIndex(name);
+            try lib.verifyColumnName(fail_mode, name, col != null);
+            return self.iterator(T, col.?);
+        }
+
+        pub fn record(self: *const Self, col: usize) RecordT(fail_mode) {
+            const data = self.values[col].data;
+            const number_of_columns = std.mem.readInt(i32, data[0..4], .big);
+            return .{
+                .data = data[4..],
+                .number_of_columns = @intCast(number_of_columns),
+            };
+        }
+
+        pub fn recordCol(self: *const Self, name: []const u8) if (fail_mode == .safe) lib.TypeError!Record else RecordUnsafe {
+            const col = self._result.columnIndex(name);
+            try lib.verifyColumnName(fail_mode, name, col != null);
+            return self.record(col);
+        }
+
+        const ToOpts = struct {
+            dupe: bool = false,
+            map: Mapping = .ordinal,
+            allocator: ?Allocator = null,
+
+            const Mapping = enum {
+                name,
+                ordinal,
+            };
+        };
+
+        pub fn to(self: *const Self, T: type, opts: ToOpts) !T {
+            // if we're given an allocator, use that.
+            // if we're not given an allocator, but asked to dupe use our arena and thus
+            // tie the lifetime of the returned T to the lifetime of the DB result object.
+            var allocator: ?Allocator = null;
+            if (opts.allocator) |a| {
+                allocator = a;
+            } else if (opts.dupe) {
+                allocator = self._result._arena.allocator();
+            }
+
+            return switch (opts.map) {
+                .ordinal => self.toUsingOrdinal(T, allocator),
+                .name => return self.toUsingName(T, allocator),
+            };
+        }
+
+        fn toUsingOrdinal(self: *const Self, T: type, allocator: ?Allocator) !T {
+            var value: T = undefined;
+            inline for (std.meta.fields(T), 0..) |field, column_index| {
+                @field(value, field.name) = try self.mapColumn(&field, column_index, allocator);
+            }
+            return value;
+        }
+
+        fn toUsingName(self: *const Self, T: type, allocator: ?Allocator) !T {
+            var value: T = undefined;
+            const result = self._result;
+            inline for (std.meta.fields(T)) |field| {
+                const name = field.name;
+                @field(value, name) = try self.mapColumn(&field, result.columnIndex(name), allocator);
+            }
+            return value;
+        }
+
+        fn mapColumn(self: *const Self, field: *const std.builtin.Type.StructField, optional_column_index: ?usize, allocator: ?Allocator) !field.type {
+            const T = field.type;
+            const column_index = optional_column_index orelse {
+                if (field.default_value_ptr) |dflt| {
+                    return @as(*align(1) const field.type, @ptrCast(dflt)).*;
+                }
+                return error.FieldColumnMismatch;
+            };
+
+            if (comptime isSlice(T)) |S| {
+                const slice = blk: {
+                    if (@typeInfo(T) == .optional) {
+                        break :blk self.get(?Iterator(S), column_index) orelse return null;
+                    } else {
+                        break :blk self.get(Iterator(S), column_index);
+                    }
+                };
+                return try slice.alloc(allocator orelse return error.AllocatorRequiredForSliceMapping);
+            }
+
+            const value = self.get(field.type, column_index);
+            const a = allocator orelse return value;
+            return mapValue(T, if (comptime fail_mode == .safe) try value else value, a);
+        }
+    };
+}
 
 fn isSlice(comptime T: type) ?type {
     switch (@typeInfo(T)) {
@@ -438,45 +466,58 @@ pub fn Mapper(comptime T: type) type {
     };
 }
 
-pub const QueryRow = struct {
-    row: Row,
-    result: *Result,
+pub const QueryRow = QueryRowT(.safe);
+pub const QueryRowUnsafe = QueryRowT(.unsafe);
 
-    pub fn get(self: *const QueryRow, comptime T: type, col: usize) T {
-        return self.row.get(T, col);
-    }
+pub fn QueryRowT(comptime fail_mode: lib.FailMode) type {
+    return struct {
+        row: RowT(fail_mode),
+        result: *Result,
 
-    pub fn getCol(self: *const QueryRow, comptime T: type, name: []const u8) T {
-        return self.row.getCol(T, name);
-    }
+        const Self = @This();
 
-    pub fn iterator(self: *const QueryRow, comptime T: type, col: usize) Iterator(T) {
-        return self.row.iterator(T, col);
-    }
+        pub fn get(self: *const Self, comptime T: type, col: usize) if (fail_mode == .safe) lib.TypeError!T else T {
+            return self.row.get(T, col);
+        }
 
-    pub fn iteratorCol(self: *const QueryRow, comptime T: type, name: []const u8) Iterator(T) {
-        return self.row.iteratorCol(T, name);
-    }
+        pub fn getCol(self: *const Self, comptime T: type, name: []const u8) if (fail_mode == .safe) lib.TypeError!T else T {
+            return self.row.getCol(T, name);
+        }
 
-    pub fn record(self: *const QueryRow, col: usize) Record {
-        return self.row.record(col);
-    }
+        pub fn iterator(self: *const Self, comptime T: type, col: usize) if (fail_mode == .safe) lib.TypeError!Iterator(T) else IteratorUnsafe(T) {
+            return self.row.iterator(T, col);
+        }
 
-    pub fn recordCol(self: *const QueryRow, name: []const u8) Record {
-        return self.row.recordCol(name);
-    }
-    pub fn to(self: *const QueryRow, T: type, opts: Row.ToOpts) !T {
-        return self.row.to(T, opts);
-    }
+        pub fn iteratorCol(self: *const Self, comptime T: type, name: []const u8) if (fail_mode == .safe) lib.TypeError!Iterator(T) else IteratorUnsafe(T) {
+            return self.row.iteratorCol(T, name);
+        }
 
-    pub fn deinit(self: *QueryRow) !void {
-        // this is unfortunate
-        try self.result.drain();
-        self.result.deinit();
-    }
-};
+        pub fn record(self: *const Self, col: usize) RecordT(fail_mode) {
+            return self.row.record(col);
+        }
+
+        pub fn recordCol(self: *const Self, name: []const u8) if (fail_mode == .safe) lib.TypeError!Record else RecordUnsafe {
+            return self.row.recordCol(name);
+        }
+        pub fn to(self: *const Self, T: type, opts: Row.ToOpts) !T {
+            return self.row.to(T, opts);
+        }
+
+        pub fn deinit(self: *Self) !void {
+            // this is unfortunate
+            try self.result.drain();
+            self.result.deinit();
+        }
+    };
+}
 
 pub fn Iterator(comptime T: type) type {
+    return IteratorT(.safe, T);
+}
+pub fn IteratorUnsafe(comptime T: type) type {
+    return IteratorT(.unsafe, T);
+}
+pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
     return struct {
         is_null: bool,
         _len: usize,
@@ -520,15 +561,24 @@ pub fn Iterator(comptime T: type) type {
 
             const decoder = switch (TT) {
                 u8 => blk: {
-                    lib.assertDecodeType([]u8, &.{types.CharArray.oid.decimal}, oid);
+                    lib.verifyDecodeType(fail_mode, []u8, &.{types.CharArray.oid.decimal}, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
                     break :blk &types.Char.decodeKnown;
                 },
                 i16 => blk: {
-                    lib.assertDecodeType([]i16, &.{types.Int16Array.oid.decimal}, oid);
+                    lib.verifyDecodeType(fail_mode, []i16, &.{types.Int16Array.oid.decimal}, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
                     break :blk &types.Int16.decodeKnown;
                 },
                 i32 => blk: {
-                    lib.assertDecodeType([]i32, &.{types.Int32Array.oid.decimal}, oid);
+                    lib.verifyDecodeType(fail_mode, []i32, &.{types.Int32Array.oid.decimal}, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
                     break :blk &types.Int32.decodeKnown;
                 },
                 i64 => switch (oid) {
@@ -538,7 +588,10 @@ pub fn Iterator(comptime T: type) type {
                     else => std.debug.panic("{d} oid cannot target i64 iterator", .{oid}),
                 },
                 f32 => blk: {
-                    lib.assertDecodeType([]f32, &.{types.Float32Array.oid.decimal}, oid);
+                    lib.verifyDecodeType(fail_mode, []f32, &.{types.Float32Array.oid.decimal}, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
                     break :blk &types.Float32.decodeKnown;
                 },
                 f64 => switch (oid) {
@@ -547,7 +600,10 @@ pub fn Iterator(comptime T: type) type {
                     else => std.debug.panic("{d} oid cannot target f64 iterator", .{oid}),
                 },
                 bool => blk: {
-                    lib.assertDecodeType([]bool, &.{types.BoolArray.oid.decimal}, oid);
+                    lib.verifyDecodeType(fail_mode, []bool, &.{types.BoolArray.oid.decimal}, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
                     break :blk &types.Bool.decodeKnown;
                 },
                 []const u8 => switch (oid) {
@@ -559,16 +615,25 @@ pub fn Iterator(comptime T: type) type {
                     else => &types.Bytea.decodeKnownMutable,
                 },
                 types.Numeric => blk: {
-                    lib.assertDecodeType([]f64, &.{types.NumericArray.oid.decimal}, oid);
+                    lib.verifyDecodeType(fail_mode, []f64, &.{types.NumericArray.oid.decimal}, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
                     break :blk &types.Numeric.decodeKnown;
                 },
                 types.Cidr => blk: {
-                    lib.assertDecodeType([]types.Cidr, &.{ types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal }, oid);
+                    lib.verifyDecodeType(fail_mode, []types.Cidr, &.{ types.CidrArray.oid.decimal, types.CidrArray.inet_oid.decimal }, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
                     break :blk &types.Cidr.decodeKnown;
                 },
                 else => switch (@typeInfo(TT)) {
                     .@"enum" => blk: {
-                        lib.assertDecodeType([]const u8, &.{types.StringArray.oid.decimal}, oid);
+                        lib.verifyDecodeType(fail_mode, []const u8, &.{types.StringArray.oid.decimal}, oid) catch |err| {
+                            if (comptime fail_mode == .unsafe) unreachable;
+                            return err;
+                        };
                         break :blk &EnumDecoder(TT).decodeKnown;
                     },
                     else => compileHaltGetError(T),
@@ -690,53 +755,60 @@ fn compileHaltGetError(comptime T: type) noreturn {
     @compileError("cannot get value of type " ++ @typeName(T));
 }
 
-const Record = struct {
-    data: []const u8,
-    number_of_columns: usize,
+pub const Record = RecordT(.safe);
+pub const RecordUnsafe = RecordT(.unsafe);
 
-    pub fn next(self: *Record, comptime T: type) T {
-        var data = self.data;
+pub fn RecordT(comptime fail_mode: lib.FailMode) type {
+    return struct {
+        data: []const u8,
+        number_of_columns: usize,
 
-        // at least 4 bytes for the type and 4 bytes for the lenght
-        lib.assert(data.len >= 8);
+        const Self = @This();
 
-        const oid = std.mem.readInt(i32, data[0..4], .big);
+        pub fn next(self: *Self, comptime T: type) if (fail_mode == .safe) lib.TypeError!T else T {
+            var data = self.data;
 
-        data = data[4..];
-        const len = std.mem.readInt(i32, data[0..4], .big);
+            // at least 4 bytes for the type and 4 bytes for the lenght
+            lib.assert(data.len >= 8);
 
-        const TT = switch (@typeInfo(T)) {
-            .optional => |opt| blk: {
-                if (len == -1) return null;
-                break :blk opt.child;
-            },
-            else => T,
-        };
+            const oid = std.mem.readInt(i32, data[0..4], .big);
 
-        // end of the data for this "column"
-        const end = @as(usize, @intCast(len)) + 4;
+            data = data[4..];
+            const len = std.mem.readInt(i32, data[0..4], .big);
 
-        // the rest of the data
-        self.data = data[end..];
+            const TT = switch (@typeInfo(T)) {
+                .optional => |opt| blk: {
+                    if (len == -1) return null;
+                    break :blk opt.child;
+                },
+                else => T,
+            };
 
-        // start at 4 to skip the length which we already read
-        return getScalar(TT, data[4..end], oid);
-    }
-};
+            // end of the data for this "column"
+            const end = @as(usize, @intCast(len)) + 4;
 
-fn getScalar(T: type, data: []const u8, oid: i32) T {
+            // the rest of the data
+            self.data = data[end..];
+
+            // start at 4 to skip the length which we already read
+            return getScalar(fail_mode, TT, data[4..end], oid);
+        }
+    };
+}
+
+fn getScalar(comptime fail_mode: lib.FailMode, comptime T: type, data: []const u8, oid: i32) if (fail_mode == .safe) lib.TypeError!T else T {
     switch (T) {
-        u8 => return types.Char.decode(data, oid),
-        i16 => return types.Int16.decode(data, oid),
-        i32 => return types.Int32.decode(data, oid),
-        i64 => return types.Int64.decode(data, oid),
-        f32 => return types.Float32.decode(data, oid),
-        f64 => return types.Float64.decode(data, oid),
-        bool => return types.Bool.decode(data, oid),
+        u8 => return types.Char.decode(fail_mode, data, oid),
+        i16 => return types.Int16.decode(fail_mode, data, oid),
+        i32 => return types.Int32.decode(fail_mode, data, oid),
+        i64 => return types.Int64.decode(fail_mode, data, oid),
+        f32 => return types.Float32.decode(fail_mode, data, oid),
+        f64 => return types.Float64.decode(fail_mode, data, oid),
+        bool => return types.Bool.decode(fail_mode, data, oid),
         []const u8 => return types.Bytea.decode(data, oid),
         []u8 => return @constCast(types.Bytea.decode(data, oid)),
-        types.Numeric => return types.Numeric.decode(data, oid),
-        types.Cidr => return types.Cidr.decode(data, oid),
+        types.Numeric => return types.Numeric.decode(fail_mode, data, oid),
+        types.Cidr => return types.Cidr.decode(fail_mode, data, oid),
         else => switch (@typeInfo(T)) {
             .@"enum" => {
                 const str = types.Bytea.decode(data, oid);
@@ -758,7 +830,7 @@ test "Result: ints" {
         // int max
         var result = try c.query(sql, .{ @as(i16, 32767), @as(i32, 2147483647), @as(i64, 9223372036854775807) });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(32767, row.get(i16, 0));
         try t.expectEqual(2147483647, row.get(i32, 1));
         try t.expectEqual(9223372036854775807, row.get(i64, 2));
@@ -774,7 +846,7 @@ test "Result: ints" {
         // int min
         var result = try c.query(sql, .{ @as(i16, -32768), @as(i32, -2147483648), @as(i64, -9223372036854775808) });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(-32768, row.get(i16, 0));
         try t.expectEqual(-2147483648, row.get(i32, 1));
         try t.expectEqual(-9223372036854775808, row.get(i64, 2));
@@ -786,7 +858,7 @@ test "Result: ints" {
         var result = try c.query(sql, .{ null, null, null });
         defer result.deinit();
         defer result.drain() catch unreachable;
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(null, row.get(?i16, 0));
         try t.expectEqual(null, row.get(?i32, 1));
         try t.expectEqual(null, row.get(?i64, 2));
@@ -796,7 +868,7 @@ test "Result: ints" {
         // uint within limit
         var result = try c.query(sql, .{ @as(u16, 32767), @as(u32, 2147483647), @as(u64, 9223372036854775807) });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(32767, row.get(i16, 0));
         try t.expectEqual(2147483647, row.get(i32, 1));
         try t.expectEqual(9223372036854775807, row.get(i64, 2));
@@ -826,7 +898,7 @@ test "Result: floats" {
         // positive float
         var result = try c.query(sql, .{ @as(f32, 1.23456), @as(f64, 1093.229183) });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(1.23456, row.get(f32, 0));
         try t.expectEqual(1093.229183, row.get(f64, 1));
 
@@ -840,7 +912,7 @@ test "Result: floats" {
         // negative float
         var result = try c.query(sql, .{ @as(f32, -392.31), @as(f64, -99991.99992) });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(-392.31, row.get(f32, 0));
         try t.expectEqual(-99991.99992, row.get(f64, 1));
         try t.expectEqual(null, result.next());
@@ -850,7 +922,7 @@ test "Result: floats" {
         // null float
         var result = try c.query(sql, .{ null, null });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(null, row.get(?f32, 0));
         try t.expectEqual(null, row.get(?f64, 1));
         try t.expectEqual(null, result.next());
@@ -867,7 +939,7 @@ test "Result: bool" {
         var result = try c.query(sql, .{true});
         defer result.deinit();
         defer result.drain() catch unreachable;
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(true, row.get(bool, 0));
         try t.expectEqual(true, row.get(?bool, 0));
         try t.expectEqual(null, result.next());
@@ -878,7 +950,7 @@ test "Result: bool" {
         var result = try c.query(sql, .{false});
         defer result.deinit();
         defer result.drain() catch unreachable;
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(false, row.get(bool, 0));
         try t.expectEqual(false, row.get(?bool, 0));
         try t.expectEqual(null, result.next());
@@ -889,7 +961,7 @@ test "Result: bool" {
         var result = try c.query(sql, .{null});
         defer result.deinit();
         defer result.drain() catch unreachable;
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(null, row.get(?bool, 0));
         try t.expectEqual(null, result.next());
     }
@@ -904,7 +976,7 @@ test "Result: text and bytea" {
         // empty
         var result = try c.query(sql, .{ "", "" });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectString("", row.get([]u8, 0));
         try t.expectString("", row.get(?[]u8, 0).?);
         try t.expectString("", row.get([]u8, 1));
@@ -916,7 +988,7 @@ test "Result: text and bytea" {
         // not empty
         var result = try c.query(sql, .{ "it's over 9000!!!", "i will Not fear" });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectString("it's over 9000!!!", row.get([]u8, 0));
         try t.expectString("it's over 9000!!!", row.get(?[]const u8, 0).?);
         try t.expectString("i will Not fear", row.get([]const u8, 1));
@@ -928,7 +1000,7 @@ test "Result: text and bytea" {
         // as an array
         var result = try c.query(sql, .{ [_]u8{ 'a', 'c', 'b' }, [_]u8{ 'z', 'z', '3' } });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectString("acb", row.get([]const u8, 0));
         try t.expectString("acb", row.get(?[]u8, 0).?);
         try t.expectString("zz3", row.get([]const u8, 1));
@@ -944,7 +1016,7 @@ test "Result: text and bytea" {
 
         var result = try c.query(sql, .{ s1, constString() });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectString("Leto", row.get([]u8, 0));
         try t.expectString("Leto", row.get(?[]u8, 0).?);
         try t.expectString("Ghanima", row.get([]u8, 1));
@@ -956,7 +1028,7 @@ test "Result: text and bytea" {
         // null
         var result = try c.query(sql, .{ null, null });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(null, row.get(?[]u8, 0));
         try t.expectEqual(null, row.get(?[]u8, 1));
         try result.drain();
@@ -976,7 +1048,7 @@ test "Result: optional" {
         // int max
         var result = try c.query(sql, .{ @as(?i32, 321), @as(?i32, null) });
         defer result.deinit();
-        const row = (try result.next()).?;
+        const row = (try result.nextUnsafe()).?;
         try t.expectEqual(321, row.get(i32, 0));
 
         try t.expectEqual(321, row.get(?i32, 0));
@@ -993,7 +1065,7 @@ test "Result: iterator" {
         // empty row.iterator()
         var result = try c.query("select $1::int[]", .{[_]i32{}});
         defer result.deinit();
-        var row = (try result.next()).?;
+        var row = (try result.nextUnsafe()).?;
 
         var iterator = row.iterator(i32, 0);
         try t.expectEqual(0, iterator.len());
@@ -1010,7 +1082,7 @@ test "Result: iterator" {
         // empty row.get()
         var result = try c.query("select $1::int[]", .{[_]i32{}});
         defer result.deinit();
-        var row = (try result.next()).?;
+        var row = (try result.nextUnsafe()).?;
 
         var iterator = row.get(Iterator(i32), 0);
         try t.expectEqual(0, iterator.len());
@@ -1027,7 +1099,7 @@ test "Result: iterator" {
         // one: row.iterator
         var result = try c.query("select $1::int[]", .{[_]i32{9}});
         defer result.deinit();
-        var row = (try result.next()).?;
+        var row = (try result.nextUnsafe()).?;
 
         var iterator = row.iterator(i32, 0);
         try t.expectEqual(1, iterator.len());
@@ -1046,7 +1118,7 @@ test "Result: iterator" {
         // one: row.get
         var result = try c.query("select $1::int[]", .{[_]i32{9}});
         defer result.deinit();
-        var row = (try result.next()).?;
+        var row = (try result.nextUnsafe()).?;
 
         var iterator = row.get(Iterator(i32), 0);
         try t.expectEqual(1, iterator.len());
@@ -1065,7 +1137,7 @@ test "Result: iterator" {
         // fill
         var result = try c.query("select $1::int[]", .{[_]i32{ 0, -19 }});
         defer result.deinit();
-        var row = (try result.next()).?;
+        var row = (try result.nextUnsafe()).?;
 
         var iterator = row.iterator(i32, 0);
         try t.expectEqual(2, iterator.len());
@@ -1096,7 +1168,7 @@ test "Result: null iterator" {
         var result = try c.query("select $1::int[]", .{null});
         defer result.deinit();
 
-        var row = (try result.next()).?;
+        var row = (try result.nextUnsafe()).?;
 
         var iterator = row.iterator(i32, 0);
         try t.expectEqual(true, iterator.is_null);
@@ -1109,7 +1181,7 @@ test "Result: null iterator" {
         var result = try c.query("select $1::text[]", .{null});
         defer result.deinit();
 
-        var row = (try result.next()).?;
+        var row = (try result.nextUnsafe()).?;
 
         var iterator = row.iterator([]u8, 0);
         try t.expectEqual(true, iterator.is_null);
@@ -1126,7 +1198,7 @@ test "Result: int[]" {
     var result = try c.query(sql, .{ [_]i16{ -303, 9449, 2 }, [_]i32{ -3003, 49493229, 0 }, [_]i64{ 944949338498392, -2 } });
     defer result.deinit();
 
-    var row = (try result.next()).?;
+    var row = (try result.nextUnsafe()).?;
 
     const v1 = try row.iterator(i16, 0).alloc(t.allocator);
     defer t.allocator.free(v1);
@@ -1149,7 +1221,7 @@ test "Result: float[]" {
     var result = try c.query(sql, .{ [_]f32{ 1.1, 0, -384.2 }, [_]f64{ -888585.123322, 0.001 } });
     defer result.deinit();
 
-    var row = (try result.next()).?;
+    var row = (try result.nextUnsafe()).?;
 
     const v1 = try row.iterator(f32, 0).alloc(t.allocator);
     defer t.allocator.free(v1);
@@ -1168,7 +1240,7 @@ test "Result: bool[]" {
     var result = try c.query(sql, .{[_]bool{ true, false, false }});
     defer result.deinit();
 
-    var row = (try result.next()).?;
+    var row = (try result.nextUnsafe()).?;
 
     const v1 = try row.iterator(bool, 0).alloc(t.allocator);
     defer t.allocator.free(v1);
@@ -1185,7 +1257,7 @@ test "Result: text[] & bytea[]" {
     var result = try c.query(sql, .{ [_][]const u8{ "over", "9000" }, [_][]u8{ &arr1, &arr2 } });
     defer result.deinit();
 
-    var row = (try result.next()).?;
+    var row = (try result.nextUnsafe()).?;
 
     const v1 = try row.iterator([]u8, 0).alloc(t.allocator);
     defer {
@@ -1227,13 +1299,13 @@ test "Result: text[] alloc dupes" {
     }
 
     {
-        var row = (try c.row("select array['Leto', 'Test']::text[]", .{})) orelse unreachable;
+        var row = (try c.rowUnsafe("select array['Leto', 'Test']::text[]", .{})) orelse unreachable;
         defer row.deinit() catch {};
         arr1 = try row.iterator([]const u8, 0).alloc(t.allocator);
     }
 
     {
-        var row = (try c.row("select array['Ghanima', 'Goku']::text[]", .{})) orelse unreachable;
+        var row = (try c.rowUnsafe("select array['Ghanima', 'Goku']::text[]", .{})) orelse unreachable;
         defer row.deinit() catch {};
         arr2 = try row.iterator([]const u8, 0).alloc(t.allocator);
     }
@@ -1249,7 +1321,7 @@ test "Result: UUID" {
     var result = try c.query(sql, .{ "fcbebf0f-b996-43b9-9818-672bc689cda8", &[_]u8{ 174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222 } });
     defer result.deinit();
 
-    const row = (try result.next()).?;
+    const row = (try result.nextUnsafe()).?;
     try t.expectSlice(u8, &.{ 252, 190, 191, 15, 185, 150, 67, 185, 152, 24, 103, 43, 198, 137, 205, 168 }, row.get([]u8, 0));
     try t.expectSlice(u8, &.{ 174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222 }, row.get([]u8, 1));
 }
@@ -1261,7 +1333,7 @@ test "Result: lsn" {
     var result = try c.query(sql, .{32788447688});
     defer result.deinit();
 
-    const row = (try result.next()).?;
+    const row = (try result.nextUnsafe()).?;
     try t.expectEqual(32788447689, row.get(i64, 0));
 }
 
@@ -1269,7 +1341,7 @@ test "Row: column names" {
     var c = t.connect(.{});
     defer c.deinit();
     const sql = "select 923 as id, 'Leto' as name";
-    var row = (try c.rowOpts(sql, .{}, .{ .column_names = true })).?;
+    var row = (try c.rowUnsafeOpts(sql, .{}, .{ .column_names = true })).?;
     defer row.deinit() catch {};
 
     try t.expectEqual(923, row.getCol(i32, "id"));
@@ -1280,7 +1352,7 @@ test "Result: mutable []u8" {
     var c = t.connect(.{});
     defer c.deinit();
     const sql = "select 'Leto'";
-    var row = (try c.row(sql, .{})).?;
+    var row = (try c.rowUnsafe(sql, .{})).?;
     defer row.deinit() catch {};
 
     var name = row.get([]u8, 0);
@@ -1292,7 +1364,7 @@ test "Result: mutable [][]u8" {
     var c = t.connect(.{});
     defer c.deinit();
     const sql = "select array['Leto', 'Test']::text[]";
-    var row = (try c.row(sql, .{})).?;
+    var row = (try c.rowUnsafe(sql, .{})).?;
     defer row.deinit() catch {};
 
     var values = try row.iterator([]u8, 0).alloc(t.allocator);
@@ -1326,7 +1398,7 @@ test "Row.to: ordinal" {
 
     {
         // null, no dupe
-        var row = (try c.row("select 1::integer, true, 'teg', null::text, 'blue'", .{})).?;
+        var row = (try c.rowUnsafe("select 1::integer, true, 'teg', null::text, 'blue'", .{})).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{});
@@ -1339,7 +1411,7 @@ test "Row.to: ordinal" {
 
     {
         // not null, no dupe
-        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
+        var row = (try c.rowUnsafe("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{});
@@ -1352,7 +1424,7 @@ test "Row.to: ordinal" {
 
     {
         // null, dupe with internal arena
-        var row = (try c.row("select 1::integer, true, 'teg', null::text, 'red'", .{})).?;
+        var row = (try c.rowUnsafe("select 1::integer, true, 'teg', null::text, 'red'", .{})).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .dupe = true });
@@ -1365,7 +1437,7 @@ test "Row.to: ordinal" {
 
     {
         // not null, dupe with internal arena
-        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
+        var row = (try c.rowUnsafe("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
         const user = try row.to(User, .{ .dupe = true });
         defer row.deinit() catch {};
 
@@ -1378,7 +1450,7 @@ test "Row.to: ordinal" {
 
     {
         // null, dupe with explicit allocator
-        var row = (try c.row("select 1::integer, true, 'teg', null::text, 'red'", .{})).?;
+        var row = (try c.rowUnsafe("select 1::integer, true, 'teg', null::text, 'red'", .{})).?;
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
 
@@ -1392,7 +1464,7 @@ test "Row.to: ordinal" {
 
     {
         // not null, dupe with explicit allocator
-        var row = (try c.row("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
+        var row = (try c.rowUnsafe("select 2::integer, false, 'ghanima', 'n1', 'red'", .{})).?;
 
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
@@ -1421,7 +1493,7 @@ test "Row.to: name no map" {
 
     {
         // null, no dupe
-        var row = (try c.rowOpts("select 1 as id, true as active, 'teg' as name, null as note", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 1 as id, true as active, 'teg' as name, null as note", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .map = .name });
@@ -1434,7 +1506,7 @@ test "Row.to: name no map" {
     {
         // default values are used if no colum
         // and extra columns are ignored
-        var row = (try c.rowOpts("select 2 as id, false as active, 'ghanima' as name, 'x123' as other", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 2 as id, false as active, 'ghanima' as name, 'x123' as other", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .map = .name });
@@ -1447,7 +1519,7 @@ test "Row.to: name no map" {
     {
         // nullable fields are nulled if no column
         // and extra columns are ignored
-        var row = (try c.rowOpts("select false as active, 'ghanima' as name, 'x123' as other", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select false as active, 'ghanima' as name, 'x123' as other", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .map = .name });
@@ -1459,7 +1531,7 @@ test "Row.to: name no map" {
 
     {
         // error on missing column with non-default value
-        var row = (try c.rowOpts("select 1 as id", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 1 as id", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         try t.expectError(error.FieldColumnMismatch, row.to(User, .{ .map = .name }));
@@ -1467,7 +1539,7 @@ test "Row.to: name no map" {
 
     {
         // not null, no dupe
-        var row = (try c.rowOpts("select 2::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 2::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .map = .name });
@@ -1479,7 +1551,7 @@ test "Row.to: name no map" {
 
     {
         // null, dupe with internal arena
-        var row = (try c.rowOpts("select 1::integer as id, true as active, 'teg' as name, null::text as note", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 1::integer as id, true as active, 'teg' as name, null::text as note", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .dupe = true, .map = .name });
@@ -1491,7 +1563,7 @@ test "Row.to: name no map" {
 
     {
         // not null, dupe with internal arena
-        var row = (try c.rowOpts("select 2::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 2::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .dupe = true, .map = .name });
@@ -1503,7 +1575,7 @@ test "Row.to: name no map" {
 
     {
         // null, dupe with explicit allocator
-        var row = (try c.rowOpts("select 1::integer as id, true as active, 'teg' as name, null::text as note", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 1::integer as id, true as active, 'teg' as name, null::text as note", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .allocator = t.allocator, .map = .name });
@@ -1516,7 +1588,7 @@ test "Row.to: name no map" {
 
     {
         // not null, dupe with explicit allocator
-        var row = (try c.rowOpts("select 5::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{ .column_names = true })).?;
+        var row = (try c.rowUnsafeOpts("select 5::integer as id, false as active, 'ghanima' as name, 'n1' as note", .{}, .{ .column_names = true })).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{ .allocator = t.allocator, .map = .name });
@@ -1621,7 +1693,7 @@ test "Row.to: iterator" {
     defer c.deinit();
 
     {
-        var row = (try c.row("select array[1, 99]::integer[], null", .{})).?;
+        var row = (try c.rowUnsafe("select array[1, 99]::integer[], null", .{})).?;
         defer row.deinit() catch {};
 
         const user = try row.to(User, .{});
@@ -1630,7 +1702,7 @@ test "Row.to: iterator" {
     }
 
     {
-        var row = (try c.row("select array[0]::integer[], array['over', '9000']::text[]", .{})).?;
+        var row = (try c.rowUnsafe("select array[0]::integer[], array['over', '9000']::text[]", .{})).?;
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
 
@@ -1649,9 +1721,9 @@ test "Row.to: iterator" {
             \\ select array[1]::integer[], array['9000']::text[]
         , .{});
 
-        const user1 = try (try result.next()).?.to(User, .{ .dupe = true });
-        const user2 = try (try result.next()).?.to(User, .{ .dupe = true });
-        try t.expectEqual(null, try result.next());
+        const user1 = try (try result.nextUnsafe()).?.to(User, .{ .dupe = true });
+        const user2 = try (try result.nextUnsafe()).?.to(User, .{ .dupe = true });
+        try t.expectEqual(null, try result.nextUnsafe());
         defer result.deinit();
 
         try t.expectSlice(i32, &.{0}, try user1.parents.alloc(t.arena.allocator()));
@@ -1669,9 +1741,9 @@ test "Row.to: iterator" {
             \\ select array[1]::integer[], array['9000']::text[]
         , .{});
 
-        const user1 = try (try result.next()).?.to(User, .{ .allocator = t.allocator });
-        const user2 = try (try result.next()).?.to(User, .{ .allocator = t.allocator });
-        try t.expectEqual(null, try result.next());
+        const user1 = try (try result.nextUnsafe()).?.to(User, .{ .allocator = t.allocator });
+        const user2 = try (try result.nextUnsafe()).?.to(User, .{ .allocator = t.allocator });
+        try t.expectEqual(null, try result.nextUnsafe());
         result.deinit();
 
         defer user1.tags.?.deinit(t.allocator);
@@ -1705,7 +1777,7 @@ test "Row.to: array" {
     defer c.deinit();
 
     {
-        var row = (try c.row("select array[1, 99]::integer[], array['over', '9000']::text[], array['red', 'green']::text[]", .{})).?;
+        var row = (try c.rowUnsafe("select array[1, 99]::integer[], array['over', '9000']::text[], array['red', 'green']::text[]", .{})).?;
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
 
@@ -1722,7 +1794,7 @@ test "Row.to: array" {
     }
 
     {
-        var row = (try c.row("select array[1, 99]::integer[], null::text[], null::text[]", .{})).?;
+        var row = (try c.rowUnsafe("select array[1, 99]::integer[], null::text[], null::text[]", .{})).?;
         const user = try row.to(User, .{ .allocator = t.allocator });
         row.deinit() catch {};
 
@@ -1732,6 +1804,24 @@ test "Row.to: array" {
         try t.expectSlice(i32, &.{ 1, 99 }, user.parents);
         try t.expectEqual(null, user.tags);
         try t.expectEqual(null, user.choices);
+    }
+}
+
+test "Result: safe" {
+    var c = t.connect(.{});
+    defer c.deinit();
+    const sql = "select $1::int, $2::int";
+
+    {
+        var result = try c.query(sql, .{ @as(?i32, 321), @as(?i32, null) });
+        defer result.deinit();
+        const row = (try result.next()).?;
+        try t.expectEqual(321, try row.get(i32, 0));
+        try t.expectEqual(error.InvalidType, row.get(bool, 0));
+
+        try t.expectEqual(321, try row.get(?i32, 0));
+        try t.expectEqual(null, try row.get(?i32, 1));
+        try t.expectEqual(null, result.next());
     }
 }
 
