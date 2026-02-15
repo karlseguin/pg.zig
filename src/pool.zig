@@ -6,6 +6,7 @@ const Conn = lib.Conn;
 const Result = lib.Result;
 const SSLCtx = lib.SSLCtx;
 const QueryRow = lib.QueryRow;
+const QueryRowUnsafe = lib.QueryRowUnsafe;
 const Listener = @import("listener.zig").Listener;
 
 const Thread = std.Thread;
@@ -240,11 +241,22 @@ pub const Pool = struct {
         return self.rowOpts(sql, values, .{});
     }
 
+    pub fn rowUnsafe(self: *Pool, sql: []const u8, values: anytype) !?QueryRowUnsafe {
+        return self.rowUnsafeOpts(sql, values, .{});
+    }
+
     pub fn rowOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !?QueryRow {
         var opts = opts_;
         opts.release_conn = true;
         var conn = try self.acquire();
         return conn.rowOpts(sql, values, opts);
+    }
+
+    pub fn rowUnsafeOpts(self: *Pool, sql: []const u8, values: anytype, opts_: Conn.QueryOpts) !?QueryRowUnsafe {
+        var opts = opts_;
+        opts.release_conn = true;
+        var conn = try self.acquire();
+        return conn.rowUnsafeOpts(sql, values, opts);
     }
 };
 
@@ -492,19 +504,19 @@ test "Pool: Query/Row" {
         var result = try pool.query("select col_int8, col_text from all_types where id = any($1)", .{[2]i32{ 100, 101 }});
         defer result.deinit();
 
-        const row1 = (try result.next()) orelse unreachable;
+        const row1 = (try result.nextUnsafe()) orelse unreachable;
         try t.expectEqual(1, row1.get(i64, 0));
         try t.expectString("val-1", row1.get([]u8, 1));
 
-        const row2 = (try result.next()) orelse unreachable;
+        const row2 = (try result.nextUnsafe()) orelse unreachable;
         try t.expectEqual(2, row2.get(i64, 0));
         try t.expectString("val-2", row2.get([]u8, 1));
 
-        try t.expectEqual(null, result.next());
+        try t.expectEqual(null, result.nextUnsafe());
     }
 
     for (0..3) |_| {
-        var row = try pool.row("select col_int8, col_text from all_types where id = $1", .{101}) orelse unreachable;
+        var row = try pool.rowUnsafe("select col_int8, col_text from all_types where id = $1", .{101}) orelse unreachable;
         defer row.deinit() catch {};
 
         try t.expectEqual(2, row.get(i64, 0));
@@ -516,11 +528,11 @@ test "Pool: Row error" {
     var pool = try Pool.init(t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
-    _ = try pool.row("insert into all_types (id) values ($1)", .{200});
+    _ = try pool.rowUnsafe("insert into all_types (id) values ($1)", .{200});
 
     // This would segfault:
     // https://github.com/karlseguin/pg.zig/issues/34
-    try t.expectError(error.PG, pool.row("insert into all_types (id) values ($1)", .{200}));
+    try t.expectError(error.PG, pool.rowUnsafe("insert into all_types (id) values ($1)", .{200}));
 
     try t.expectEqual(1, pool._available);
 }

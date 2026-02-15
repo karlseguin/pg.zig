@@ -97,8 +97,12 @@ pub const Numeric = struct {
         return encodeValidString(stream.getWritten(), buf);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) Numeric {
-        lib.assertDecodeType(Numeric, &.{Numeric.oid.decimal}, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) Numeric else lib.TypeError!Numeric {
+        lib.verifyDecodeType(fail_mode, Numeric, &.{Numeric.oid.decimal}, data_oid) catch |err| {
+            if (fail_mode == .unsafe) unreachable;
+            return err;
+        };
+
         lib.assert(data.len >= 8);
         return decodeKnown(data);
     }

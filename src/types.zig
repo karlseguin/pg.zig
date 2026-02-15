@@ -42,8 +42,11 @@ pub const Char = struct {
         return buf.writeByte(value);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) u8 {
-        lib.assertDecodeType(u8, &.{Char.oid.decimal}, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) u8 else lib.TypeError!u8 {
+        lib.verifyDecodeType(fail_mode, u8, &.{Char.oid.decimal}, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return data[0];
     }
 
@@ -67,8 +70,11 @@ pub const Int16 = struct {
         return Int16.encode(@intCast(value), buf, format_pos);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) i16 {
-        lib.assertDecodeType(i16, &.{Int16.oid.decimal}, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) i16 else lib.TypeError!i16 {
+        lib.verifyDecodeType(fail_mode, i16, &.{Int16.oid.decimal}, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return Int16.decodeKnown(data);
     }
 
@@ -92,8 +98,11 @@ pub const Int32 = struct {
         return Int32.encode(@intCast(value), buf, format_pos);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) i32 {
-        lib.assertDecodeType(i32, &.{ Int32.oid.decimal, Xid.oid.decimal }, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) i32 else lib.TypeError!i32 {
+        lib.verifyDecodeType(fail_mode, i32, &.{ Int32.oid.decimal, Xid.oid.decimal }, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return Int32.decodeKnown(data);
     }
 
@@ -117,11 +126,14 @@ pub const Int64 = struct {
         return Int64.encode(@intCast(value), buf, format_pos);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) i64 {
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) i64 else lib.TypeError!i64 {
         switch (data_oid) {
             Timestamp.oid.decimal, TimestampTz.oid.decimal => return Timestamp.decodeKnown(data),
             else => {
-                lib.assertDecodeType(i64, &.{ Int64.oid.decimal, PgLSN.oid.decimal, Xid8.oid.decimal }, data_oid);
+                lib.verifyDecodeType(fail_mode, i64, &.{ Int64.oid.decimal, PgLSN.oid.decimal, Xid8.oid.decimal }, data_oid) catch |err| {
+                    if (comptime fail_mode == .unsafe) unreachable;
+                    return err;
+                };
                 return Int64.decodeKnown(data);
             },
         }
@@ -143,8 +155,11 @@ pub const Timestamp = struct {
         return buf.writeIntBig(i64, value - us_from_epoch_to_y2k);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) i64 {
-        lib.assertDecodeType(i64, &.{ Timestamp.oid.decimal, TimestampTz.oid.decimal }, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) i64 else lib.TypeError!i64 {
+        lib.verifyDecodeType(fail_mode, i64, &.{ Timestamp.oid.decimal, TimestampTz.oid.decimal }, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return std.mem.readInt(i64, data[0..8], .big) + us_from_epoch_to_y2k;
     }
 
@@ -169,8 +184,11 @@ pub const Float32 = struct {
         return buf.writeIntBig(i32, tmp.*);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) f32 {
-        lib.assertDecodeType(f32, &.{Float32.oid.decimal}, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) f32 else lib.TypeError!f32 {
+        lib.verifyDecodeType(fail_mode, f32, &.{Float32.oid.decimal}, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return Float32.decodeKnown(data);
     }
 
@@ -194,11 +212,20 @@ pub const Float64 = struct {
         return buf.writeIntBig(i64, tmp.*);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) f64 {
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) f64 else lib.TypeError!f64 {
         switch (data_oid) {
-            Numeric.oid.decimal => return Numeric.decode(data, data_oid).toFloat(),
+            Numeric.oid.decimal => {
+                const numeric = Numeric.decode(fail_mode, data, data_oid);
+                if (comptime fail_mode == .unsafe) {
+                    return numeric.toFloat();
+                }
+                return (try numeric).toFloat();
+            },
             else => {
-                lib.assertDecodeType(f64, &.{Float64.oid.decimal}, data_oid);
+                lib.verifyDecodeType(fail_mode, f64, &.{Float64.oid.decimal}, data_oid) catch |err| {
+                    if (comptime fail_mode == .unsafe) unreachable;
+                    return err;
+                };
                 return Float64.decodeKnown(data);
             },
         }
@@ -221,8 +248,11 @@ pub const Bool = struct {
         return buf.writeByte(if (value) 1 else 0);
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) bool {
-        lib.assertDecodeType(bool, &.{Bool.oid.decimal}, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) bool else lib.TypeError!bool {
+        lib.verifyDecodeType(fail_mode, bool, &.{Bool.oid.decimal}, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return decodeKnown(data);
     }
 
@@ -290,8 +320,11 @@ pub const UUID = struct {
         }
     }
 
-    pub fn decode(data: []const u8, data_oid: i32) []const u8 {
-        lib.assertDecodeType([]const u8, &.{UUID.oid.decimal}, data_oid);
+    pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) []const u8 else lib.TypeError![]const u8 {
+        lib.verifyDecodeType(fail_mode, []const u8, &.{UUID.oid.decimal}, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return data;
     }
 
@@ -455,8 +488,11 @@ pub const JSONB = struct {
         Encode.variableLengthFill(buf, state);
     }
 
-    fn decode(data: []const u8, data_oid: i32) []const u8 {
-        lib.assertDecodeType([]const u8, &.{JSONB.oid.decimal}, data_oid);
+    fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) []const u8 else lib.TypeError![]const u8 {
+        lib.verifyDecodeType(fail_mode, []const u8, &.{JSONB.oid.decimal}, data_oid) catch |err| {
+            if (comptime fail_mode == .unsafe) unreachable;
+            return err;
+        };
         return JSONB.decodeKnown(data);
     }
 

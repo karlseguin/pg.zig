@@ -12,6 +12,7 @@ const Result = lib.Result;
 const Stream = lib.Stream;
 const Timeout = lib.Timeout;
 const QueryRow = lib.QueryRow;
+const QueryRowUnsafe = lib.QueryRowUnsafe;
 const has_openssl = lib.has_openssl;
 
 const os = std.os;
@@ -309,21 +310,41 @@ pub const Conn = struct {
     }
 
     pub fn row(self: *Conn, sql: []const u8, values: anytype) !?QueryRow {
-        return self.rowOpts(sql, values, .{});
+        return self._row(.safe, sql, values, .{});
+    }
+
+    pub fn rowUnsafe(self: *Conn, sql: []const u8, values: anytype) !?QueryRowUnsafe {
+        return self._row(.unsafe, sql, values, .{});
     }
 
     pub fn rowOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !?QueryRow {
+        return self._row(.safe, sql, values, opts);
+    }
+
+    pub fn rowUnsafeOpts(self: *Conn, sql: []const u8, values: anytype, opts: QueryOpts) !?QueryRowUnsafe {
+        return self._row(.unsafe, sql, values, opts);
+    }
+
+    fn _row(self: *Conn, comptime fail_mode: lib.FailMode, sql: []const u8, values: anytype, opts: QueryOpts) !(if (fail_mode == .safe) ?QueryRow else ?QueryRowUnsafe) {
         var result = try self.queryOpts(sql, values, opts);
         errdefer result.deinit();
 
-        const r = try result.next() orelse {
-            result.deinit();
-            return null;
-        };
+        if (comptime fail_mode == .safe) {
+            return .{
+                .result = result,
+                .row = try result.next() orelse {
+                    result.deinit();
+                    return null;
+                },
+            };
+        }
 
         return .{
-            .row = r,
             .result = result,
+            .row = try result.nextUnsafe() orelse {
+                result.deinit();
+                return null;
+            },
         };
     }
 
@@ -647,7 +668,7 @@ test "Conn: Query within Query error" {
     defer rows.deinit();
 
     try t.expectError(error.ConnectionBusy, c.row("select 2", .{}));
-    try t.expectEqual(1, (try rows.next()).?.get(i32, 0));
+    try t.expectEqual(1, (try rows.nextUnsafe()).?.get(i32, 0));
 }
 
 test "PG: type support" {
@@ -791,7 +812,7 @@ test "PG: type support" {
     // used for our arrays
     const aa = t.arena.allocator();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectEqual(1, row.get(i32, 0));
 
     {
@@ -1054,7 +1075,7 @@ test "PG: binary support" {
     // used for our arrays
     const aa = t.arena.allocator();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
 
     {
         //uuid, uuid[]
@@ -1211,7 +1232,7 @@ test "PG: null support" {
     , .{3});
     defer result.deinit();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectEqual(null, row.get(?i16, 1));
     try t.expectEqual(true, row.iterator(i16, 2).is_null);
 
@@ -1303,7 +1324,7 @@ test "PG: JSON struct" {
     var result = try c.query("select col_json, col_jsonb from all_types where id = $1", .{4});
     defer result.deinit();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectString("{\"id\":1,\"name\":\"Leto\"}", row.get([]u8, 0));
     try t.expectString("{\"id\": 2, \"name\": \"Ghanima\"}", row.get(?[]const u8, 1).?);
 }
@@ -1332,17 +1353,17 @@ test "PG: row" {
     const r1 = try c.row("select 1 where $1", .{false});
     try t.expectEqual(null, r1);
 
-    var r2 = (try c.row("select 2 where $1", .{true})) orelse unreachable;
+    var r2 = (try c.rowUnsafe("select 2 where $1", .{true})) orelse unreachable;
     try t.expectEqual(2, r2.get(i32, 0));
     try r2.deinit();
 
     // make sure the conn is still valid after a successful row
-    var r3 = (try c.row("select $1::int where $2", .{ 3, true })) orelse unreachable;
+    var r3 = (try c.rowUnsafe("select $1::int where $2", .{ 3, true })) orelse unreachable;
     try t.expectEqual(3, r3.get(i32, 0));
     try r3.deinit();
 
     // make sure the conn is still valid after MoreThanOneRow error
-    var r4 = (try c.row("select $1::text where $2", .{ "hi", true })) orelse unreachable;
+    var r4 = (try c.rowUnsafe("select $1::text where $2", .{ "hi", true })) orelse unreachable;
     try t.expectString("hi", r4.get([]u8, 0));
     try r4.deinit();
 }
@@ -1356,7 +1377,7 @@ test "PG: begin/commit" {
     _ = try c.exec("insert into simple_table values ($1)", .{"begin_commit"});
     try c.commit();
 
-    var row = (try c.row("select value from simple_table", .{})).?;
+    var row = (try c.rowUnsafe("select value from simple_table", .{})).?;
     defer row.deinit() catch {};
 
     try t.expectString("begin_commit", row.get([]u8, 0));
@@ -1384,7 +1405,7 @@ test "PG: bind enums" {
         \\ values (5, $1, $2, $3, $4)
     , .{ DummyEnum.val1, &[_]DummyEnum{ DummyEnum.val1, DummyEnum.val2 }, DummyEnum.val2, [_]DummyEnum{ DummyEnum.val2, DummyEnum.val1 } });
 
-    var row = (try c.row(
+    var row = (try c.rowUnsafe(
         \\ select col_enum, col_text, col_enum_arr, col_text_arr
         \\ from all_types
         \\ where id = 5
@@ -1421,7 +1442,7 @@ test "PG: numeric" {
 
     {
         // read
-        var row = (try c.row(
+        var row = (try c.rowUnsafe(
             \\ select 'nan'::numeric, '+Inf'::numeric, '-Inf'::numeric,
             \\ 0::numeric, 0.0::numeric, -0.00009::numeric, -999999.888880::numeric,
             \\ 0.000008, 999999.888807::numeric, 123456.78901234::numeric(14, 8)
@@ -1442,7 +1463,7 @@ test "PG: numeric" {
 
     {
         // write + write
-        var row = (try c.row(
+        var row = (try c.rowUnsafe(
             \\ select
             \\   $1::numeric, $2::numeric, $3::numeric,
             \\   $4::numeric, $5::numeric, $6::numeric,
@@ -1511,7 +1532,7 @@ test "PG: char" {
     defer c.deinit();
 
     // read
-    var row = (try c.row(
+    var row = (try c.rowUnsafe(
         \\ select $1::char[], $2::char[], $3::char[], $4::char[]
     , .{ &[_]u8{','}, &[_]u8{ ',', '"' }, &[_]u8{ '\\', 'a', ' ' }, &[_]u8{ 'z', '@' } })).?;
     defer row.deinit() catch {};
@@ -1544,7 +1565,7 @@ test "PG: bind []const u8" {
     var result = try c.query("select id, col_text from all_types where id = $1", .{6});
     defer result.deinit();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectEqual(6, row.get(i32, 0));
     try t.expectString("hello", row.get([]u8, 1));
 }
@@ -1568,7 +1589,7 @@ test "PG: bind []?i64" {
     var result = try c.query("select id, col_int8_arr from all_types where id = $1", .{7});
     defer result.deinit();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectEqual(7, row.get(i32, 0));
     {
         const arr = try row.iterator(?i64, 1).alloc(t.arena.allocator());
@@ -1598,7 +1619,7 @@ test "PG: bind []?f64" {
     var result = try c.query("select id, col_float8_arr from all_types where id = $1", .{8});
     defer result.deinit();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectEqual(8, row.get(i32, 0));
     {
         const arr = try row.iterator(?f64, 1).alloc(t.arena.allocator());
@@ -1629,7 +1650,7 @@ test "PG: bind []?bool" {
     var result = try c.query("select id, col_bool_arr from all_types where id = $1", .{9});
     defer result.deinit();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectEqual(9, row.get(i32, 0));
     {
         const arr = try row.iterator(?bool, 1).alloc(t.arena.allocator());
@@ -1660,7 +1681,7 @@ test "PG: bind []?[]const u8" {
     var result = try c.query("select id, col_text_arr from all_types where id = $1", .{10});
     defer result.deinit();
 
-    const row = (try result.next()) orelse unreachable;
+    const row = (try result.nextUnsafe()) orelse unreachable;
     try t.expectEqual(10, row.get(i32, 0));
     {
         const arr = try row.iterator(?[]const u8, 1).alloc(t.arena.allocator());
@@ -1688,7 +1709,7 @@ test "PG: binary wrapper" {
     const data = lib.Binary{
         .data = &.{ 1, 1, 0, 0, 32, 230, 16, 0, 0, 43, 107, 238, 243, 22, 122, 82, 192, 60, 20, 204, 226, 238, 89, 68, 64 },
     };
-    var row = (try c.row("select $1::geography", .{data})).?;
+    var row = (try c.rowUnsafe("select $1::geography", .{data})).?;
     defer row.deinit() catch {};
     try t.expectString(data.data, row.get([]const u8, 0));
 }
@@ -1726,14 +1747,14 @@ test "PG: large read" {
         var rows = try c.query("select $1::text", .{"!" ** 1000});
         defer rows.deinit();
 
-        const row = (try rows.next()).?;
+        const row = (try rows.nextUnsafe()).?;
         try t.expectString("!" ** 1000, row.get([]u8, 0));
         try t.expectEqual(null, try rows.next());
     }
 
     {
         // with a row
-        var row = (try c.row("select $1::text", .{"z" ** 1000})).?;
+        var row = (try c.rowUnsafe("select $1::text", .{"z" ** 1000})).?;
         defer row.deinit() catch {};
         try t.expectString("z" ** 1000, row.get([]u8, 0));
     }
@@ -1746,7 +1767,7 @@ test "Conn: dynamic buffer freed on error" {
     var rows = try c.query("select $1::text", .{"!" ** 200});
     defer rows.deinit();
 
-    const row = (try rows.next()).?;
+    const row = (try rows.nextUnsafe()).?;
     try t.expectString("!" ** 200, row.get([]u8, 0));
 
     // we end here, simulating the app returning an error. This causes
@@ -1760,7 +1781,7 @@ test "PG: Record" {
     defer c.deinit();
 
     {
-        var row = (try c.row("select row(9001, 'hello'::text)", .{})).?;
+        var row = (try c.rowUnsafe("select row(9001, 'hello'::text)", .{})).?;
         defer row.deinit() catch {};
 
         var record = row.record(0);
@@ -1770,7 +1791,7 @@ test "PG: Record" {
     }
 
     {
-        var row = (try c.row("select row(null)", .{})).?;
+        var row = (try c.rowUnsafe("select row(null)", .{})).?;
         defer row.deinit() catch {};
 
         var record = row.record(0);
@@ -1789,7 +1810,7 @@ test "Conn: application_name" {
         .application_name = "pg_zig_test",
     });
 
-    var row = (try conn.row("show application_name", .{})) orelse unreachable;
+    var row = (try conn.rowUnsafe("show application_name", .{})) orelse unreachable;
     defer row.deinit() catch {};
 
     try t.expectString("pg_zig_test", row.get([]const u8, 0));
@@ -1921,7 +1942,7 @@ test "PG: cached query" {
     {
         var result = try c.queryOpts("select $1::int as id, $2::text as name", .{ 1, "leto" }, .{ .cache_name = "c1" });
         try t.expectEqual(0, result.column_names.len);
-        const row = (try result.next()) orelse unreachable;
+        const row = (try result.nextUnsafe()) orelse unreachable;
         try t.expectEqual(1, row.get(i32, 0));
         try t.expectString("leto", row.get([]u8, 1));
 
@@ -1932,7 +1953,7 @@ test "PG: cached query" {
     {
         var result = try c.queryOpts("slc", .{ 2, "ghanima" }, .{ .cache_name = "c1" });
         try t.expectEqual(0, result.column_names.len);
-        const row = (try result.next()) orelse unreachable;
+        const row = (try result.nextUnsafe()) orelse unreachable;
         try t.expectEqual(2, row.get(i32, 0));
         try t.expectString("ghanima", row.get([]u8, 1));
 
@@ -1958,7 +1979,7 @@ test "PG: cached query with column names" {
         try t.expectString("id", result.column_names[0]);
         try t.expectString("name", result.column_names[1]);
 
-        const row = (try result.next()) orelse unreachable;
+        const row = (try result.nextUnsafe()) orelse unreachable;
         try t.expectEqual(1, row.get(i32, 0));
         try t.expectString("leto", row.get([]u8, 1));
 
@@ -1972,7 +1993,7 @@ test "PG: cached query with column names" {
         try t.expectString("id", result.column_names[0]);
         try t.expectString("name", result.column_names[1]);
 
-        const row = (try result.next()) orelse unreachable;
+        const row = (try result.nextUnsafe()) orelse unreachable;
         try t.expectEqual(2, row.get(i32, 0));
         try t.expectString("ghanima", row.get([]u8, 1));
 

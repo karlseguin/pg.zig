@@ -24,9 +24,12 @@ pub const default_column_names = build_config.column_names;
 
 const result = @import("result.zig");
 pub const Row = result.Row;
+pub const RowUnsafe = result.RowUnsafe;
 pub const Result = result.Result;
 pub const Iterator = result.Iterator;
+pub const IteratorUnsafe = result.IteratorUnsafe;
 pub const QueryRow = result.QueryRow;
+pub const QueryRowUnsafe = result.QueryRowUnsafe;
 pub const Mapper = result.Mapper;
 
 const reader = @import("reader.zig");
@@ -59,15 +62,20 @@ pub fn assert(ok: bool) void {
     }
 }
 
-pub fn assertDecodeType(comptime T: type, comptime expected_oids: []const i32, actual: i32) void {
+pub fn verifyDecodeType(comptime fail_mode: FailMode, comptime T: type, comptime expected_oids: []const i32, actual: i32) !void {
+    if (comptime fail_mode == .safe) {
+        if (isExpectedId(expected_oids, actual)) {
+            return;
+        }
+        return error.InvalidType;
+    }
+
     if (comptime _assert == false) {
         return;
     }
 
-    inline for (expected_oids) |expected_oid| {
-        if (expected_oid == actual) {
-            return;
-        }
+    if (isExpectedId(expected_oids, actual)) {
+        return;
     }
 
     log.warn("PostgreSQL value of type {s} cannot be read into a " ++ @typeName(T) ++ ". " ++
@@ -75,7 +83,23 @@ pub fn assertDecodeType(comptime T: type, comptime expected_oids: []const i32, a
     unreachable;
 }
 
-pub fn assertNotNull(comptime T: type, is_null: bool) void {
+fn isExpectedId(comptime expected_oids: []const i32, actual: i32) bool {
+    inline for (expected_oids) |expected_oid| {
+        if (expected_oid == actual) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn verifyNotNull(comptime fail_mode: FailMode, comptime T: type, is_null: bool) !void {
+    if (comptime fail_mode == .safe) {
+        if (is_null == false) {
+            return;
+        }
+        return error.UnexpectedNull;
+    }
+
     if (comptime _assert == false) {
         return;
     }
@@ -89,7 +113,14 @@ pub fn assertNotNull(comptime T: type, is_null: bool) void {
     unreachable;
 }
 
-pub fn assertColumnName(name: []const u8, valid: bool) void {
+pub fn verifyColumnName(comptime fail_mode: FailMode, name: []const u8, valid: bool) !void {
+    if (comptime fail_mode == .safe) {
+        if (valid) {
+            return;
+        }
+        return error.UnknownColumnName;
+    }
+
     if (comptime _assert == false) {
         return;
     }
@@ -253,6 +284,16 @@ pub const Binary = struct {
 const TestCase = struct {
     uri: []const u8,
     expected_opts: Pool.Opts,
+};
+
+pub const FailMode = enum {
+    safe,
+    unsafe,
+};
+
+pub const TypeError = error{
+    InvalidType,
+    UnexpectedNull,
 };
 
 const valid_tcs: [2]TestCase = .{

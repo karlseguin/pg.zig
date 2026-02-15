@@ -234,7 +234,7 @@ pub fn scalar(c: *Conn, sql: []const u8) i32 {
     var result = c.query(sql, .{}) catch unreachable;
     defer result.deinit();
 
-    const row = (result.next() catch unreachable).?;
+    const row = (result.nextUnsafe() catch unreachable).?;
     const value = row.get(i32, 0);
     result.drain() catch unreachable;
     return value;
