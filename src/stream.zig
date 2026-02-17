@@ -5,6 +5,7 @@ const openssl = lib.openssl;
 
 const posix = std.posix;
 
+const Io = std.Io;
 const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
@@ -12,13 +13,17 @@ const DEFAULT_HOST = "127.0.0.1";
 
 pub const Stream = if (lib.has_openssl) TLSStream else PlainStream;
 
+// TODO - Looks like this is mostly a wrapper over the low level socket
+// got a feeling that this could be replaced with Io.net.Stream for the most part
+
 const TLSStream = struct {
     valid: bool,
     ssl: ?*openssl.SSL,
     socket: posix.socket_t,
+    io: Io,
 
-    pub fn connect(allocator: Allocator, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
-        const plain = try PlainStream.connect(allocator, opts, null);
+    pub fn connect(allocator: Allocator, io: Io, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
+        const plain = try PlainStream.connect(allocator, io, opts, null);
         errdefer plain.close();
 
         const socket = plain.socket;
@@ -26,9 +31,9 @@ const TLSStream = struct {
         var ssl: ?*openssl.SSL = null;
         if (ctx_) |ctx| {
             // PostgreSQL TLS starts off as a plain connection which we upgrade
-            try writeSocket(socket, &.{ 0, 0, 0, 8, 4, 210, 22, 47 });
+            try writeSocket(socket, io, &.{ 0, 0, 0, 8, 4, 210, 22, 47 });
             var buf = [1]u8{0};
-            _ = try readSocket(socket, &buf);
+            _ = try readSocket(socket, io, &buf);
             if (buf[0] != 'S') {
                 return error.SSLNotSupportedByServer;
             }
@@ -85,6 +90,7 @@ const TLSStream = struct {
             .ssl = ssl,
             .valid = true,
             .socket = socket,
+            .io = io,
         };
     }
 
@@ -108,7 +114,7 @@ const TLSStream = struct {
             }
             return;
         }
-        return writeSocket(self.socket, data);
+        return writeSocket(self.socket, self.io, data);
     }
 
     pub fn read(self: *Stream, buf: []u8) !usize {
@@ -122,29 +128,36 @@ const TLSStream = struct {
             return read_len;
         }
 
-        return readSocket(self.socket, buf);
+        return readSocket(self.socket, self.io, buf);
     }
 };
 
 const PlainStream = struct {
     socket: posix.socket_t,
+    io: Io,
 
-    pub fn connect(allocator: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
+    pub fn connect(allocator: Allocator, io: Io, opts: Conn.Opts, _: anytype) !PlainStream {
+        _ = allocator; // autofix
         const socket = blk: {
             const host = opts.host orelse DEFAULT_HOST;
             if (host.len > 0 and host[0] == '/') {
-                if (comptime std.net.has_unix_sockets == false or std.posix.AF == void) {
+                if (comptime Io.net.has_unix_sockets == false or std.posix.AF == void) {
                     return error.UnixPathNotSupported;
                 }
-                break :blk (try std.net.connectUnixSocket(host)).handle;
+                const unix_address = try Io.net.UnixAddress.init(host);
+                break :blk (try unix_address.connect(io)).socket.handle;
             }
             const port = opts.port orelse 5432;
-            break :blk (try std.net.tcpConnectToHost(allocator, host, port)).handle;
+
+            std.log.debug("Attempt to connect to {s}:{}", .{ host, port });
+            const tcp_address = try Io.net.IpAddress.parse(host, port);
+            break :blk (try tcp_address.connect(io, .{ .mode = .stream, .protocol = .tcp })).socket.handle;
         };
         errdefer posix.close(socket);
 
         return .{
             .socket = socket,
+            .io = io,
         };
     }
 
@@ -153,26 +166,26 @@ const PlainStream = struct {
     }
 
     pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
-        return writeSocket(self.socket, data);
+        return writeSocket(self.socket, self.io, data);
     }
 
     pub fn read(self: *const PlainStream, buf: []u8) !usize {
-        return readSocket(self.socket, buf);
+        return readSocket(self.socket, self.io, buf);
     }
 };
 
-fn readSocket(socket: posix.socket_t, buf: []u8) !usize {
-    const stream: std.net.Stream = .{ .handle = socket };
+fn readSocket(socket: posix.socket_t, io: Io, buf: []u8) !usize {
+    const stream: Io.net.Stream = .{ .socket = .{ .handle = socket, .address = undefined } };
     var vecs: [1][]u8 = .{buf};
-    var reader = stream.reader(&.{});
-    const r = reader.interface();
+    var reader = stream.reader(io, &.{});
+    const r = &reader.interface;
     return try r.readVec(&vecs);
 }
 
-fn writeSocket(socket: posix.socket_t, data: []const u8) !void {
-    const stream: std.net.Stream = .{ .handle = socket };
+fn writeSocket(socket: posix.socket_t, io: Io, data: []const u8) !void {
+    const stream: Io.net.Stream = .{ .socket = .{ .handle = socket, .address = undefined } };
     var buf: [1024]u8 = undefined;
-    var writer = stream.writer(&buf);
+    var writer = stream.writer(io, &buf);
     const w = &writer.interface;
     try w.writeAll(data);
     try w.flush();

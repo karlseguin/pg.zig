@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const Conn = @import("conn.zig").Conn;
 
 pub const allocator = std.testing.allocator;
+pub const io = std.testing.io;
 
 pub var arena = std.heap.ArenaAllocator.init(allocator);
 
@@ -38,8 +39,10 @@ pub fn expectStringSlice(expected: []const []const u8, actual: [][]const u8) !vo
 }
 
 pub fn getRandom() std.Random.DefaultPrng {
-    var seed: u64 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+    // This function is only used for test cases to gen random data,
+    // so seeding it off now.Milliseconds since boot should be random enough ?
+    // TODO - @karl review plz
+    const seed: u64 = @intCast(std.Io.Clock.boot.now(std.testing.io).toMilliseconds());
     return std.Random.DefaultPrng.init(seed);
 }
 
@@ -199,7 +202,7 @@ pub const Stream = struct {
 pub fn connect(opts: anytype) Conn {
     const T = @TypeOf(opts);
 
-    var c = Conn.open(allocator, .{
+    var c = Conn.open(allocator, io, .{
         .tls = if (@hasField(T, "tls")) opts.tls else .off,
         .host = if (@hasField(T, "host")) opts.host else "localhost",
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,

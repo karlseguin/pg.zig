@@ -1,4 +1,5 @@
 const std = @import("std");
+const Io = std.Io;
 const lib = @import("lib.zig");
 const Buffer = @import("buffer").Buffer;
 
@@ -33,8 +34,8 @@ pub const Listener = struct {
 
     _allocator: Allocator,
 
-    pub fn open(allocator: Allocator, opts: Conn.Opts) !Listener {
-        var stream = try Stream.connect(allocator, opts, null);
+    pub fn open(allocator: Allocator, io: Io, opts: Conn.Opts) !Listener {
+        var stream = try Stream.connect(allocator, io, opts, null);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
@@ -203,14 +204,14 @@ pub const Listener = struct {
 
 const t = lib.testing;
 test "Listener" {
-    var l = try Listener.open(t.allocator, .{ .host = "localhost" });
+    var l = try Listener.open(t.allocator, t.io, .{ .host = "localhost" });
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
 }
 
 test "Listener: from Pool" {
-    var pool = try lib.Pool.init(t.allocator, .{
+    var pool = try lib.Pool.init(t.allocator, t.io, .{
         .size = 1,
         .auth = t.authOpts(.{}),
     });
@@ -223,10 +224,10 @@ test "Listener: from Pool" {
 }
 
 fn testListener(l: *Listener) !void {
-    var reset: std.Thread.ResetEvent = .{};
+    var reset: Io.Event = .unset;
     var tt = try std.Thread.spawn(.{}, struct {
-        fn shutdown(ll: *Listener, r: *std.Thread.ResetEvent) void {
-            r.wait();
+        fn shutdown(ll: *Listener, r: *Io.Event) void {
+            r.wait(t.io) catch {}; // the wait here can be cancelled ! Just ignore if that happens
             ll.stop();
         }
     }.shutdown, .{ l, &reset });
@@ -254,7 +255,7 @@ fn testListener(l: *Listener) !void {
         try t.expectString("", notification.payload);
     }
 
-    reset.set();
+    reset.set(t.io);
     try t.expectEqual(null, l.next());
     thrd.join();
 }
