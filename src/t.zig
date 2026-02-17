@@ -16,7 +16,10 @@ pub fn reset() void {
 // when expected is frequently a comptime.
 // https://github.com/ziglang/zig/issues/4437
 pub fn expectEqual(expected: anytype, actual: anytype) !void {
-    try std.testing.expectEqual(@as(@TypeOf(actual), expected), actual);
+    std.testing.expectEqual(@as(@TypeOf(actual), expected), actual) catch |err| {
+        std.log.debug("ExpectEqual Failed: {any} == {any}", .{ expected, actual });
+        return err;
+    };
 }
 pub fn expectDelta(expected: anytype, actual: anytype, delta: anytype) !void {
     expectEqual(true, expected - delta <= actual) catch |err| {

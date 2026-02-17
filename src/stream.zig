@@ -149,8 +149,15 @@ const PlainStream = struct {
             }
             const port = opts.port orelse 5432;
 
+            // TODO - having trouble using named addresses like "localhost", so
+            // do a hacky conversion here to number if localhost is used
+            // Need to fix this once I work out how to parse an address with a name
             std.log.debug("Attempt to connect to {s}:{}", .{ host, port });
-            const tcp_address = try Io.net.IpAddress.parse(host, port);
+            const tcp_address = Io.net.IpAddress.resolve(io, "127.0.0.1", port) catch |err| {
+                std.log.debug("Got error {} looking up {s}:{}", .{ err, host, port });
+                return err;
+            };
+            // const tcp_address = try Io.net.IpAddress.parseIp4(host, port);
             break :blk (try tcp_address.connect(io, .{ .mode = .stream, .protocol = .tcp })).socket.handle;
         };
         errdefer posix.close(socket);
