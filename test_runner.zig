@@ -237,11 +237,19 @@ const Env = struct {
     filter: ?[]const u8,
 
     fn init(allocator: Allocator) Env {
+        _ = allocator; // autofix
+        // TODO - need access to the new env vars via juicy main
+        // lets just bypass that for now and set it to the most verbose testing
         return .{
-            .verbose = readEnvBool(allocator, "TEST_VERBOSE", true),
-            .fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
-            .filter = readEnv(allocator, "TEST_FILTER"),
+            .verbose = true,
+            .fail_first = false,
+            .filter = null,
         };
+        // return .{
+        //     .verbose = readEnvBool(allocator, "TEST_VERBOSE", true),
+        //     .fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
+        //     .filter = readEnv(allocator, "TEST_FILTER"),
+        // };
     }
 
     fn deinit(self: Env, allocator: Allocator) void {

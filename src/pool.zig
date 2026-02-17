@@ -9,6 +9,7 @@ const QueryRow = lib.QueryRow;
 const QueryRowUnsafe = lib.QueryRowUnsafe;
 const Listener = @import("listener.zig").Listener;
 
+const Io = std.Io;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
@@ -19,8 +20,10 @@ pub const Pool = struct {
     _available: usize,
     _missing: usize,
     _allocator: Allocator,
-    _mutex: Thread.Mutex,
-    _cond: Thread.Condition,
+    // _mutex: Thread.Mutex,
+    _mutex: Io.Mutex,
+    // _cond: Thread.Condition,
+    _cond: Io.Event,
     _ssl_ctx: ?*lib.SSLCtx,
     _reconnector: Reconnector,
     _arena: std.heap.ArenaAllocator,
@@ -74,8 +77,8 @@ pub const Pool = struct {
         const connect_on_init_count = opts.connect_on_init_count orelse size;
 
         pool.* = .{
-            ._cond = .{},
-            ._mutex = .{},
+            ._cond = .unset,
+            ._mutex = .init,
             ._conns = conns,
             ._arena = arena,
             ._opts = opts_copy,
@@ -146,7 +149,16 @@ pub const Pool = struct {
                 }
                 const remaining_ns: u64 = @intCast(deadline - now);
 
-                try self._cond.timedWait(&self._mutex, remaining_ns);
+                try self._cond.waitTimeout(self.Io, .{
+                    .duration = .{
+                        .raw = .fromNanoseconds(remaining_ns),
+                        // use .awake here instead of .real
+                        // The .real clock can change due to things like NNTP updates
+                        // so alawys use .awake if you want to measure actual time elapsed
+                        .clock = .awake,
+                    },
+                });
+                // try self._cond.timedWait(&self._mutex, remaining_ns);
                 continue;
             }
 
@@ -189,8 +201,9 @@ pub const Pool = struct {
         const available = self._available;
         conns[available] = conn_to_add;
         self._available = available + 1;
+        self.cond.set();
         self._mutex.unlock();
-        self._cond.signal();
+        // self._cond.signal();
     }
 
     pub fn newListener(self: *Pool) !Listener {
@@ -269,7 +282,7 @@ const Reconnector = struct {
     stopped: bool,
 
     pool: *Pool,
-    mutex: Thread.Mutex,
+    mutex: Io.Mutex,
 
     // the thread, if any, that the monitor is running in
     thread: ?Thread,
@@ -278,7 +291,7 @@ const Reconnector = struct {
         return .{
             .pool = pool,
             .count = 0,
-            .mutex = .{},
+            .mutex = .init,
             .stopped = false,
             .thread = null,
         };
@@ -299,18 +312,18 @@ const Reconnector = struct {
 
             const conn = newConnection(pool, false) catch {
                 std.Thread.sleep(retry_delay);
-                self.mutex.lock();
+                self.mutex.lockUncancelable();
                 continue :loop;
             };
 
             // Decrement missing count when successfully recreated
-            pool._mutex.lock();
+            pool._mutex.lockUncancelable();
             std.debug.assert(pool._missing > 0);
             pool._missing -= 1;
             pool._mutex.unlock();
 
             conn.release(); // inserts it into the pool
-            self.mutex.lock();
+            self.mutex.lockUncancelable();
             self.count -= 1;
         }
 
