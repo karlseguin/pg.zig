@@ -558,7 +558,7 @@ test "Conn: auth trust (no pass)" {
 test "Conn: auth unknown user" {
     var conn = try Conn.open(t.allocator, t.io, .{});
     defer conn.deinit();
-    try t.expectError(error.PG, conn.auth(.{ .username = "does_not_exist" }));
+    try t.expectError(error.PG, conn.auth(.{ .username = "does_not_exist", .database = "postgres" }));
     try t.expectEqual(true, std.mem.indexOf(u8, conn.err.?.message, "user \"does_not_exist\"") != null);
 }
 
@@ -566,14 +566,14 @@ test "Conn: auth cleartext password" {
     {
         var conn = try Conn.open(t.allocator, t.io, .{});
         defer conn.deinit();
-        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear" }));
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear", .database = "postgres" }));
         try t.expectString("empty password returned by client", conn.err.?.message);
     }
 
     {
         var conn = try Conn.open(t.allocator, t.io, .{});
         defer conn.deinit();
-        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear", .password = "wrong" }));
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear", .password = "wrong", .database = "postgres" }));
         try t.expectString("password authentication failed for user \"pgz_user_clear\"", conn.err.?.message);
     }
 
@@ -588,14 +588,14 @@ test "Conn: auth scram-sha-256 password" {
     {
         var conn = try Conn.open(t.allocator, t.io, .{});
         defer conn.deinit();
-        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256" }));
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256", .database = "postgres" }));
         try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
     }
 
     {
         var conn = try Conn.open(t.allocator, t.io, .{});
         defer conn.deinit();
-        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "wrong" }));
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "wrong", .database = "postgres" }));
         try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
     }
 
@@ -1918,12 +1918,12 @@ test "Conn: TLS required" {
     {
         var conn = try Conn.open(t.allocator, t.io, .{ .tls = .off });
         defer conn.deinit();
-        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl", .database = "postgres" }));
         try t.expectEqual(true, std.mem.indexOf(u8, conn.err.?.message, "no encryption") != null);
     }
 
     {
-        var conn = t.connect(.{ .tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        var conn = t.connect(.{ .tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw", .database = "postgres" });
         defer conn.deinit();
     }
 }
@@ -1932,7 +1932,7 @@ test "Conn: TLS verify-full" {
     try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.allocator, t.io, .{ .tls = .{ .verify_full = null } }));
 
     {
-        var conn = t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        var conn = t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw", .database = "postgres" });
         defer conn.deinit();
     }
 }
