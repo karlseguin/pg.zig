@@ -294,6 +294,7 @@ pub const FailMode = enum {
 pub const TypeError = error{
     InvalidType,
     UnexpectedNull,
+    UnknownColumnName,
 };
 
 const valid_tcs: [2]TestCase = .{

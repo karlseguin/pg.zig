@@ -82,7 +82,7 @@ pub fn main() !void {
 
         // name will become invalid after row.deinit() is called. dupe it if you
         // need it to live longer.
-        const name = row.get([]const u8, 0);
+        const name = try row.get([]const u8, 0);
         log.info("User 1: {s}", .{name});
     }
 
@@ -96,10 +96,10 @@ pub fn main() !void {
         defer result.deinit();
 
         while (try result.next()) |row| {
-            const id = row.get(i32, 0);
+            const id = try row.get(i32, 0);
             // string values are only valid until the next call to next()
             // dupe the value if needed
-            const name = row.get([]const u8, 1);
+            const name = try row.get([]const u8, 1);
             log.info("User {d}: {s}", .{id, name});
         }
     }
@@ -124,10 +124,10 @@ pub fn main() !void {
         defer result.deinit();
 
         while (try result.next()) |row| {
-            const id = row.get(i32, 0);
+            const id = try row.get(i32, 0);
             // string values are only valid until the next call to next()
             // dupe the value if needed
-            const name = row.get([]const u8, 1);
+            const name = try row.get([]const u8, 1);
             log.info("User {d}: {s}", .{id, name});
         }
     }
@@ -140,7 +140,7 @@ pub fn main() !void {
         // again, sorry that row.deinit() can error.
         defer row.deinit() catch {};
 
-        var it = row.get(pg.Iterator(bool), 0);
+        var it = try row.get(pg.Iterator(bool), 0);
         while (it.next()) |value| {
             log.info("{any}", .{value});
         }
@@ -159,7 +159,7 @@ pub fn main() !void {
         var row = (try pool.rowOpts("select $1 as name", .{"teg"}, .{.column_names = true})) orelse unreachable;
         defer row.deinit() catch {};
 
-        log.info("{s}", .{row.getCol([]const u8, "name")});
+        log.info("{s}", .{try row.getCol([]const u8, "name")});
     }
 
     {
@@ -182,8 +182,8 @@ pub fn main() !void {
         const id_index = result.columnIndex("id").?;
         const time_index = result.columnIndex("time").?;
         while (try result.next()) |row| {
-            const id = row.get([]const u8, id_index);
-            const unix_micro = row.get(i64, time_index);
+            const id = try row.get([]const u8, id_index);
+            const unix_micro = try row.get(i64, time_index);
             log.info("{s} {d}", .{id, unix_micro});
         }
     }
@@ -245,6 +245,26 @@ pub fn main() !void {
             var mapper = result.mapper(User, .{.dupe = true});
             while (try mapper.next()) |user| {
                 log.info("{s} {d}", .{user.name, user.power});
+            }
+        }
+
+        {
+            log.info("\n\nExample 10", .{});
+            // unsafe operations avoid some runtime checks, but can reach
+            // "unreachable" if the types are wrong.
+            var conn = try pool.acquire();
+            defer conn.release();
+
+            var result = try conn.query("select * from pg_example_users order by id", .{});
+            defer result.deinit();
+
+            // notice the `nextUsafe`
+            while (try result.nextUnsafe()) |row| {
+                // unlike the "safe" variant, there's no "try" here. This assumes
+                // you're 100% sure column 0 is an i32 and column 1 is a string
+                const id = row.get(i32, 0);
+                const name = row.get([]const u8, 1);
+                log.info("User {d}: {s}", .{id, name});
             }
         }
     }
