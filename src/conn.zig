@@ -916,8 +916,8 @@ test "PG: type support" {
     {
         //timestamptz, timestamptz[]
         try t.expectEqual(1732379654000000, row.get(i64, 25));
-        // TODO - this test is failisg
-        // try t.expectSlice(i64, &.{ 1299835385000000, -62098685637999901 }, try row.iterator(i64, 26).alloc(aa));
+        // TODO - this test is failing on Mac, but seems OK on linux
+        try t.expectSlice(i64, &.{ 1299835385000000, -62098685637999901 }, try row.iterator(i64, 26).alloc(aa));
     }
 
     {
