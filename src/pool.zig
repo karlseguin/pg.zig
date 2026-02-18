@@ -145,6 +145,7 @@ pub const Pool = struct {
                 // Calculate remaining timeout
                 const now = Io.Clock.awake.now(self._io).toNanoseconds();
                 if (now >= deadline) {
+                    std.log.debug("Timeout {} > {}", .{ now, deadline });
                     return error.Timeout;
                 }
                 const remaining_ns: u64 = @intCast(deadline - now);
