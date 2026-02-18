@@ -14,13 +14,16 @@ zig fetch --save git+https://github.com/karlseguin/pg.zig#master
 2) In your `build.zig`, add the `pg` module as a dependency you your program:
 
 ```zig
-const pg = b.dependency("pg", .{
-    .target = target,
-    .optimize = optimize,
-});
+const pg_module = b.dependency("pg", .{}).module("pg");
 
-// the executable from your call to b.addExecutable(...)
-exe.root_module.addImport("pg", pg.module("pg"));
+// the executable from your executable/library
+const exe = b.addExecutable(.{
+  .name = "example",
+  ...
+  .imports = &.{
+    .{ .name = "pg", .module = pg_module },
+  },
+});
 ```
 
 ## Example
@@ -44,9 +47,9 @@ var result = try pool.query("select id, name from users where power > $1", .{900
 defer result.deinit();
 
 while (try result.next()) |row| {
-  const id = row.get(i32, 0);
+  const id = try row.get(i32, 0);
   // this is only valid until the next call to next(), deinit() or drain()
-  const name = row.get([]u8, 1);
+  const name = try row.get([]u8, 1);
 }
 ```
 
@@ -193,10 +196,10 @@ Only advance usage will need access to the row fields:
 * `oids: []i32` - The PG OID value for each column in the row. See `result.number_of_columns` for the length of this slice. Might be useful if you're trying to read a non-natively supported type.
 * `values: []Value` - The underlying byte value for each column in the row.  See `result.number_of_columns` for the length of this slice. Might be useful if you're trying to read a non-natively supported type. Has two fields, `is_null: bool` and `data: []const u8`.
 
-### get(comptime T: type, col: usize) T
+### get(comptime T: type, col: usize) !T
 Gets a value from the row at the specified column index (0-based). **Type mapping is strict.** For example, you **cannot** use `i32` to read an `smallint` column.
 
-For any supported type, you can use an optional instead. Therefore, if you use `row.get(i16, 0)` the return type is `i16`. If you use `row.get(?i16, 0)` the return type is `?i16`. If you use a non-optional type for a null value, you'll get a failed assertion in `Debug` and `ReleaseSafe`, and undefined behavior in `ReleaseFast`, `ReleaseSmall` or if you set `pg_assert = false`.
+For any supported type, you can use an optional instead. Therefore, if you use `row.get(i16, 0)` the return type is `i16`. If you use `row.get(?i16, 0)` the return type is `!?i16`. 
 
 * `u8` - `char`
 * `i16` - `smallint`
@@ -210,7 +213,7 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `pg.Numeric` - See numeric section
 * `pg.Cidr` - See CIDR/INET section
 
-### getCol(comptime T: type, column_name: []const u8) T
+### getCol(comptime T: type, column_name: []const u8) !T
 Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts` or the `column_names` build option was set to true.
 
 This relies on calling `result.columnIndex` which iterates through `result.column_names` fields. In some cases, this is more efficient than `StringHashMap` lookup, in others, it is worse. For performance-sensitive code, prefer using `get`, or cache the column index in a local variables outside of the `next()` loop:
@@ -218,12 +221,12 @@ This relies on calling `result.columnIndex` which iterates through `result.colum
 ```zig
 const id_idx = result.columnIndex("id").?
 while (try result.next()) |row| {
-  // row.get(i32, id_idx)
+  // try row.get(i32, id_idx)
 }
 ```
 
 ### Array Columns
-Use `row.get(pg.Iterator(i32))` to return an [Iterator](#iteratort) over an array column. Supported array types are:
+Use `row.get(pg.Iterator(i32))` to return an [!Iterator](#iteratort) over an array column. Supported array types are:
 
 * `u8` and `?u8` - `char[]`
 * `i16` and `?i16` - `smallint[]`
@@ -266,7 +269,7 @@ A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps b
 The iterator returned from `row.get(pg.Iterator(T), col)` can be iterated using the `next() ?T` call:
 
 ```zig
-var names = row.get(pg.Iterator([]const u8), 0);
+var names = try row.get(pg.Iterator([]const u8), 0);
 while (names.next()) |name| {
   ...
 }
@@ -387,18 +390,8 @@ And it **will** work. But you're playing with fire, and you should just include 
 You can call `try conn.deallocate("super")` to remove a cache entry. But this is only done for the connection on which it is called. This would make sense, for example, if you get a connection from the pool, execute the same query multiple times, deallocate the cached entry, and return the connection back to the pool. Note that the name to deallocate, `super`, is not sanitized and is open to SQL injection - don't pass a user-supplied value to `deallocte`.
 
 ## Important Notice 1 - Bind vs Read
-When you read a value, such as `row.get(i32, 0)`, the library assumes you know what you're doing and that column 0 really is a non-null 32-bit integer. `row.get` doesn't return an error union. There are some assertions, but these are disabled in ReleaseFast and ReleaseSmall. You can also disable these assertions in Debug/ReleaseSafe by placing `pub const pg_assert = false;` in your root, (e.g. `main.zig`):
-
-```zig
-const std = @import("std");
-...
-
-pub const pg_assert = false;
-
-pub fm main() !void {
-  ...
-}
-```
+When you read a value, e.g. using `row.get`, the library is strict and won't help you with type conversion. If you're column is a smallint, you have to `get`
+an `i16.
 
 Conversely, when binding a value to an SQL parameter, the library is a little more generous. For example, an `u64` will bind to an `i32` provided the value is within range.
 
@@ -448,6 +441,29 @@ And optionally (depending on the error and the version of the server):
 * `where: ?[]const u8 = null`
 
 The `isUnique() bool` method can be called on the error to determine whether or not the error was a unique violation (i.e. error code `23505`).
+
+## Unsafe Fast Mode
+For raw performance and danger, you can use the `unsafe` variants of many functions, e.g. `pool.rowUnsafe()` and `result.nextUnsafe()`. These versions return an unsafe row which skips type checking:
+
+Safe:
+```zig
+while (try result.next()) |row| {
+  // notice the try
+  const id = try row.get(i32, 0);
+}
+```
+
+Unsafe:
+
+Safe:
+```zig
+while (try result.nextUnsafe()) |row| {
+  // no try
+  const id = row.get(i32, 0);
+}
+```
+
+If the types (or nullability) is wrong, in `Debug` and `ReleaseSafe` you'll get a failed assertion. In `ReleaseSmall` and `ReleaseFast` it' it's undefined behavior. This is dangerous, but can be useful when you're reading a very large number of rows in a loop.
 
 ## Type Support
 All implementations have to deal with things like: how to support unsigned integers, given that PostgreSQL only has signed integers. Or, how to support UUIDs when the language has no UUID type. This section documents the exact behavior.
