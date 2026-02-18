@@ -5,39 +5,33 @@ const pg = @import("pg");
 
 pub const log = std.log.scoped(.example);
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+    var arena = init.arena;
 
     // While a connection can be created directly, pools should be used in most
     // cases. The pool's `acquire` method, to get a connection is thread-safe.
     // The pool may start 1 background thread to reconnect disconnected
     // connections (or connections in an invalid state).
-    var pool = pg.Pool.init(allocator, .{
-        .size = 5,
-        .connect = .{
-            .port = 5432,
-            .host = "127.0.0.1",
-        },
-        .auth = .{
-            .username = "postgres",
-            .database = "postgres",
-            .timeout = 10_000,
-        }
-    }) catch |err| {
+    var pool = pg.Pool.init(gpa, io, .{ .size = 5, .connect = .{
+        .port = 5432,
+        .host = "127.0.0.1",
+    }, .auth = .{
+        .username = "postgres",
+        .database = "postgres",
+        .timeout = 10_000,
+    } }) catch |err| {
         log.err("Failed to connect: {}", .{err});
-        std.posix.exit(1);
+        std.process.exit(1);
     };
     defer pool.deinit();
-
-
 
     // One-off commands can be executed directly using the pool using the
     // exec, execOpts, query, queryOpts, row, rowOpts functions. But, due to
     // Zig's lack of error payloads, if these fail, you won't be able to retrieve
     // a more detailed error
     _ = try pool.exec("drop table if exists pg_example_users", .{});
-
 
     // We're using a block to scope the defer conn.release(). In your own code
     // the scope might naturally be a function or if block. Remember that Zig's
@@ -61,13 +55,8 @@ pub fn main() !void {
         };
     }
 
-
     // Of course, exec can take parameters:
-    _ = try pool.exec(
-        "insert into pg_example_users (id, name) values ($1, $2), ($3, $4)",
-        .{1, "Leto", 2, "Ghanima"}
-    );
-
+    _ = try pool.exec("insert into pg_example_users (id, name) values ($1, $2), ($3, $4)", .{ 1, "Leto", 2, "Ghanima" });
 
     {
         log.info("Example 1", .{});
@@ -100,7 +89,7 @@ pub fn main() !void {
             // string values are only valid until the next call to next()
             // dupe the value if needed
             const name = try row.get([]const u8, 1);
-            log.info("User {d}: {s}", .{id, name});
+            log.info("User {d}: {s}", .{ id, name });
         }
     }
 
@@ -116,11 +105,10 @@ pub fn main() !void {
 
         // Because we pass this allocator to queryOpts, *IF* pg needs to allocate
         // to read the response, it'll use this allocator.
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
+        defer _ = arena.reset(.retain_capacity);
 
         // use queryOpts, execOpts or rowOpts when specifying optional parameters
-        var result = try conn.queryOpts("select * from pg_example_users order by id", .{}, .{.allocator = arena.allocator()});
+        var result = try conn.queryOpts("select * from pg_example_users order by id", .{}, .{ .allocator = arena.allocator() });
         defer result.deinit();
 
         while (try result.next()) |row| {
@@ -128,14 +116,14 @@ pub fn main() !void {
             // string values are only valid until the next call to next()
             // dupe the value if needed
             const name = try row.get([]const u8, 1);
-            log.info("User {d}: {s}", .{id, name});
+            log.info("User {d}: {s}", .{ id, name });
         }
     }
 
     {
         log.info("\n\nExample 4", .{});
         // We can bind and fetch arrays. This simple statement showcases both:
-        var row = (try pool.row("select $1::bool[]", .{[_]bool{true, false, false}})) orelse unreachable;
+        var row = (try pool.row("select $1::bool[]", .{[_]bool{ true, false, false }})) orelse unreachable;
 
         // again, sorry that row.deinit() can error.
         defer row.deinit() catch {};
@@ -156,7 +144,7 @@ pub fn main() !void {
         // But to work, you must tell pgz to load the column_names
         // exec, query and row all have variants that take an option:
         // execOpts, queryOpts and rowOpts
-        var row = (try pool.rowOpts("select $1 as name", .{"teg"}, .{.column_names = true})) orelse unreachable;
+        var row = (try pool.rowOpts("select $1 as name", .{"teg"}, .{ .column_names = true })) orelse unreachable;
         defer row.deinit() catch {};
 
         log.info("{s}", .{try row.getCol([]const u8, "name")});
@@ -175,7 +163,9 @@ pub fn main() !void {
             \\ select $1 as id, now() as time
             \\ union all
             \\ select $2, now() + interval '1 hour'
-        , .{"25ed0ed1-a35b-41a0-a6bd-89ddb3b8b716", "e2242aa2-db4e-4dd5-8677-76bc19b9e0f5"}, .{.column_names = true},
+        ,
+            .{ "25ed0ed1-a35b-41a0-a6bd-89ddb3b8b716", "e2242aa2-db4e-4dd5-8677-76bc19b9e0f5" },
+            .{ .column_names = true },
         );
         defer result.deinit();
 
@@ -184,7 +174,7 @@ pub fn main() !void {
         while (try result.next()) |row| {
             const id = try row.get([]const u8, id_index);
             const unix_micro = try row.get(i64, time_index);
-            log.info("{s} {d}", .{id, unix_micro});
+            log.info("{s} {d}", .{ id, unix_micro });
         }
     }
 
@@ -204,7 +194,7 @@ pub fn main() !void {
             defer row.deinit() catch {};
 
             const user = try row.to(User, .{});
-            log.info("{s} {d}", .{user.name, user.power});
+            log.info("{s} {d}", .{ user.name, user.power });
         }
 
         {
@@ -213,14 +203,13 @@ pub fn main() !void {
             // any string/iterator. This allows values to live beyond the next
             // call to next/deinit, but we must free the values. Consider using
             // an arena to more easily manage allocated memory.
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            defer arena.deinit();
+            defer _ = arena.reset(.retain_capacity);
 
-            var row = (try pool.rowOpts("select 4000 as power, 'Vegeta' as name", .{}, .{.column_names = true})) orelse unreachable;
+            var row = (try pool.rowOpts("select 4000 as power, 'Vegeta' as name", .{}, .{ .column_names = true })) orelse unreachable;
             defer row.deinit() catch {};
 
-            const user = try row.to(User, .{.map = .name, .allocator = arena.allocator()});
-            log.info("{s} {d}", .{user.name, user.power});
+            const user = try row.to(User, .{ .map = .name, .allocator = arena.allocator() });
+            log.info("{s} {d}", .{ user.name, user.power });
         }
 
         {
@@ -237,14 +226,14 @@ pub fn main() !void {
                 \\ select 4000 as power, 'Vegeta' as name
                 \\ union all
                 \\ select 9001, 'Goku'
-            , .{}, .{.column_names = true});
+            , .{}, .{ .column_names = true });
             defer result.deinit();
 
             // dupe = true tells the mapper to dupe values using the
             // internal result arena
-            var mapper = result.mapper(User, .{.dupe = true});
+            var mapper = result.mapper(User, .{ .dupe = true });
             while (try mapper.next()) |user| {
-                log.info("{s} {d}", .{user.name, user.power});
+                log.info("{s} {d}", .{ user.name, user.power });
             }
         }
 
@@ -264,7 +253,7 @@ pub fn main() !void {
                 // you're 100% sure column 0 is an i32 and column 1 is a string
                 const id = row.get(i32, 0);
                 const name = row.get([]const u8, 1);
-                log.info("User {d}: {s}", .{id, name});
+                log.info("User {d}: {s}", .{ id, name });
             }
         }
     }
