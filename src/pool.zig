@@ -159,6 +159,7 @@ pub const Pool = struct {
                         .clock = .awake,
                     },
                 });
+                self._cond.reset();
                 continue;
             }
 
