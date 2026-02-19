@@ -22,7 +22,7 @@ pub const Pool = struct {
     _allocator: Allocator,
     _io: Io,
     _mutex: Io.Mutex,
-    _cond: Io.Event,
+    _event: Io.Event,
     _ssl_ctx: ?*lib.SSLCtx,
     _reconnector: Reconnector,
     _arena: std.heap.ArenaAllocator,
@@ -76,7 +76,7 @@ pub const Pool = struct {
         const connect_on_init_count = opts.connect_on_init_count orelse size;
 
         pool.* = .{
-            ._cond = .unset,
+            ._event = .unset,
             ._io = io,
             ._mutex = .init,
             ._conns = conns,
@@ -123,19 +123,18 @@ pub const Pool = struct {
     }
 
     pub fn acquire(self: *Pool) !*Conn {
-        const conns = self._conns;
         const deadline = Io.Clock.awake.now(self._io).toNanoseconds() + @as(i96, @intCast(self._timeout));
 
-        self._mutex.lockUncancelable(self._io);
-        errdefer self._mutex.unlock(self._io);
-
         while (true) {
-            const available = self._available;
+            try self._mutex.lock(self._io);
             const missing = self._missing;
+            const available = self._available;
+            var conns = self._conns;
+            self._mutex.unlock(self._io);
 
             if (available == 0) {
                 // Check if pool is completely exhausted
-                const total_alive = self._conns.len - missing;
+                const total_alive = conns.len - missing;
                 if (total_alive == 0) {
                     return error.PoolExhausted;
                 }
@@ -150,23 +149,22 @@ pub const Pool = struct {
                 }
                 const remaining_ns: u64 = @intCast(deadline - now);
 
-                try self._cond.waitTimeout(self._io, .{
+                try self._event.waitTimeout(self._io, .{
                     .duration = .{
                         .raw = .fromNanoseconds(remaining_ns),
-                        // use .awake here instead of .real
-                        // The .real clock can change due to things like NNTP updates
-                        // so alawys use .awake if you want to measure actual time elapsed
                         .clock = .awake,
                     },
                 });
-                self._cond.reset();
+                self._event.reset();
                 continue;
             }
 
-            const index = available - 1;
+            try self._mutex.lock(self._io);
+            conns = self._conns;
+            const index = self._available - 1;
             const conn = conns[index];
             self._available = index;
-            self._mutex.unlock(self._io);
+            defer self._mutex.unlock(self._io);
             return conn;
         }
     }
@@ -202,7 +200,7 @@ pub const Pool = struct {
         const available = self._available;
         conns[available] = conn_to_add;
         self._available = available + 1;
-        self._cond.set(self._io);
+        self._event.set(self._io);
         self._mutex.unlock(self._io);
     }
 
