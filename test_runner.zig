@@ -164,7 +164,7 @@ const SlowTracker = struct {
     lap_time: std.Io.Timestamp,
 
     fn init(allocator: Allocator, count: u32) SlowTracker {
-        const now = std.Io.Clock.real.now(std.testing.io);
+        const now = std.Io.Clock.awake.now(std.testing.io);
         var slowest = SlowestQueue.init(allocator, {});
         slowest.ensureTotalCapacity(count) catch @panic("OOM");
         return .{
@@ -185,13 +185,13 @@ const SlowTracker = struct {
     }
 
     fn startTiming(self: *SlowTracker) void {
-        const now = std.Io.Clock.real.now(std.testing.io);
+        const now = std.Io.Clock.awake.now(std.testing.io);
         self.start_time = now;
         self.lap_time = now;
     }
 
     fn endTiming(self: *SlowTracker, test_name: []const u8) i96 {
-        const now = std.Io.Clock.real.now(std.testing.io);
+        const now = std.Io.Clock.awake.now(std.testing.io);
         self.lap_time = now;
         const ns = self.start_time.durationTo(now).toNanoseconds();
 
