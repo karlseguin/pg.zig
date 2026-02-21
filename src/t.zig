@@ -4,7 +4,9 @@ const Allocator = std.mem.Allocator;
 const Conn = @import("conn.zig").Conn;
 
 pub const allocator = std.testing.allocator;
-pub const io = std.testing.io;
+// pub const io = std.testing.io;
+pub var io: std.Io = undefined;
+pub var threaded: std.Io.Threaded = undefined;
 
 pub var arena = std.heap.ArenaAllocator.init(allocator);
 
@@ -50,6 +52,10 @@ pub fn getRandom() std.Random.DefaultPrng {
 }
 
 pub fn setup() !void {
+    // We need a threaded IO for tests, as some do concurrent tasks
+    threaded = .init(allocator, .{});
+    io = threaded.io();
+
     var c = connect(.{});
     defer c.deinit();
     _ = c.exec(

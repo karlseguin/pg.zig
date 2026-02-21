@@ -23,7 +23,7 @@ const TLSStream = struct {
     io: Io,
 
     pub fn connect(allocator: Allocator, io: Io, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
-        const plain = try PlainStream.connect(allocator, io, opts, null);
+        const plain = try PlainStream.connect(io, opts, null);
         errdefer plain.close();
 
         const socket = plain.socket;
@@ -136,8 +136,7 @@ const PlainStream = struct {
     socket: posix.socket_t,
     io: Io,
 
-    pub fn connect(allocator: Allocator, io: Io, opts: Conn.Opts, _: anytype) !PlainStream {
-        _ = allocator; // autofix
+    pub fn connect(io: Io, opts: Conn.Opts, _: anytype) !PlainStream {
         const socket = blk: {
             const host = opts.host orelse DEFAULT_HOST;
             if (host.len > 0 and host[0] == '/') {
@@ -149,15 +148,10 @@ const PlainStream = struct {
             }
             const port = opts.port orelse 5432;
 
-            // TODO - having trouble using named addresses like "localhost", so
-            // do a hacky conversion here to number if localhost is used
-            // Need to fix this once I work out how to parse an address with a name
-            // const tcp_address = Io.net.IpAddress.resolve(io, host, port) catch |err| {
-            //     std.log.debug("Got error {} looking up {s}:{}", .{ err, host, port });
-            //     return err;
-            // };
-            const tcp_address = try Io.net.IpAddress.parseIp4(if (std.mem.eql(u8, host, "localhost")) "127.0.0.1" else host, port);
-            break :blk (try tcp_address.connect(io, .{ .mode = .stream, .protocol = .tcp })).socket.handle;
+            const hostname: Io.net.HostName = try .init(host);
+            const handle = (try hostname.connect(io, port, .{ .mode = .stream })).socket.handle;
+            std.log.debug("Connected to host {s} -> {}", .{ host, handle });
+            break :blk handle;
         };
         errdefer posix.close(socket);
 
@@ -179,6 +173,21 @@ const PlainStream = struct {
         return readSocket(self.socket, self.io, buf);
     }
 };
+
+const t = lib.testing;
+test "Stream: Connect valid hostname" {
+    const plain_stream = try PlainStream.connect(t.io, .{ .host = "localhost" }, .{});
+    plain_stream.close();
+}
+
+test "Stream: Connect valid IP address" {
+    const plain_stream = try PlainStream.connect(t.io, .{ .host = "127.0.0.1" }, .{});
+    plain_stream.close();
+}
+
+test "Stream: Catch invalid hostname" {
+    try t.expectError(error.BadHost, PlainStream.connect(t.io, .{ .host = ".invalid" }, .{}));
+}
 
 fn readSocket(socket: posix.socket_t, io: Io, buf: []u8) !usize {
     const stream: Io.net.Stream = .{ .socket = .{ .handle = socket, .address = undefined } };
