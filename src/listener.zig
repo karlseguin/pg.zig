@@ -225,18 +225,17 @@ test "Listener: from Pool" {
 
 fn testListener(l: *Listener) !void {
     var reset: Io.Event = .unset;
-    var tt = try std.Thread.spawn(.{}, struct {
+    var listener_future = try t.io.concurrent(struct {
         fn shutdown(ll: *Listener, r: *Io.Event) void {
-            r.wait(t.io) catch {}; // the wait here can be cancelled ! Just ignore if that happens
+            r.wait(t.io) catch {};
             ll.stop();
         }
     }.shutdown, .{ l, &reset });
-    tt.detach();
 
     try l.listen("chan-1", .{});
     try l.listen("chan_2", .{});
 
-    const thrd = try std.Thread.spawn(.{}, testNotifier, .{});
+    var notifier_future = try t.io.concurrent(testNotifier, .{});
     {
         const notification = l.next().?;
         try t.expectString("chan-1", notification.channel);
@@ -257,7 +256,8 @@ fn testListener(l: *Listener) !void {
 
     reset.set(t.io);
     try t.expectEqual(null, l.next());
-    thrd.join();
+    _ = notifier_future.await(t.io);
+    listener_future.cancel(t.io);
 }
 
 fn testNotifier() void {
