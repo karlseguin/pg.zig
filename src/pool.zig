@@ -432,12 +432,6 @@ test "Pool: Release" {
     pool.release(c1);
 }
 
-// TODO - we need to add a test that saturates the pool,
-// then tries to do an aquire - which should block until
-// another connection is returned to the pool
-//
-// 2nd case is to also block, but then expect a timeout when
-// nobody returns their connection to the pool
 test "Pool: Overflow and wait for free slot" {
     var pool = try Pool.init(t.allocator, t.io, .{
         .size = 2,
