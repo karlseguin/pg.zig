@@ -153,10 +153,12 @@ pub const Listener = struct {
     }
 
     pub fn next(self: *Listener) ?NotificationResponse {
+        std.log.debug("listener next() -> read", .{});
         const msg = self.read() catch |err| {
             self.err = .{ .err = err };
             return null;
         };
+        std.log.debug("read() got {}", .{msg.type});
 
         switch (msg.type) {
             'A' => return NotificationResponse.parse(msg.data) catch |err| {
@@ -204,16 +206,22 @@ pub const Listener = struct {
 
 const t = lib.testing;
 test "Listener" {
-    var l = try Listener.open(t.allocator, t.io, .{ .host = "localhost" });
+    std.log.debug("Listener without pool", .{});
+    var l = try Listener.open(t.allocator, t.io, .{ .host = "localhost", .port = 5432 });
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
 }
 
 test "Listener: from Pool" {
+    std.log.debug("Listener with pool", .{});
     var pool = try lib.Pool.init(t.allocator, t.io, .{
         .size = 1,
         .auth = t.authOpts(.{}),
+        .connect = .{
+            .host = "localhost",
+            .port = 5432,
+        },
     });
     defer pool.deinit();
 
@@ -241,7 +249,7 @@ fn testListener(l: *Listener) !void {
     std.log.debug("listen on channels", .{});
     try l.listen("chan-1", .{});
     try l.listen("chan_2", .{});
-    std.log.debug("read generated events ...", .{});
+    std.log.debug("read events ...", .{});
 
     {
         const notification = l.next().?;
@@ -271,10 +279,14 @@ fn testListener(l: *Listener) !void {
 }
 
 fn testNotifier() !void {
-    var c = try t.connect(.{});
+    var c = try t.connect(.{
+        .host = "localhost",
+        .port = 5432,
+    });
     defer c.deinit();
     _ = c.exec("select pg_notify($1, $2)", .{ "chan_x", "pl-x" }) catch unreachable;
     _ = c.exec("select pg_notify($1, $2)", .{ "chan-1", "pl-1" }) catch unreachable;
     _ = c.exec("select pg_notify($1, $2)", .{ "chan_2", "pl-2" }) catch unreachable;
     _ = c.exec("select pg_notify($1, null)", .{"chan-1"}) catch unreachable;
+    std.log.debug("Correctly sent 4 notify events to db at localhost:5432", .{});
 }

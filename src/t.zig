@@ -216,7 +216,7 @@ pub fn connect(opts: anytype) !Conn {
         // .host = if (@hasField(T, "host")) opts.host else "localhost",
         // TODO - my local test setup
         .host = if (@hasField(T, "host")) opts.host else "192.168.1.67",
-        .port = 5433,
+        .port = if (@hasField(T, "port")) opts.port else 5433,
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
     });
 
