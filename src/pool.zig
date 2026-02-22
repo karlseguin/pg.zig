@@ -401,13 +401,11 @@ test "Pool" {
         , .{});
     }
 
-    const t1 = try std.Thread.spawn(.{}, testPool, .{pool});
-    const t2 = try std.Thread.spawn(.{}, testPool, .{pool});
-    const t3 = try std.Thread.spawn(.{}, testPool, .{pool});
-
-    t1.join();
-    t2.join();
-    t3.join();
+    var group: Io.Group = .init;
+    try group.concurrent(t.io, testPool, .{pool});
+    try group.concurrent(t.io, testPool, .{pool});
+    try group.concurrent(t.io, testPool, .{pool});
+    try group.await(t.io);
 
     {
         const c1 = try pool.acquire();
