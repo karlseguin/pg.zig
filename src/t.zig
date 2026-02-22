@@ -56,7 +56,7 @@ pub fn setup() !void {
     threaded = .init(allocator, .{});
     io = threaded.io();
 
-    var c = connect(.{});
+    var c = try connect(.{});
     defer c.deinit();
     _ = c.exec(
         \\ drop user if exists pgz_user_nopass;
@@ -208,14 +208,17 @@ pub const Stream = struct {
     }
 };
 
-pub fn connect(opts: anytype) Conn {
+pub fn connect(opts: anytype) !Conn {
     const T = @TypeOf(opts);
 
-    var c = Conn.open(allocator, io, .{
+    var c = try Conn.open(allocator, io, .{
         .tls = if (@hasField(T, "tls")) opts.tls else .off,
-        .host = if (@hasField(T, "host")) opts.host else "localhost",
+        // .host = if (@hasField(T, "host")) opts.host else "localhost",
+        // TODO - my local test setup
+        .host = if (@hasField(T, "host")) opts.host else "192.168.1.67",
+        .port = 5433,
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
-    }) catch unreachable;
+    });
 
     c.auth(authOpts(opts)) catch |err| {
         if (c.err) |pg| {
