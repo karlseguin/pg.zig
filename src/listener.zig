@@ -225,17 +225,24 @@ test "Listener: from Pool" {
 
 fn testListener(l: *Listener) !void {
     var reset: Io.Event = .unset;
+    std.log.debug("starting up shutdown catcher ...", .{});
     var listener_future = try t.io.concurrent(struct {
         fn shutdown(ll: *Listener, r: *Io.Event) void {
             r.wait(t.io) catch {};
+            std.log.debug("Listener received shutdown message ?", .{});
             ll.stop();
         }
     }.shutdown, .{ l, &reset });
 
+    var notifier_future = try t.io.concurrent(testNotifier, .{});
+    try notifier_future.await(t.io);
+    try t.io.sleep(.fromSeconds(1), .awake);
+
+    std.log.debug("listen on channels", .{});
     try l.listen("chan-1", .{});
     try l.listen("chan_2", .{});
+    std.log.debug("read generated events ...", .{});
 
-    var notifier_future = try t.io.concurrent(testNotifier, .{});
     {
         const notification = l.next().?;
         try t.expectString("chan-1", notification.channel);
@@ -255,13 +262,16 @@ fn testListener(l: *Listener) !void {
     }
 
     reset.set(t.io);
+    // not sure about this - because after the reset event is sent,
+    // we end up with the socket inside l being closed, so reading
+    // for l.next() gives a BADF
     try t.expectEqual(null, l.next());
-    _ = notifier_future.await(t.io);
+    try notifier_future.cancel(t.io);
     listener_future.cancel(t.io);
 }
 
-fn testNotifier() void {
-    var c = t.connect(.{});
+fn testNotifier() !void {
+    var c = try t.connect(.{});
     defer c.deinit();
     _ = c.exec("select pg_notify($1, $2)", .{ "chan_x", "pl-x" }) catch unreachable;
     _ = c.exec("select pg_notify($1, $2)", .{ "chan-1", "pl-1" }) catch unreachable;
