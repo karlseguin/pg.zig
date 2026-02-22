@@ -14,10 +14,8 @@ pub fn reset() void {
     _ = arena.reset(.free_all);
 }
 
-// const DEFAULT_HOST = "localhost";
-// const DEFAULT_PORT = 5432;
-const DEFAULT_HOST = "192.168.1.67";
-const DEFAULT_PORT = 5433;
+const DEFAULT_HOST = "localhost";
+const DEFAULT_PORT = 5432;
 
 // std.testing.expectEqual won't coerce expected to actual, which is a problem
 // when expected is frequently a comptime.
@@ -218,8 +216,6 @@ pub fn connect(opts: anytype) !Conn {
 
     var c = try Conn.open(allocator, io, .{
         .tls = if (@hasField(T, "tls")) opts.tls else .off,
-        // .host = if (@hasField(T, "host")) opts.host else "localhost",
-        // TODO - my local test setup
         .host = if (@hasField(T, "host")) opts.host else DEFAULT_HOST,
         .port = if (@hasField(T, "port")) opts.port else DEFAULT_PORT,
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
