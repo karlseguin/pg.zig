@@ -14,14 +14,18 @@ pub fn main(init: std.process.Init) !void {
     // cases. The pool's `acquire` method, to get a connection is thread-safe.
     // The pool may start 1 background thread to reconnect disconnected
     // connections (or connections in an invalid state).
-    var pool = pg.Pool.init(gpa, io, .{ .size = 5, .connect = .{
-        .port = 5432,
-        .host = "127.0.0.1",
-    }, .auth = .{
-        .username = "postgres",
-        .database = "postgres",
-        .timeout = 10_000,
-    } }) catch |err| {
+    var pool = pg.Pool.init(
+        gpa,
+        io,
+        .{ .size = 5, .connect = .{
+            .port = 5432,
+            .host = "127.0.0.1",
+        }, .auth = .{
+            .username = "postgres",
+            .database = "postgres",
+            .timeout = 10_000,
+        } },
+    ) catch |err| {
         log.err("Failed to connect: {}", .{err});
         std.process.exit(1);
     };
