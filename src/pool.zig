@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Pool = struct {
     _opts: Opts,
-    _timeout: u64,
+    _timeout: Io.Duration,
     _conns: []*Conn,
     _available: usize,
     _missing: usize,
@@ -31,7 +31,7 @@ pub const Pool = struct {
         size: u16 = 10,
         auth: Conn.AuthOpts = .{},
         connect: Conn.Opts = .{},
-        timeout: u32 = 10 * std.time.ms_per_s,
+        timeout: Io.Duration = .fromSeconds(10),
         connect_on_init_count: ?u16 = null,
     };
 
@@ -87,7 +87,8 @@ pub const Pool = struct {
             ._allocator = allocator,
             ._available = connect_on_init_count,
             ._reconnector = Reconnector.init(pool),
-            ._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
+            ._timeout = opts.timeout,
+            // ._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
         };
 
         var opened_connections: usize = 0;
@@ -123,12 +124,12 @@ pub const Pool = struct {
     }
 
     pub fn acquire(self: *Pool) !*Conn {
-        const deadline = Io.Clock.awake.now(self._io).toNanoseconds() + @as(i96, @intCast(self._timeout));
+        const deadline = Io.Clock.awake.now(self._io).addDuration(self._timeout).toNanoseconds();
 
         while (true) {
-            try self._mutex.lock(self._io);
+            self._mutex.lockUncancelable(self._io);
             const missing = self._missing;
-            const available = self._available;
+            var available = self._available;
             var conns = self._conns;
             self._mutex.unlock(self._io);
 
@@ -159,9 +160,10 @@ pub const Pool = struct {
                 continue;
             }
 
-            try self._mutex.lock(self._io);
+            self._mutex.lockUncancelable(self._io);
             conns = self._conns;
-            const index = self._available - 1;
+            available = self._available;
+            const index = available - 1;
             const conn = conns[index];
             self._available = index;
             defer self._mutex.unlock(self._io);
@@ -200,8 +202,8 @@ pub const Pool = struct {
         const available = self._available;
         conns[available] = conn_to_add;
         self._available = available + 1;
-        self._event.set(self._io);
         self._mutex.unlock(self._io);
+        self._event.set(self._io);
     }
 
     pub fn newListener(self: *Pool) !Listener {
@@ -297,12 +299,17 @@ const Reconnector = struct {
 
     fn run(self: *Reconnector) Io.Cancelable!void {
         const pool = self.pool;
+        var locked = false;
 
         try self.mutex.lock(self.pool._io);
-        defer self.mutex.unlock(self.pool._io);
+        locked = true;
+        defer {
+            if (locked) self.mutex.unlock(self.pool._io);
+        }
         loop: while (self.count > 0) {
             const stopped = self.stopped;
             self.mutex.unlock(self.pool._io);
+            locked = false;
             if (stopped == true) {
                 return;
             }
@@ -310,6 +317,7 @@ const Reconnector = struct {
             const conn = newConnection(pool, false) catch {
                 try std.Io.sleep(self.pool._io, .fromSeconds(2), .awake);
                 try self.mutex.lock(self.pool._io);
+                locked = true;
                 continue :loop;
             };
 
@@ -321,6 +329,7 @@ const Reconnector = struct {
 
             conn.release(); // inserts it into the pool
             try self.mutex.lock(self.pool._io);
+            locked = true;
             self.count -= 1;
         }
     }
@@ -431,6 +440,42 @@ test "Pool: Release" {
 //
 // 2nd case is to also block, but then expect a timeout when
 // nobody returns their connection to the pool
+test "Pool: Overflow and wait for free slot" {
+    var pool = try Pool.init(t.allocator, t.io, .{
+        .size = 2,
+        .auth = t.authOpts(.{}),
+        .timeout = .fromSeconds(1),
+        .connect_on_init_count = 1,
+    });
+    defer pool.deinit();
+    try t.expectEqual(1, pool._available);
+
+    // Use up the pool
+    const c1 = try pool.acquire();
+    defer c1.release();
+    c1._state = .query;
+    try t.expectEqual(0, pool._available);
+
+    const c2 = try pool.acquire();
+    errdefer c2.release();
+    c2._state = .query;
+    try t.expectEqual(0, pool._available);
+
+    // try to make another connect while the pool is overful
+    // expect this to timeout ?
+    std.log.debug("Next acquire will error with timeout after 1 second, because we are full : avail {} missing {}", .{ pool._available, pool._missing });
+    try t.expectError(error.Timeout, pool.acquire());
+
+    // now try to acquire in another thread, then quickly release c2
+    // it should then allow the next acquire
+    std.log.debug("blocked acquired will wait - avail {} missing {}, sleep 250ms", .{ pool._available, pool._missing });
+    var future_acquire = try t.io.concurrent(Pool.acquire, .{pool});
+    Io.sleep(t.io, .fromMilliseconds(100), .awake) catch {};
+    c2.release();
+    const delayed_connection = try future_acquire.await(t.io);
+    std.log.debug("sucessfully acquired during wait loop - avail {} missing {}", .{ pool._available, pool._missing });
+    delayed_connection.release();
+}
 
 test "Pool: stats" {
     var pool = try Pool.init(t.allocator, t.io, .{
@@ -553,7 +598,10 @@ test "Pool: Row error" {
 
 fn testPool(p: *Pool) void {
     for (0..500) |i| {
-        const conn = p.acquire() catch unreachable;
+        const conn = p.acquire() catch |err| {
+            std.log.debug("testPool aquire {} error {}", .{ i, err });
+            return;
+        };
         _ = conn.exec("insert into pool_test (id) values ($1)", .{i}) catch unreachable;
         conn.release();
     }
