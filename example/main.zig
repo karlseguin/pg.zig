@@ -60,7 +60,10 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // Of course, exec can take parameters:
-    _ = try pool.exec("insert into pg_example_users (id, name) values ($1, $2), ($3, $4)", .{ 1, "Leto", 2, "Ghanima" });
+    _ = try pool.exec(
+        "insert into pg_example_users (id, name) values ($1, $2), ($3, $4)",
+        .{ 1, "Leto", 2, "Ghanima" },
+    );
 
     {
         log.info("Example 1", .{});
