@@ -463,17 +463,14 @@ test "Pool: Overflow and wait for free slot" {
 
     // try to make another connect while the pool is overful
     // expect this to timeout ?
-    std.log.debug("Next acquire will error with timeout after 1 second, because we are full : avail {} missing {}", .{ pool._available, pool._missing });
     try t.expectError(error.Timeout, pool.acquire());
 
     // now try to acquire in another thread, then quickly release c2
     // it should then allow the next acquire
-    std.log.debug("blocked acquired will wait - avail {} missing {}, sleep 250ms", .{ pool._available, pool._missing });
     var future_acquire = try t.io.concurrent(Pool.acquire, .{pool});
     Io.sleep(t.io, .fromMilliseconds(100), .awake) catch {};
     c2.release();
     const delayed_connection = try future_acquire.await(t.io);
-    std.log.debug("sucessfully acquired during wait loop - avail {} missing {}", .{ pool._available, pool._missing });
     delayed_connection.release();
 }
 

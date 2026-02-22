@@ -153,12 +153,14 @@ pub const Listener = struct {
     }
 
     pub fn next(self: *Listener) ?NotificationResponse {
-        std.log.debug("listener next() -> read", .{});
+        if (@atomicLoad(bool, &self.closed, .monotonic)) {
+            return null;
+        }
+
         const msg = self.read() catch |err| {
             self.err = .{ .err = err };
             return null;
         };
-        std.log.debug("read() got {}", .{msg.type});
 
         switch (msg.type) {
             'A' => return NotificationResponse.parse(msg.data) catch |err| {
@@ -206,7 +208,6 @@ pub const Listener = struct {
 
 const t = lib.testing;
 test "Listener" {
-    std.log.debug("Listener without pool", .{});
     var l = try Listener.open(t.allocator, t.io, .{ .host = "localhost", .port = 5432 });
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
@@ -214,7 +215,6 @@ test "Listener" {
 }
 
 test "Listener: from Pool" {
-    std.log.debug("Listener with pool", .{});
     var pool = try lib.Pool.init(t.allocator, t.io, .{
         .size = 1,
         .auth = t.authOpts(.{}),
@@ -233,23 +233,19 @@ test "Listener: from Pool" {
 
 fn testListener(l: *Listener) !void {
     var reset: Io.Event = .unset;
-    std.log.debug("starting up shutdown catcher ...", .{});
     var listener_future = try t.io.concurrent(struct {
         fn shutdown(ll: *Listener, r: *Io.Event) void {
             r.wait(t.io) catch {};
-            std.log.debug("Listener received shutdown message ?", .{});
             ll.stop();
         }
     }.shutdown, .{ l, &reset });
 
+    try l.listen("chan-1", .{});
+    try l.listen("chan_2", .{});
+
     var notifier_future = try t.io.concurrent(testNotifier, .{});
     try notifier_future.await(t.io);
     try t.io.sleep(.fromSeconds(1), .awake);
-
-    std.log.debug("listen on channels", .{});
-    try l.listen("chan-1", .{});
-    try l.listen("chan_2", .{});
-    std.log.debug("read events ...", .{});
 
     {
         const notification = l.next().?;
@@ -270,12 +266,13 @@ fn testListener(l: *Listener) !void {
     }
 
     reset.set(t.io);
-    // not sure about this - because after the reset event is sent,
-    // we end up with the socket inside l being closed, so reading
-    // for l.next() gives a BADF
+    // make sure the listener is finished before doing l.next() again
+    // or it will crash because the socket will close in the middle
+    // of a read
+    listener_future.await(t.io);
+
     try t.expectEqual(null, l.next());
     try notifier_future.cancel(t.io);
-    listener_future.cancel(t.io);
 }
 
 fn testNotifier() !void {
@@ -288,5 +285,4 @@ fn testNotifier() !void {
     _ = c.exec("select pg_notify($1, $2)", .{ "chan-1", "pl-1" }) catch unreachable;
     _ = c.exec("select pg_notify($1, $2)", .{ "chan_2", "pl-2" }) catch unreachable;
     _ = c.exec("select pg_notify($1, null)", .{"chan-1"}) catch unreachable;
-    std.log.debug("Correctly sent 4 notify events to db at localhost:5432", .{});
 }
