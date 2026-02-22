@@ -283,7 +283,7 @@ const Reconnector = struct {
     mutex: Io.Mutex,
 
     // the thread, if any, that the monitor is running in
-    thread: ?Thread,
+    future: ?Io.Future(Io.Cancelable!void),
 
     fn init(pool: *Pool) Reconnector {
         return .{
@@ -291,14 +291,14 @@ const Reconnector = struct {
             .count = 0,
             .mutex = .init,
             .stopped = false,
-            .thread = null,
+            .future = null,
         };
     }
 
-    fn run(self: *Reconnector) void {
+    fn run(self: *Reconnector) Io.Cancelable!void {
         const pool = self.pool;
 
-        self.mutex.lockUncancelable(self.pool._io);
+        try self.mutex.lock(self.pool._io);
         defer self.mutex.unlock(self.pool._io);
         loop: while (self.count > 0) {
             const stopped = self.stopped;
@@ -308,41 +308,38 @@ const Reconnector = struct {
             }
 
             const conn = newConnection(pool, false) catch {
-                std.Io.sleep(self.pool._io, .fromSeconds(2), .awake) catch {};
-                self.mutex.lockUncancelable(self.pool._io);
+                try std.Io.sleep(self.pool._io, .fromSeconds(2), .awake);
+                try self.mutex.lock(self.pool._io);
                 continue :loop;
             };
 
             // Decrement missing count when successfully recreated
-            pool._mutex.lockUncancelable(self.pool._io);
+            try pool._mutex.lock(self.pool._io);
             std.debug.assert(pool._missing > 0);
             pool._missing -= 1;
             pool._mutex.unlock(self.pool._io);
 
             conn.release(); // inserts it into the pool
-            self.mutex.lockUncancelable(self.pool._io);
+            try self.mutex.lock(self.pool._io);
             self.count -= 1;
         }
-
-        self.thread.?.detach();
-        self.thread = null;
     }
 
     fn stop(self: *Reconnector) void {
         self.mutex.lockUncancelable(self.pool._io);
         self.stopped = true;
         self.mutex.unlock(self.pool._io);
-        if (self.thread) |thrd| {
-            thrd.join();
+        if (self.future) |*future| {
+            future.cancel(self.pool._io) catch return;
         }
     }
 
     fn reconnect(self: *Reconnector) !void {
-        self.mutex.lockUncancelable(self.pool._io);
+        try self.mutex.lock(self.pool._io);
         defer self.mutex.unlock(self.pool._io);
         self.count += 1;
-        if (self.thread == null) {
-            self.thread = try Thread.spawn(.{ .stack_size = 1024 * 1024 }, Reconnector.run, .{self});
+        if (self.future == null) {
+            self.future = try self.pool._io.concurrent(Reconnector.run, .{self});
         }
     }
 };
