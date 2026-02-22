@@ -1,4 +1,5 @@
 const std = @import("std");
+const Io = std.Io;
 const lib = @import("lib.zig");
 const Buffer = @import("buffer").Buffer;
 
@@ -80,7 +81,7 @@ fn saslAuth(req: proto.AuthenticationRequest.SASL, stream: *Stream, buf: *Buffer
     }
     var sasl_buf: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&sasl_buf);
-    var sasl = try SASL.init(fba.allocator());
+    var sasl = try SASL.init(fba.allocator(), stream.io);
 
     {
         // send the client initial response
@@ -167,9 +168,9 @@ const SASL = struct {
     const Base64Encoder = std.base64.standard.Encoder;
     const Base64Decoder = std.base64.standard.Decoder;
 
-    pub fn init(allocator: Allocator) !SASL {
+    pub fn init(allocator: Allocator, io: Io) !SASL {
         var nonce: [18]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        io.random(&nonce);
 
         var client_first_message = try allocator.alloc(u8, 32);
         client_first_message[0] = 'n';
@@ -318,17 +319,17 @@ pub const ServerResponse = struct {
 const t = @import("lib.zig").testing;
 test "SASL: init" {
     defer t.reset();
-    var sasl1 = try SASL.init(t.arena.allocator());
+    var sasl1 = try SASL.init(t.arena.allocator(), t.io);
 
     try t.expectString("n,,n=,r=", sasl1.client_first_message[0..8]);
 
-    var sasl2 = try SASL.init(t.arena.allocator());
+    var sasl2 = try SASL.init(t.arena.allocator(), t.io);
     try t.expectString("n,,n=,r=", sasl2.client_first_message[0..8]);
 
-    var sasl3 = try SASL.init(t.arena.allocator());
+    var sasl3 = try SASL.init(t.arena.allocator(), t.io);
     try t.expectString("n,,n=,r=", sasl3.client_first_message[0..8]);
 
-    var sasl4 = try SASL.init(t.arena.allocator());
+    var sasl4 = try SASL.init(t.arena.allocator(), t.io);
     try t.expectString("n,,n=,r=", sasl4.client_first_message[0..8]);
 
     // The nonce should be random. It's unlikely that if we generate 4, we'd get
@@ -367,7 +368,7 @@ test "SASL: serverResponse invalid" {
     };
 
     defer t.reset();
-    var sasl = try SASL.init(t.arena.allocator());
+    var sasl = try SASL.init(t.arena.allocator(), t.io);
 
     for (test_cases) |tc| {
         try t.expectError(tc.expected, sasl.serverResponse(tc.input));
@@ -377,7 +378,7 @@ test "SASL: serverResponse invalid" {
 
 test "SASL: serverResponse" {
     defer t.reset();
-    var sasl = try SASL.init(t.arena.allocator());
+    var sasl = try SASL.init(t.arena.allocator(), t.io);
 
     try sasl.serverResponse("r=abc123,s=aaaaxa,i=4096");
     try t.expectString("abc123", sasl.server_response.?.nonce);

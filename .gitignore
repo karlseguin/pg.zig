@@ -1,4 +1,5 @@
 zig-out/
+zig-pkg/
 .zig-cache/
 tests/server.key
 tests/server.crt
