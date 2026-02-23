@@ -11,7 +11,7 @@ See or run [example/main.zig](https://github.com/karlseguin/pg.zig/blob/master/e
 zig fetch --save git+https://github.com/karlseguin/pg.zig#master
 ```
 
-2) In your `build.zig`, add the `pg` module as a dependency you your program:
+2) In your `build.zig`, add the `pg` module as a dependency to your program:
 
 ```zig
 const pg_module = b.dependency("pg", .{}).module("pg");
@@ -59,9 +59,9 @@ The pool keeps a configured number of database connection open. The `acquire()` 
 ### init(allocator: std.mem.allocator, opts: Opts) !*Pool
 Initializes a connection pool. Pool options are:
 
-* `size` - Number of connections to maintain. Defaults to `10`
+* `size` - Number of connections to maintain. Defaults to `10`.
 * `auth`: - See [Conn.auth](#authopts-opts-void)
-* `connect`: - See the [Conn.open](#openallocator-stdmemallocator-opts-opts-conn)
+* `connect`: - See the [Conn.open](#openallocator-stdmemallocator-opts-opts-conn).
 * `timeout`: - The amount of time, in milliseconds, to wait for a connection to be available when `acquire()` is called.
 * `connect_on_init_count`:  - The # of connections in the pool to eagerly connect during `init`. Defaults to `null` which will initiliaze all connections (`size`). The background reconnector is used to setup the remaining (`size - connect_on_init_count`) connections. This can be set to `0`, to prevent `init` from failing except in extreme cases (i.e. OOM), but that will hide any configuration/connection issue until the first query is executed.
 
@@ -135,7 +135,7 @@ Executes the query with arguments, returns [Result](#result). `deinit`, and poss
 ### queryOpts(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
 Same as `query` but takes options:
 
-- `timeout: ?u32` - This is not reliable and should probably not be used. Currently it simply puts a recv socket timeout. On timeout, the connection will likely no longer be valid (which the pool will detect and handle when the connection is released) and the underlying query will likely still execute. Defaults to `null`
+- `timeout: ?u32` - This is not reliable and should probably not be used. Currently it simply puts a recv socket timeout. On timeout, the connection will likely no longer be valid (which the pool will detect and handle when the connection is released) and the underlying query will likely still execute. Defaults to `null`.
 - `column_names: bool` - Whether or not the `result.column_names` should be populated. When true, this requires memory allocation (duping the column names). Defaults to `false` unless the `column_names` build option was set to true.
 - `allocator` - The allocator to use for any allocations needed when executing the query and reading the results. When `null` this will default to the connection's allocator. If you were executing a query in a web-request and each web-request had its own arena tied to the lifetime of the request, it might make sense to use that arena. Defaults to `null`.
 - `release_conn: bool` - Whether or not to call `conn.release()` when `result.deinit()` is called. Useful for writing a function that acquires a connection from a `Pool` and returns a `Result`. When `query` or `row` are called from a `Pool` this is forced to `true`. Otherwise, defaults to `false`. 
@@ -144,13 +144,13 @@ Same as `query` but takes options:
 Executes the query with arguments, returns a single row. Returns an error if the query returns more than one row. Returns `null` if the query returns no row. `deinit` must be called on the returned `QueryRow`.
 
 ### rowOpts(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
-Same as `row` but takes the same options as `queryOpts`
+Same as `row` but takes the same options as `queryOpts`.
 
 ### prepare(sql: []const u8) !Stmt
-Creates a [Stmt](#stmt). It is generally better to use `query`, `row` or `exec`, 
+Creates a [Stmt](#stmt). It is generally better to use `query`, `row` or `exec`. 
 
 ### prepareOpts(sql: []const u8, opts: Conn.QueryOpts) !Stmt
-Same as `prepare` but takes the same options as `queryOpts`
+Same as `prepare` but takes the same options as `queryOpts`.
 
 ### begin() !void
 Calls `_ = try execOpts("begin", .{}, .{})`
@@ -165,7 +165,7 @@ Calls `_ = try execOpts("rollback", .{}, .{})`
 The `conn.query` and `conn.queryOpts` methods return a `pg.Result` which is used to read rows and values.
 
 ### Fields
-* `number_of_columns: usize` - Number of columns in the result
+* `number_of_columns: usize` - Number of columns in the result.
 * `column_names: [][]const u8` - Names of the column, empty unless the query was executed with the `column_names = true` option or the `column_names` build option was set to true.
 
 ### deinit(result: \*Result) void
@@ -210,8 +210,8 @@ For any supported type, you can use an optional instead. Therefore, if you use `
 * `bool` - `bool`
 * `[]const u8` - Returns the raw underlying data. Can be used for any column type to get the PG-encoded value. For `text` and `bytea` columns, this will be the expected value. For `numeric`, this will be a text representation of the number. For `UUID` this will be a 16-byte slice (use `pg.uuidToHex [36]u8` if you want a hex-encoded UUID). For `JSON` and `JSONB` this will be the serialized JSON value.
 * `[]u8` - Same as []const u8 but returns a mutable value.
-* `pg.Numeric` - See numeric section
-* `pg.Cidr` - See CIDR/INET section
+* `pg.Numeric` - See numeric section.
+* `pg.Cidr` - See CIDR/INET section.
 
 ### getCol(comptime T: type, column_name: []const u8) !T
 Same as `get` but uses the column name rather than its position. Only valid when the `column_names = true` option is passed to `queryOpts` or the `column_names` build option was set to true.
@@ -235,10 +235,10 @@ Use `row.get(pg.Iterator(i32))` to return an [!Iterator](#iteratort) over an arr
 * `f32` and `?f32` - `float4`
 * `f64` and `?f64` - `float8`
 * `bool` and `?bool` - `bool[]`
-* `[]const u8` and `[]?const u8` - More strict than `get([]u8)`). Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`
+* `[]const u8` and `[]?const u8` - More strict than `get([]u8)`. Supports: `text[]`, `char(n)[]`, `bytea[]`, `uuid[]`, `json[]` and `jsonb[]`.
 * `[]u8` - Same as `[]const u8` but returns mutable value.
-* `pg.Numeric` - See numeric section
-* `pg.Cidr` - See CIDR/INET section
+* `pg.Numeric` - See numeric section.
+* `pg.Cidr` - See CIDR/INET section.
 
 ### record(col: usize) Record
 Gets a [Record](#record) by column position.
@@ -250,9 +250,9 @@ Gets an [Record](#record) by column name. See [getCol](#getcolcomptime-t-type-co
 Populates and returns a `T`. 
 
 `opts` values are:
-* `dupe` - Duplicate string columns using the internal arena. When set to `true` non-scalar values are valid until `deinit` is called on the `row`/`result`. Defaults to `false`
-* `allocator` - Allocator to use to duplicate non-scalar values (i.e. strings). It is the caller's responsible to free any non-scalar values from their structure. Defaults to `null`.
-* `map` - `.ordinal` or `.name`, defaults to `.ordinal`
+* `dupe` - Duplicate string columns using the internal arena. When set to `true` non-scalar values are valid until `deinit` is called on the `row`/`result`. Defaults to `false`.
+* `allocator` - Allocator to use to duplicate non-scalar values (i.e. strings). It is the caller's responsibility to free any non-scalar values from their structure. Defaults to `null`.
+* `map` - `.ordinal` or `.name`, defaults to `.ordinal`.
 
 Setting `allocator` implies `dupe`, but uses the specified allocator rather than the internal arena. By default (when `dupe` is `false` and `allocator` is `null`), non-scalar values (i.e. strings) are only valid until the next call to `next()` or `drain()` or `deinit()`.
 
@@ -276,8 +276,8 @@ while (names.next()) |name| {
 ```
 
 ### Fields
-* `len` - the number of values in the iterator
-* `is_null` - Whether the array itself was null
+* `len` - the number of values in the iterator.
+* `is_null` - Whether the array itself was null.
 
 ### alloc(it: Iterator(T), allocator: std.mem.Allocator) ![]T
 Allocates a slice and populates it with all values. 
@@ -333,7 +333,7 @@ A column with no matching field is ignored. A field with no matching column is s
 The 2nd argument to `result.mapper` is an option:
 
 * `dupe` - Duplicate string columns using the internal arena. When set to `true` non-scalar values are valid until `deinit` is called on the `row`/`result`. Defaults to `false`
-* `allocator` - Allocator to use to duplicate non-scalar values (i.e. strings). It is the caller's responsible to free any non-scalar values from their structure. Defaults to `null`.
+* `allocator` - Allocator to use to duplicate non-scalar values (i.e. strings). It is the caller's responsibility to free any non-scalar values from their structure. Defaults to `null`.
 
 Setting `allocator` implies `dupe`, but uses the specified allocator rather than the internal arena. By default (when `dupe` is `false` and `allocator` is `null`), non-scalar values (i.e. strings) are only valid until the next call to `next()` or `drain()` or `deinit()`.
 
@@ -469,17 +469,17 @@ If the types (or nullability) is wrong, in `Debug` and `ReleaseSafe` you'll get 
 All implementations have to deal with things like: how to support unsigned integers, given that PostgreSQL only has signed integers. Or, how to support UUIDs when the language has no UUID type. This section documents the exact behavior.
 
 ### Arrays
-Multi-dimensional arrays aren't supported. The array lower bound is always 0 (or 1 in PG)
+Multi-dimensional arrays aren't supported. The array lower bound is always 0 (or 1 in PG).
 
 ### text, bool, bytea, char, char(n), custom enums
 No surprises, arrays supported. 
 
-When reading a `char[]`, it's tempting to use `row.get([]u8, 0)`, but this is incorrect. A `char[]` is an array, and thus `row.get(pg.Iterator(u8), 0`) must be used.
+When reading a `char[]`, it's tempting to use `row.get([]u8, 0)`, but this is incorrect. A `char[]` is an array, and thus `row.get(pg.Iterator(u8), 0)` must be used.
 
 ### smallint, int, bigint
 When binding an integer, the library will coerce the Zig value to the parameter type, as long as it fits. Thus, a `u64` can be bound to a `smallint`, if the value fits, else an error will be returned.
 
-Array binding is strict. For example, an `[]i16` must be used for a `smallint[]`parameter. The only exception is that the unsigned variant, e.g. `[]u16` can be used provided all values fit.
+Array binding is strict. For example, an `[]i16` must be used for a `smallint[]` parameter. The only exception is that the unsigned variant, e.g. `[]u16` can be used provided all values fit.
 
 When reading a column, you must use the correct type. 
 
@@ -512,21 +512,21 @@ When reading a `uuid` column with `[]u8` a 16-byte slice will be returned. Use t
 ### INET/CIDR
 You can bind a string value to a `cidr`, `inet`, `cidr[]` or `inet[]` parameter.
 
-When reading a value, via `row.get` or `row.iterator` you should use `pg.Cidr`. It exposes 3 fields:
+When reading a value via `row.get` or `row.iterator` you should use `pg.Cidr`. It exposes 3 fields:
 
-* `address: []u8` - Will be a 4 or 16 byte slice depending on the family
-* `family: Family` - An enum, either `Family.v4` of `Family.v6`
-* `netmask: u8` - The network mask
+* `address: []u8` - Will be a 4 or 16 byte slice depending on the family.
+* `family: Family` - An enum, either `Family.v4` of `Family.v6`.
+* `netmask: u8` - The network mask.
 
 ### MacAddr/MacAddr8
 You can bind a `[]u8` to either a `macaddr` or a `macaddr8`. These can be either binary representation (6-bytes for `macaddr` or 8 bytes for `macaddr8`) or a text-representation supported by PostgreSQL. This works, like UUID, because there's no ambiguity in the length. The same applied for array variants - it's even possible to mix and match formats within the array.
 
-When reading a value, via `row.get` or `row.iterator` using `[]u8`, the binary representation is always returned.
+When reading a value via `row.get` or `row.iterator` using `[]u8`, the binary representation is always returned.
 
 ### Timestamp(tz)
 When you bind an `i64` to a timestamp(tz) parameter, the value is assumed to be the number of microseconds since unix epoch (e.g. `std.time.microTimestamp()`). Array binding works the same. You can also bind a string, which will pass the string as-is and depend on PostgreSQL to do the conversion. This is true for arrays as well.
 
-When reading a `timestamp` column with `i64`, the number of microseconds since unix epoch will be returned
+When reading a `timestamp` column with `i64`, the number of microseconds since unix epoch will be returned.
 
 ### JSON and JSONB
 When binding a value to a JSON or JSONB parameter, you can either supply a serialized value (i.e. `[]u8`) or a struct which will be serialized using `std.json.stringify`.
@@ -539,6 +539,13 @@ When reading a `JSON` or `JSONB` column with `[]u8`, the serialized JSON will be
 PgLSN and xid8 can be bound and read as i64.
 
 xid can be bound and read as i32.
+
+### Arbitrary Binary Encoding
+For other types, either open an issue (ideally, with a sample query/data), or you can use binary encoding directly. 
+
+For reading, you can use `[]u8` to get the raw binary encoded data and parse it yourself.
+
+For writing, wrap your raw encoded data in `pg.Binary{.data = ....}`.
 
 ## Listen / Notify
 You can create a `pg.Listener` either from an existing `Pool` or directly.
@@ -622,9 +629,9 @@ pub fn metrics(_: *httpz.Request, res: *httpz.Response) !void {
 
 The metrics are:
 
-* `pg_queries` - counts the number of queries
-* `pg_pool_empty` - counts how often the pool is empty
-* `pg_pool_dirty` - counts how often a connection is released back into the pool in an unclean state (thus requiring the connection to be closed and the pool to re-open another connection). This could indicate that results aren't being fully drained (either by calling `next()` until `null` is returned or explicitly calling the `drain()` method)
+* `pg_queries` - counts the number of queries.
+* `pg_pool_empty` - counts how often the pool is empty.
+* `pg_pool_dirty` - counts how often a connection is released back into the pool in an unclean state (thus requiring the connection to be closed and the pool to re-open another connection). This could indicate that results aren't being fully drained (either by calling `next()` until `null` is returned or explicitly calling the `drain()` method).
 * `pg_alloc_params` - counts the number of parameter states that were allocated. This indicates that your queries have more parameters than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_columns` - counts the number of columns states that were allocated. This indicates that your queries are returning more columns than `result_state_size`. If this happens often, consider increasing `result_state_size`.
 * `pg_alloc_reader` - counts the number of bytes allocated while reading messages from PostgreSQL. This generally happens as a result of large result (e.g. selecting large text fields). Controlled by the `read_buffer` configuration option.

@@ -9,6 +9,7 @@ pub const Result = lib.Result;
 pub const Iterator = lib.Iterator;
 pub const QueryRow = lib.QueryRow;
 pub const Mapper = lib.Mapper;
+pub const Binary = lib.Binary;
 
 pub const Listener = @import("listener.zig").Listener;
 

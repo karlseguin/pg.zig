@@ -4,6 +4,9 @@ const Allocator = std.mem.Allocator;
 const Conn = @import("conn.zig").Conn;
 
 pub const allocator = std.testing.allocator;
+// pub const io = std.testing.io;
+pub var io: std.Io = undefined;
+pub var threaded: std.Io.Threaded = undefined;
 
 pub var arena = std.heap.ArenaAllocator.init(allocator);
 
@@ -11,11 +14,17 @@ pub fn reset() void {
     _ = arena.reset(.free_all);
 }
 
+const DEFAULT_HOST = "localhost";
+const DEFAULT_PORT = 5432;
+
 // std.testing.expectEqual won't coerce expected to actual, which is a problem
 // when expected is frequently a comptime.
 // https://github.com/ziglang/zig/issues/4437
 pub fn expectEqual(expected: anytype, actual: anytype) !void {
-    try std.testing.expectEqual(@as(@TypeOf(actual), expected), actual);
+    std.testing.expectEqual(@as(@TypeOf(actual), expected), actual) catch |err| {
+        std.log.debug("ExpectEqual Failed: {any} == {any}", .{ expected, actual });
+        return err;
+    };
 }
 pub fn expectDelta(expected: anytype, actual: anytype, delta: anytype) !void {
     expectEqual(true, expected - delta <= actual) catch |err| {
@@ -38,13 +47,16 @@ pub fn expectStringSlice(expected: []const []const u8, actual: [][]const u8) !vo
 }
 
 pub fn getRandom() std.Random.DefaultPrng {
-    var seed: u64 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+    const seed: u64 = @intCast(std.Io.Clock.boot.now(std.testing.io).toMilliseconds());
     return std.Random.DefaultPrng.init(seed);
 }
 
 pub fn setup() !void {
-    var c = connect(.{});
+    // We need a threaded IO for tests, as some do concurrent tasks
+    threaded = .init(allocator, .{});
+    io = threaded.io();
+
+    var c = try connect(.{});
     defer c.deinit();
     _ = c.exec(
         \\ drop user if exists pgz_user_nopass;
@@ -196,14 +208,15 @@ pub const Stream = struct {
     }
 };
 
-pub fn connect(opts: anytype) Conn {
+pub fn connect(opts: anytype) !Conn {
     const T = @TypeOf(opts);
 
-    var c = Conn.open(allocator, .{
+    var c = try Conn.open(allocator, io, .{
         .tls = if (@hasField(T, "tls")) opts.tls else .off,
-        .host = if (@hasField(T, "host")) opts.host else "localhost",
+        .host = if (@hasField(T, "host")) opts.host else DEFAULT_HOST,
+        .port = if (@hasField(T, "port")) opts.port else DEFAULT_PORT,
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
-    }) catch unreachable;
+    });
 
     c.auth(authOpts(opts)) catch |err| {
         if (c.err) |pg| {

@@ -160,21 +160,23 @@ const SlowTracker = struct {
     const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
     max: usize,
     slowest: SlowestQueue,
-    timer: std.time.Timer,
+    start_time: std.Io.Timestamp,
+    lap_time: std.Io.Timestamp,
 
     fn init(allocator: Allocator, count: u32) SlowTracker {
-        const timer = std.time.Timer.start() catch @panic("failed to start timer");
+        const now = std.Io.Clock.awake.now(std.testing.io);
         var slowest = SlowestQueue.init(allocator, {});
         slowest.ensureTotalCapacity(count) catch @panic("OOM");
         return .{
             .max = count,
-            .timer = timer,
+            .start_time = now,
+            .lap_time = now,
             .slowest = slowest,
         };
     }
 
     const TestInfo = struct {
-        ns: u64,
+        ns: i96,
         name: []const u8,
     };
 
@@ -183,12 +185,15 @@ const SlowTracker = struct {
     }
 
     fn startTiming(self: *SlowTracker) void {
-        self.timer.reset();
+        const now = std.Io.Clock.awake.now(std.testing.io);
+        self.start_time = now;
+        self.lap_time = now;
     }
 
-    fn endTiming(self: *SlowTracker, test_name: []const u8) u64 {
-        var timer = self.timer;
-        const ns = timer.lap();
+    fn endTiming(self: *SlowTracker, test_name: []const u8) i96 {
+        const now = std.Io.Clock.awake.now(std.testing.io);
+        self.lap_time = now;
+        const ns = self.start_time.durationTo(now).toNanoseconds();
 
         var slowest = &self.slowest;
 
@@ -237,11 +242,19 @@ const Env = struct {
     filter: ?[]const u8,
 
     fn init(allocator: Allocator) Env {
+        _ = allocator; // autofix
+        // TODO - need access to the new env vars via juicy main
+        // lets just bypass that for now and set it to the most verbose testing
         return .{
-            .verbose = readEnvBool(allocator, "TEST_VERBOSE", true),
-            .fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
-            .filter = readEnv(allocator, "TEST_FILTER"),
+            .verbose = true,
+            .fail_first = false,
+            .filter = null,
         };
+        // return .{
+        //     .verbose = readEnvBool(allocator, "TEST_VERBOSE", true),
+        //     .fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
+        //     .filter = readEnv(allocator, "TEST_FILTER"),
+        // };
     }
 
     fn deinit(self: Env, allocator: Allocator) void {

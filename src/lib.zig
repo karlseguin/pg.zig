@@ -22,6 +22,13 @@ pub const has_openssl = build_config.openssl;
 pub const SSLCtx = if (has_openssl) openssl.SSL_CTX else void;
 pub const default_column_names = build_config.column_names;
 
+pub const _conn = @import("conn.zig");
+pub const _pool = @import("pool.zig");
+pub const _stmt = @import("stmt.zig");
+pub const _stream = @import("stream.zig");
+pub const _reader = @import("reader.zig");
+pub const _listener = @import("listener.zig");
+
 const result = @import("result.zig");
 pub const Row = result.Row;
 pub const RowUnsafe = result.RowUnsafe;
@@ -186,7 +193,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
 
     return .{ .arena = arena, .opts = .{
         .size = 0,
-        .timeout = 0,
+        .timeout = .fromNanoseconds(0),
         .auth = .{
             .username = username,
             .password = password,
@@ -277,6 +284,10 @@ pub fn printSSLError() void {
     }
 }
 
+pub const Binary = struct {
+    data: []const u8,
+};
+
 const TestCase = struct {
     uri: []const u8,
     expected_opts: Pool.Opts,
@@ -294,7 +305,7 @@ pub const TypeError = error{
 };
 
 const valid_tcs: [2]TestCase = .{
-    .{ .uri = "postgresql:///", .expected_opts = .{ .size = 0, .auth = .{ .username = "postgres" }, .connect = .{}, .timeout = 0 } },
+    .{ .uri = "postgresql:///", .expected_opts = .{ .size = 0, .auth = .{ .username = "postgres" }, .connect = .{}, .timeout = .fromMilliseconds(0) } },
     .{ .uri = "postgresql://user:pass@somehost:1234/somedb?tcp_user_timeout=5678", .expected_opts = .{ .size = 0, .auth = .{
         .username = "user",
         .password = "pass",
@@ -303,7 +314,7 @@ const valid_tcs: [2]TestCase = .{
     }, .connect = .{
         .host = "somehost",
         .port = 1234,
-    }, .timeout = 0 } },
+    }, .timeout = .fromNanoseconds(0) } },
 };
 
 test "URI: parse valid" {

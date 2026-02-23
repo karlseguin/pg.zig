@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:latest
+    image: postgis/postgis
+    platform: linux/amd64
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
