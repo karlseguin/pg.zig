@@ -273,9 +273,9 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
                     }
                     return val;
                 },
-                .@"struct" => blk: {
+                .@"struct", .@"union" => blk: {
                     if (@hasDecl(T, "fromPgzRow") == true) {
-                        return T.fromPgzRow(value.data, self.oids[col]) catch |err| {
+                        return T.fromPgzRow(value, self.oids[col]) catch |err| {
                             if (comptime fail_mode == .safe) {
                                 return err;
                             }
@@ -307,7 +307,7 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
             if (value.is_null) {
                 return IteratorT(fail_mode, T).asNull();
             }
-            return IteratorT(fail_mode, T).fromPgzRow(value.data, self.oids[col]) catch |err| {
+            return IteratorT(fail_mode, T).fromPgzRow(value, self.oids[col]) catch |err| {
                 if (comptime fail_mode == .safe) {
                     return err;
                 }
@@ -556,7 +556,8 @@ pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
         }
 
         // used internally by row.get(Iterator(T))
-        fn fromPgzRow(data: []const u8, oid: i32) !Self {
+        fn fromPgzRow(value: Result.State.Value, oid: i32) !Self {
+            const data = value.data;
             const TT = switch (@typeInfo(T)) {
                 .optional => |opt| opt.child,
                 else => T,
@@ -799,7 +800,7 @@ pub fn RecordT(comptime fail_mode: lib.FailMode) type {
     };
 }
 
-fn getScalar(comptime fail_mode: lib.FailMode, comptime T: type, data: []const u8, oid: i32) if (fail_mode == .safe) lib.TypeError!T else T {
+pub fn getScalar(comptime fail_mode: lib.FailMode, comptime T: type, data: []const u8, oid: i32) if (fail_mode == .safe) lib.TypeError!T else T {
     switch (T) {
         u8 => return types.Char.decode(fail_mode, data, oid),
         i16 => return types.Int16.decode(fail_mode, data, oid),
