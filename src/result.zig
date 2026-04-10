@@ -394,9 +394,12 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
             if (comptime isSlice(T)) |S| {
                 const slice = blk: {
                     if (@typeInfo(T) == .optional) {
-                        break :blk self.get(?Iterator(S), column_index) orelse return null;
+                        const it = self.get(?Iterator(S), column_index);
+                        const val = if (comptime fail_mode == .safe) try it else it;
+                        break :blk val orelse return null;
                     } else {
-                        break :blk self.get(Iterator(S), column_index);
+                        const it = self.get(Iterator(S), column_index);
+                        break :blk if (comptime fail_mode == .safe) try it else it;
                     }
                 };
                 return try slice.alloc(allocator orelse return error.AllocatorRequiredForSliceMapping);
