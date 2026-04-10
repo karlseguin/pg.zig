@@ -293,7 +293,7 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
                 },
             };
 
-            return getScalar(fail_mode, TT, value.data, self.oids[col]);
+            return types.decodeScalar(fail_mode, TT, value.data, self.oids[col]);
         }
 
         pub fn getCol(self: *const Self, comptime T: type, name: []const u8) if (fail_mode == .safe) lib.TypeError!T else T {
@@ -795,32 +795,9 @@ pub fn RecordT(comptime fail_mode: lib.FailMode) type {
             self.data = data[end..];
 
             // start at 4 to skip the length which we already read
-            return getScalar(fail_mode, TT, data[4..end], oid);
+            return types.decodeScalar(fail_mode, TT, data[4..end], oid);
         }
     };
-}
-
-pub fn getScalar(comptime fail_mode: lib.FailMode, comptime T: type, data: []const u8, oid: i32) if (fail_mode == .safe) lib.TypeError!T else T {
-    switch (T) {
-        u8 => return types.Char.decode(fail_mode, data, oid),
-        i16 => return types.Int16.decode(fail_mode, data, oid),
-        i32 => return types.Int32.decode(fail_mode, data, oid),
-        i64 => return types.Int64.decode(fail_mode, data, oid),
-        f32 => return types.Float32.decode(fail_mode, data, oid),
-        f64 => return types.Float64.decode(fail_mode, data, oid),
-        bool => return types.Bool.decode(fail_mode, data, oid),
-        []const u8 => return types.Bytea.decode(data, oid),
-        []u8 => return @constCast(types.Bytea.decode(data, oid)),
-        types.Numeric => return types.Numeric.decode(fail_mode, data, oid),
-        types.Cidr => return types.Cidr.decode(fail_mode, data, oid),
-        else => switch (@typeInfo(T)) {
-            .@"enum" => {
-                const str = types.Bytea.decode(data, oid);
-                return std.meta.stringToEnum(T, str).?;
-            },
-            else => compileHaltGetError(T),
-        },
-    }
 }
 
 const t = lib.testing;
