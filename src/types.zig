@@ -1559,6 +1559,29 @@ pub fn resultEncoding(oids: []i32, buf: *buffer.Buffer) !void {
     }
 }
 
+pub fn decodeScalar(comptime fail_mode: lib.FailMode, comptime T: type, data: []const u8, oid: i32) if (fail_mode == .safe) lib.TypeError!T else T {
+    switch (T) {
+        u8 => return Char.decode(fail_mode, data, oid),
+        i16 => return Int16.decode(fail_mode, data, oid),
+        i32 => return Int32.decode(fail_mode, data, oid),
+        i64 => return Int64.decode(fail_mode, data, oid),
+        f32 => return Float32.decode(fail_mode, data, oid),
+        f64 => return Float64.decode(fail_mode, data, oid),
+        bool => return Bool.decode(fail_mode, data, oid),
+        []const u8 => return Bytea.decode(data, oid),
+        []u8 => return @constCast(Bytea.decode(data, oid)),
+        Numeric => return Numeric.decode(fail_mode, data, oid),
+        Cidr => return Cidr.decode(fail_mode, data, oid),
+        else => switch (@typeInfo(T)) {
+            .@"enum" => {
+                const str = Bytea.decode(data, oid);
+                return std.meta.stringToEnum(T, str).?;
+            },
+            else => @compileError("cannot decode value of type " ++ @typeName(T)),
+        },
+    }
+}
+
 fn compileHaltBindError(comptime T: type) noreturn {
     @compileError("cannot bind value of type " ++ @typeName(T));
 }
