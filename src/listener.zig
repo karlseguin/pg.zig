@@ -9,6 +9,7 @@ const NotificationResponse = lib.proto.NotificationResponse;
 
 const Stream = lib.Stream;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 const ListenError = union(enum) {
     err: anyerror,
@@ -33,8 +34,10 @@ pub const Listener = struct {
 
     _allocator: Allocator,
 
-    pub fn open(allocator: Allocator, opts: Conn.Opts) !Listener {
-        var stream = try Stream.connect(allocator, opts, null);
+    _io: Io,
+
+    pub fn open(allocator: Allocator, io: Io, opts: Conn.Opts) !Listener {
+        var stream = try Stream.connect(allocator, io, opts, null);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
@@ -48,6 +51,7 @@ pub const Listener = struct {
             ._stream = stream,
             ._reader = reader,
             ._allocator = allocator,
+            ._io = io,
         };
     }
 
@@ -72,7 +76,7 @@ pub const Listener = struct {
     }
 
     pub fn auth(self: *Listener, opts: Conn.AuthOpts) !void {
-        if (try lib.auth.auth(&self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
+        if (try lib.auth.auth(self._io, &self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
 
@@ -203,14 +207,14 @@ pub const Listener = struct {
 
 const t = lib.testing;
 test "Listener" {
-    var l = try Listener.open(t.allocator, .{ .host = "localhost" });
+    var l = try Listener.open(t.allocator, t.io, .{ .host = "127.0.0.1" });
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
 }
 
 test "Listener: from Pool" {
-    var pool = try lib.Pool.init(t.allocator, .{
+    var pool = try lib.Pool.init(t.allocator, t.io, .{
         .size = 1,
         .auth = t.authOpts(.{}),
     });
@@ -223,13 +227,14 @@ test "Listener: from Pool" {
 }
 
 fn testListener(l: *Listener) !void {
-    var reset: std.Thread.ResetEvent = .{};
+    const io = t.io;
+    var reset: std.Io.Event = .unset;
     var tt = try std.Thread.spawn(.{}, struct {
-        fn shutdown(ll: *Listener, r: *std.Thread.ResetEvent) void {
-            r.wait();
+        fn shutdown(io_p: Io, ll: *Listener, r: *std.Io.Event) Io.Cancelable!void {
+            try r.wait(io_p);
             ll.stop();
         }
-    }.shutdown, .{ l, &reset });
+    }.shutdown, .{ io, l, &reset });
     tt.detach();
 
     try l.listen("chan-1", .{});
@@ -254,7 +259,7 @@ fn testListener(l: *Listener) !void {
         try t.expectString("", notification.payload);
     }
 
-    reset.set();
+    reset.set(io);
     try t.expectEqual(null, l.next());
     thrd.join();
 }

@@ -8,23 +8,25 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const Init = std.process.Init;
 
 const BORDER = "=" ** 80;
 
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
 
-pub fn main() !void {
+pub fn main(init: Init) !void {
     var mem: [8192]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&mem);
 
+    const io = init.io;
     const allocator = fba.allocator();
 
-    const env = Env.init(allocator);
-    defer env.deinit(allocator);
+    const env = Env.init(init.environ_map);
 
-    var slowest = SlowTracker.init(allocator, 5);
-    defer slowest.deinit();
+    var slowest = SlowTracker.init(allocator, io, 5);
+    defer slowest.deinit(allocator);
 
     var pass: usize = 0;
     var fail: usize = 0;
@@ -48,11 +50,11 @@ pub fn main() !void {
         }
 
         var status = Status.pass;
-        slowest.startTiming();
+        slowest.startTiming(io);
 
         const is_unnamed_test = isUnnamed(t);
         if (env.filter) |f| {
-            if (!is_unnamed_test and std.mem.indexOf(u8, t.name, f) == null) {
+            if (!is_unnamed_test and std.mem.find(u8, t.name, f) == null) {
                 continue;
             }
         }
@@ -74,7 +76,7 @@ pub fn main() !void {
         const result = t.func();
         current_test = null;
 
-        const ns_taken = slowest.endTiming(friendly_name);
+        const ns_taken = slowest.endTiming(allocator, io, friendly_name);
 
         if (std.testing.allocator_instance.deinit() == .leak) {
             leak += 1;
@@ -93,7 +95,7 @@ pub fn main() !void {
                 fail += 1;
                 Printer.status(.fail, "\n{s}\n\"{s}\" - {s}\n{s}\n", .{ BORDER, friendly_name, @errorName(err), BORDER });
                 if (@errorReturnTrace()) |trace| {
-                    std.debug.dumpStackTrace(trace.*);
+                    std.debug.dumpErrorReturnTrace(trace);
                 }
                 if (env.fail_first) {
                     break;
@@ -130,7 +132,7 @@ pub fn main() !void {
     Printer.fmt("\n", .{});
     try slowest.display();
     Printer.fmt("\n", .{});
-    std.posix.exit(if (fail == 0) 0 else 1);
+    std.process.exit(if (fail == 0) 0 else 1);
 }
 
 const Printer = struct {
@@ -160,12 +162,12 @@ const SlowTracker = struct {
     const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
     max: usize,
     slowest: SlowestQueue,
-    timer: std.time.Timer,
+    timer: Io.Timestamp,
 
-    fn init(allocator: Allocator, count: u32) SlowTracker {
-        const timer = std.time.Timer.start() catch @panic("failed to start timer");
-        var slowest = SlowestQueue.init(allocator, {});
-        slowest.ensureTotalCapacity(count) catch @panic("OOM");
+    fn init(allocator: Allocator, io: Io, count: u32) SlowTracker {
+        const timer: Io.Timestamp = .now(io, .awake);
+        var slowest: SlowestQueue = .empty;
+        slowest.ensureTotalCapacity(allocator, count) catch @panic("OOM");
         return .{
             .max = count,
             .timer = timer,
@@ -174,60 +176,60 @@ const SlowTracker = struct {
     }
 
     const TestInfo = struct {
-        ns: u64,
+        ms: i64,
         name: []const u8,
     };
 
-    fn deinit(self: SlowTracker) void {
-        self.slowest.deinit();
+    fn deinit(self: *SlowTracker, allocator: Allocator) void {
+        self.slowest.deinit(allocator);
     }
 
-    fn startTiming(self: *SlowTracker) void {
-        self.timer.reset();
+    fn startTiming(self: *SlowTracker, io: Io) void {
+        self.timer = .now(io, .awake);
     }
 
-    fn endTiming(self: *SlowTracker, test_name: []const u8) u64 {
-        var timer = self.timer;
-        const ns = timer.lap();
+    fn endTiming(self: *SlowTracker, allocator: Allocator, io: Io, test_name: []const u8) i64 {
+        const timer: Io.Timestamp = .now(io, .awake);
+        const elapsed = self.timer.durationTo(timer).toMilliseconds();
 
         var slowest = &self.slowest;
 
         if (slowest.count() < self.max) {
             // Capacity is fixed to the # of slow tests we want to track
             // If we've tracked fewer tests than this capacity, than always add
-            slowest.add(TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
-            return ns;
+            slowest.push(allocator, TestInfo{ .ms = elapsed, .name = test_name }) catch @panic("failed to track test timing");
+            return elapsed;
         }
 
         {
             // Optimization to avoid shifting the dequeue for the common case
             // where the test isn't one of our slowest.
             const fastest_of_the_slow = slowest.peekMin() orelse unreachable;
-            if (fastest_of_the_slow.ns > ns) {
+            if (fastest_of_the_slow.ms > elapsed) {
                 // the test was faster than our fastest slow test, don't add
-                return ns;
+                return elapsed;
             }
         }
 
         // the previous fastest of our slow tests, has been pushed off.
-        _ = slowest.removeMin();
-        slowest.add(TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
-        return ns;
+        _ = slowest.popMin();
+        slowest.push(allocator, TestInfo{ .ms = elapsed, .name = test_name }) catch @panic("failed to track test timing");
+        return elapsed;
     }
 
     fn display(self: *SlowTracker) !void {
         var slowest = self.slowest;
         const count = slowest.count();
         Printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
-        while (slowest.removeMinOrNull()) |info| {
-            const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
+        while (slowest.popMin()) |info| {
+            const ms = info.ms;
             Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
         }
     }
 
     fn compareTiming(context: void, a: TestInfo, b: TestInfo) std.math.Order {
         _ = context;
-        return std.math.order(a.ns, b.ns);
+        return std.math.order(a.ms, b.ms);
     }
 };
 
@@ -236,34 +238,25 @@ const Env = struct {
     fail_first: bool,
     filter: ?[]const u8,
 
-    fn init(allocator: Allocator) Env {
+    fn init(env_map: *std.process.Environ.Map) Env {
         return .{
-            .verbose = readEnvBool(allocator, "TEST_VERBOSE", true),
-            .fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
-            .filter = readEnv(allocator, "TEST_FILTER"),
+            .verbose = readEnvBool(env_map, "TEST_VERBOSE", true),
+            .fail_first = readEnvBool(env_map, "TEST_FAIL_FIRST", false),
+            .filter = readEnv(env_map, "TEST_FILTER"),
         };
     }
 
-    fn deinit(self: Env, allocator: Allocator) void {
-        if (self.filter) |f| {
-            allocator.free(f);
+    fn readEnv(env_map: *std.process.Environ.Map, key: []const u8) ?[]const u8 {
+        if (env_map.get(key)) |v| {
+            return v;
         }
+
+        std.log.warn("failed to get env var {s}", .{key});
+        return null;
     }
 
-    fn readEnv(allocator: Allocator, key: []const u8) ?[]const u8 {
-        const v = std.process.getEnvVarOwned(allocator, key) catch |err| {
-            if (err == error.EnvironmentVariableNotFound) {
-                return null;
-            }
-            std.log.warn("failed to get env var {s} due to err {}", .{ key, err });
-            return null;
-        };
-        return v;
-    }
-
-    fn readEnvBool(allocator: Allocator, key: []const u8, deflt: bool) bool {
-        const value = readEnv(allocator, key) orelse return deflt;
-        defer allocator.free(value);
+    fn readEnvBool(env_map: *std.process.Environ.Map, key: []const u8, deflt: bool) bool {
+        const value = readEnv(env_map, key) orelse return deflt;
         return std.ascii.eqlIgnoreCase(value, "true");
     }
 };
@@ -280,7 +273,7 @@ pub const panic = std.debug.FullPanic(struct {
 fn isUnnamed(t: std.builtin.TestFn) bool {
     const marker = ".test_";
     const test_name = t.name;
-    const index = std.mem.indexOf(u8, test_name, marker) orelse return false;
+    const index = std.mem.find(u8, test_name, marker) orelse return false;
     _ = std.fmt.parseInt(u32, test_name[index + marker.len ..], 10) catch return false;
     return true;
 }

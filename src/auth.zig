@@ -7,6 +7,7 @@ const Reader = lib.Reader;
 const Stream = lib.Stream;
 
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 const Opts = lib.Conn.AuthOpts;
 
@@ -17,7 +18,7 @@ const Opts = lib.Conn.AuthOpts;
 //   - is only valid until the next call to reader.read()
 //     (we expect our caller to clone the value)
 // a normal zig error on any other error
-pub fn auth(stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
+pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
     try reader.startFlow(null, opts.timeout);
 
     // ignore errors on endFlow, because it's troublesome to handle, and only
@@ -49,7 +50,7 @@ pub fn auth(stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]cons
 
         switch (try proto.AuthenticationRequest.parse(msg.data)) {
             .ok => return null,
-            .sasl => |sasl| if (try saslAuth(sasl, stream, buf, reader, opts)) |raw_pg_err| {
+            .sasl => |sasl| if (try saslAuth(io, sasl, stream, buf, reader, opts)) |raw_pg_err| {
                 return raw_pg_err;
             },
             .md5 => |salt| try md5PasswordAuth(salt, stream, buf, opts),
@@ -74,13 +75,13 @@ pub fn auth(stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]cons
     }
 }
 
-fn saslAuth(req: proto.AuthenticationRequest.SASL, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
+fn saslAuth(io: Io, req: proto.AuthenticationRequest.SASL, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
     if (!req.scram_sha_256) {
         return error.UnexpectedDBMessage;
     }
     var sasl_buf: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&sasl_buf);
-    var sasl = try SASL.init(fba.allocator());
+    var sasl = try SASL.init(fba.allocator(), io);
 
     {
         // send the client initial response
@@ -167,9 +168,9 @@ const SASL = struct {
     const Base64Encoder = std.base64.standard.Encoder;
     const Base64Decoder = std.base64.standard.Decoder;
 
-    pub fn init(allocator: Allocator) !SASL {
+    pub fn init(allocator: Allocator, io: Io) !SASL {
         var nonce: [18]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        std.Io.random(io, &nonce);
 
         var client_first_message = try allocator.alloc(u8, 32);
         client_first_message[0] = 'n';
@@ -318,17 +319,17 @@ pub const ServerResponse = struct {
 const t = @import("lib.zig").testing;
 test "SASL: init" {
     defer t.reset();
-    var sasl1 = try SASL.init(t.arena.allocator());
+    var sasl1 = try SASL.init(t.arena.allocator(), t.io);
 
     try t.expectString("n,,n=,r=", sasl1.client_first_message[0..8]);
 
-    var sasl2 = try SASL.init(t.arena.allocator());
+    var sasl2 = try SASL.init(t.arena.allocator(), t.io);
     try t.expectString("n,,n=,r=", sasl2.client_first_message[0..8]);
 
-    var sasl3 = try SASL.init(t.arena.allocator());
+    var sasl3 = try SASL.init(t.arena.allocator(), t.io);
     try t.expectString("n,,n=,r=", sasl3.client_first_message[0..8]);
 
-    var sasl4 = try SASL.init(t.arena.allocator());
+    var sasl4 = try SASL.init(t.arena.allocator(), t.io);
     try t.expectString("n,,n=,r=", sasl4.client_first_message[0..8]);
 
     // The nonce should be random. It's unlikely that if we generate 4, we'd get
@@ -367,7 +368,7 @@ test "SASL: serverResponse invalid" {
     };
 
     defer t.reset();
-    var sasl = try SASL.init(t.arena.allocator());
+    var sasl = try SASL.init(t.arena.allocator(), t.io);
 
     for (test_cases) |tc| {
         try t.expectError(tc.expected, sasl.serverResponse(tc.input));
@@ -377,7 +378,7 @@ test "SASL: serverResponse invalid" {
 
 test "SASL: serverResponse" {
     defer t.reset();
-    var sasl = try SASL.init(t.arena.allocator());
+    var sasl = try SASL.init(t.arena.allocator(), t.io);
 
     try sasl.serverResponse("r=abc123,s=aaaaxa,i=4096");
     try t.expectString("abc123", sasl.server_response.?.nonce);
