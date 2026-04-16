@@ -35,6 +35,8 @@ pub fn main(init: Init) !void {
 
     Printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
+    std.testing.io_instance = .init(std.testing.allocator, .{});
+
     for (builtin.test_functions) |t| {
         if (isSetup(t)) {
             t.func() catch |err| {

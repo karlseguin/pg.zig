@@ -409,18 +409,18 @@ test "Pool" {
 
     const t1 = try std.Thread.spawn(.{}, testPool, .{pool});
     const t2 = try std.Thread.spawn(.{}, testPool, .{pool});
-    // const t3 = try std.Thread.spawn(.{}, testPool, .{pool});
+    const t3 = try std.Thread.spawn(.{}, testPool, .{pool});
 
     t1.join();
     t2.join();
-    // t3.join();
+    t3.join();
 
     {
         const c1 = try pool.acquire();
         defer c1.release();
 
         const affected = try c1.exec("delete from pool_test", .{});
-        try t.expectEqual(1000, affected.?);
+        try t.expectEqual(1500, affected.?);
     }
 }
 
