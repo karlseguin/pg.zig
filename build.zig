@@ -7,6 +7,12 @@ pub fn build(b: *std.Build) !void {
     // setup our dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
 
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/openssl.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Expose this as a module that others can import
     const pg_module = b.addModule("pg", .{
         .target = target,
@@ -15,6 +21,7 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
             .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
+            .{ .name = "openssl", .module = translate_c.createModule() },
         },
     });
 
@@ -25,7 +32,7 @@ pub fn build(b: *std.Build) !void {
 
     if (openssl_include_path) |p| {
         openssl = true;
-        pg_module.addIncludePath(p);
+        translate_c.addIncludePath(p);
     }
     if (openssl_lib_path) |p| {
         openssl = true;
@@ -65,6 +72,7 @@ pub fn build(b: *std.Build) !void {
                 .imports = &.{
                     .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
                     .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
+                    .{ .name = "openssl", .module = translate_c.createModule() },
                 },
             }),
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
@@ -72,7 +80,7 @@ pub fn build(b: *std.Build) !void {
         if (openssl_lib_path) |p|
             lib_test.root_module.addLibraryPath(p);
         if (openssl_include_path) |p|
-            lib_test.root_module.addIncludePath(p);
+            translate_c.addIncludePath(p);
         lib_test.root_module.linkSystemLibrary("crypto", .{});
         lib_test.root_module.linkSystemLibrary("ssl", .{});
 

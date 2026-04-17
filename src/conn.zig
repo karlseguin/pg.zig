@@ -63,7 +63,7 @@ pub const Conn = struct {
     _param_oids: []i32,
 
     // cache_name => data necessary to re-execute previously prepared statement.
-    _prepared_statements: std.StringHashMapUnmanaged(Stmt.Describe),
+    _prepared_statements: std.hash_map.StringHashMapUnmanaged(Stmt.Describe),
 
     const State = enum {
         idle,
@@ -100,7 +100,7 @@ pub const Conn = struct {
         database: ?[]const u8 = null,
         timeout: u32 = 10_000,
         application_name: ?[]const u8 = null,
-        startup_parameters: ?std.StringHashMap([]const u8) = null,
+        startup_parameters: ?std.hash_map.StringHashMap([]const u8) = null,
     };
 
     pub const QueryOpts = struct {
