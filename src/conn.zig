@@ -609,7 +609,7 @@ test "Conn: auth scram-sha-256 password" {
 }
 
 test "Conn: exec rowsAffected" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -634,7 +634,7 @@ test "Conn: exec rowsAffected" {
 }
 
 test "Conn: exec with values rowsAffected" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -644,7 +644,7 @@ test "Conn: exec with values rowsAffected" {
 }
 
 test "Conn: exec query that returns rows" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     _ = try c.exec("insert into simple_table values ('exec_sel_1'), ('exec_sel_2')", .{});
     try t.expectEqual(0, c.exec("select * from simple_table where value = 'none'", .{}));
@@ -652,7 +652,7 @@ test "Conn: exec query that returns rows" {
 }
 
 test "Conn: parse error" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     try t.expectError(error.PG, c.query("selct 1", .{}));
 
@@ -666,7 +666,7 @@ test "Conn: parse error" {
 }
 
 test "Conn: Query within Query error" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     var rows = try c.query("select 1", .{});
     defer rows.deinit();
@@ -678,7 +678,7 @@ test "Conn: Query within Query error" {
 test "PG: type support" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     var bytea1 = [_]u8{ 0, 1 };
     var bytea2 = [_]u8{ 255, 253, 253 };
@@ -1019,7 +1019,7 @@ test "PG: type support" {
 test "PG: binary support" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1129,7 +1129,7 @@ test "PG: binary support" {
 }
 
 test "PG: null support" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     {
         const result = c.exec(
@@ -1289,7 +1289,7 @@ test "PG: null support" {
 }
 
 test "PG: query column names" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     {
         var result = try c.query("select 1 as id, 'leto' as name", .{});
@@ -1308,7 +1308,7 @@ test "PG: query column names" {
 }
 
 test "PG: JSON struct" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1334,7 +1334,7 @@ test "PG: JSON struct" {
 }
 
 test "Conn: prepare" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     var stmt = try c.prepare("select $1::int where $2");
@@ -1351,7 +1351,7 @@ test "Conn: prepare" {
 }
 
 test "PG: row" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     const r1 = try c.row("select 1 where $1", .{false});
@@ -1373,7 +1373,7 @@ test "PG: row" {
 }
 
 test "PG: begin/commit" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     try c.begin();
@@ -1388,7 +1388,7 @@ test "PG: begin/commit" {
 }
 
 test "PG: begin/rollback" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     _ = try c.exec("delete from simple_table", .{});
@@ -1401,7 +1401,7 @@ test "PG: begin/rollback" {
 }
 
 test "PG: bind enums" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     _ = try c.exec(
@@ -1441,7 +1441,7 @@ test "PG: bind enums" {
 test "PG: numeric" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1532,7 +1532,7 @@ test "PG: numeric" {
 test "PG: char" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     // read
@@ -1553,7 +1553,7 @@ test "PG: char" {
 test "PG: bind []const u8" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const value: []const u8 = "hello";
 
@@ -1577,7 +1577,7 @@ test "PG: bind []const u8" {
 test "PG: bind []?i64" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const values = [_]?i64{ 1, null, 3 };
 
@@ -1607,7 +1607,7 @@ test "PG: bind []?i64" {
 test "PG: bind []?f64" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const values = [_]?f64{ null, null, 0.2, null };
 
@@ -1638,7 +1638,7 @@ test "PG: bind []?f64" {
 test "PG: bind []?bool" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const values = [_]?bool{ null, true, false, null };
 
@@ -1669,7 +1669,7 @@ test "PG: bind []?bool" {
 test "PG: bind []?[]const u8" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const values = [_]?[]const u8{ "hello", null, null };
 
@@ -1699,7 +1699,7 @@ test "PG: bind []?[]const u8" {
 test "PG: binary wrapper" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     _ = try c.exec(
@@ -1721,7 +1721,7 @@ test "PG: binary wrapper" {
 test "PG: isUnique" {
     defer t.reset();
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1743,7 +1743,7 @@ test "PG: isUnique" {
 }
 
 test "PG: large read" {
-    var c = t.connect(.{ .read_buffer = 500 });
+    var c = try t.connect(.{ .read_buffer = 500 });
     defer c.deinit();
 
     {
@@ -1765,7 +1765,7 @@ test "PG: large read" {
 }
 
 test "Conn: dynamic buffer freed on error" {
-    var c = t.connect(.{ .read_buffer = 100 });
+    var c = try t.connect(.{ .read_buffer = 100 });
     defer c.deinit();
 
     var rows = try c.query("select $1::text", .{"!" ** 200});
@@ -1781,7 +1781,7 @@ test "Conn: dynamic buffer freed on error" {
 }
 
 test "PG: Record" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1821,7 +1821,7 @@ test "Conn: application_name" {
 }
 
 test "PG: bind strictness" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     try t.expectError(error.BindWrongType, c.row("select $1", .{100}));
     try t.expectError(error.BindWrongType, c.row("select $1", .{10.2}));
@@ -1835,7 +1835,7 @@ test "PG: bind strictness" {
 }
 
 test "PG: eager error" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1856,8 +1856,7 @@ test "PG: eager error" {
 
 // https://github.com/karlseguin/pg.zig/issues/44
 test "PG: eager error conn state" {
-    const io = std.testing.io;
-    var pool = try lib.Pool.init(t.allocator, io, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var pool = try lib.Pool.init(t.allocator, t.io, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -1880,8 +1879,7 @@ test "PG: eager error conn state" {
 
 // https://github.com/karlseguin/pg.zig/issues/45
 test "PG: rollback during error" {
-    const io = std.testing.io;
-    var pool = try lib.Pool.init(t.allocator, io, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var pool = try lib.Pool.init(t.allocator, t.io, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     _ = try pool.exec("truncate table all_types", .{});
@@ -1926,23 +1924,23 @@ test "Conn: TLS required" {
         try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "no encryption") != null);
     }
 
-    // {
-    //     var conn = t.connect(.{ .tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
-    //     defer conn.deinit();
-    // }
+    {
+        var conn = try t.connect(.{ .tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        defer conn.deinit();
+    }
 }
 
 test "Conn: TLS verify-full" {
     try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.allocator, t.io, .{ .tls = .{ .verify_full = null } }));
 
     {
-        var conn = t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        var conn = try t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
         defer conn.deinit();
     }
 }
 
 test "PG: cached query" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1976,7 +1974,7 @@ test "PG: cached query" {
 }
 
 test "PG: cached query with column names" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {

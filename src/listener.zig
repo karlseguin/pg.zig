@@ -264,8 +264,8 @@ fn testListener(l: *Listener) !void {
     thrd.join();
 }
 
-fn testNotifier() void {
-    var c = t.connect(.{});
+fn testNotifier() !void {
+    var c = try t.connect(.{});
     defer c.deinit();
     _ = c.exec("select pg_notify($1, $2)", .{ "chan_x", "pl-x" }) catch unreachable;
     _ = c.exec("select pg_notify($1, $2)", .{ "chan-1", "pl-1" }) catch unreachable;
