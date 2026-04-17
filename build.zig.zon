@@ -9,9 +9,8 @@
             .hash = "N-V-__8AAEGLAACZXqfn1yrAh1MKBAy7tUw-fQIEFU9bopsi",
         },
         .metrics = .{
-            .path = "../metrics.zig",
-            // .url = "https://github.com/karlseguin/metrics.zig/archive/refs/heads/master.tar.gz",
-            // .hash = "metrics-0.0.0-W7G4ePy_AQBozb1s8-avLxHOd4thMO92zKXDW84tmAhf"
+            .url = "git+https://github.com/karlseguin/metrics.zig#6de29b83a750a06c438d268543e0e3c3c1b309da",
+            .hash = "metrics-0.0.0-W7G4eIegAQD4XxA9Co7Atbw59u_2zvxYf406AZuoAHPM",
         },
     },
 }
