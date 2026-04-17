@@ -12,5 +12,9 @@
             .url = "git+https://github.com/karlseguin/metrics.zig#6de29b83a750a06c438d268543e0e3c3c1b309da",
             .hash = "metrics-0.0.0-W7G4eIegAQD4XxA9Co7Atbw59u_2zvxYf406AZuoAHPM",
         },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c#46b5609b5ac4c0a896217d1d984f3ae50e4810b5",
+            .hash = "translate_c-0.0.0-Q_BUWpf0BgAwrh5AM-acJcslN_YPEhcoCVKbbNjwuUTJ",
+        },
     },
 }

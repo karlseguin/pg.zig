@@ -7,8 +7,10 @@ pub fn build(b: *std.Build) !void {
     // setup our dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
 
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/openssl.h"),
+    const Translator = @import("translate_c").Translator;
+    const translate_c = b.dependency("translate_c", .{});
+    const t: Translator = .init(translate_c, .{
+        .c_source_file = b.path("src/openssl.h"),
         .target = target,
         .optimize = optimize,
     });
@@ -21,7 +23,7 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
             .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
-            .{ .name = "openssl", .module = translate_c.createModule() },
+            .{ .name = "openssl", .module = t.mod },
         },
     });
 
@@ -32,7 +34,7 @@ pub fn build(b: *std.Build) !void {
 
     if (openssl_include_path) |p| {
         openssl = true;
-        translate_c.addIncludePath(p);
+        t.addIncludePath(p);
     }
     if (openssl_lib_path) |p| {
         openssl = true;
@@ -72,7 +74,7 @@ pub fn build(b: *std.Build) !void {
                 .imports = &.{
                     .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
                     .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
-                    .{ .name = "openssl", .module = translate_c.createModule() },
+                    .{ .name = "openssl", .module = t.mod },
                 },
             }),
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
@@ -80,7 +82,7 @@ pub fn build(b: *std.Build) !void {
         if (openssl_lib_path) |p|
             lib_test.root_module.addLibraryPath(p);
         if (openssl_include_path) |p|
-            translate_c.addIncludePath(p);
+            t.addIncludePath(p);
         lib_test.root_module.linkSystemLibrary("crypto", .{});
         lib_test.root_module.linkSystemLibrary("ssl", .{});
 
