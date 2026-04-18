@@ -550,6 +550,7 @@ pub const Conn = struct {
     }
 };
 
+const t = lib.testing;
 test "Conn: auth trust (no pass)" {
     var conn = try Conn.open(t.allocator, .{});
     defer conn.deinit();
