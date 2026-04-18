@@ -426,12 +426,16 @@ pub const Conn = struct {
     // just skipping over any data rows or any other in-flight messages there
     // might be.
     pub fn rollback(self: *Conn) !void {
+        return self.execIgnoringState("rollback");
+    }
+
+    pub fn execIgnoringState(self: *Conn, sql: []const u8) !void {
         var buf = &self._buf;
         buf.reset();
 
         const state = self._state;
 
-        const simple_query = proto.Query{ .sql = "rollback" };
+        const simple_query = proto.Query{ .sql = sql };
         try simple_query.write(buf);
         try self.write(buf.string());
         while (true) {
@@ -546,7 +550,6 @@ pub const Conn = struct {
     }
 };
 
-const t = lib.testing;
 test "Conn: auth trust (no pass)" {
     var conn = try Conn.open(t.allocator, .{});
     defer conn.deinit();
