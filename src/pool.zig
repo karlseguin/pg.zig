@@ -43,12 +43,12 @@ pub const Pool = struct {
         in_use: usize,
     };
 
-    pub fn initUri(allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
+    pub fn initUri(allocator: Allocator, io: Io, uri: std.Uri, opts: Opts) !*Pool {
         var po = try lib.parseOpts(uri, allocator);
         defer po.deinit();
         po.opts.size = opts.size;
         po.opts.timeout = opts.timeout;
-        return Pool.init(allocator, po.opts);
+        return Pool.init(allocator, io, po.opts);
     }
 
     pub fn init(allocator: Allocator, io: Io, opts: Opts) !*Pool {
@@ -302,12 +302,12 @@ const Reconnector = struct {
         };
     }
 
-    fn run(self: *Reconnector) Io.Cancelable!void {
+    fn run(self: *Reconnector) void {
         const pool = self.pool;
         const io = pool._io;
         const retry_delay = 2 * std.time.ns_per_s;
 
-        try self.mutex.lock(io);
+        self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         loop: while (self.count > 0) {
             const stopped = self.stopped;
@@ -317,8 +317,8 @@ const Reconnector = struct {
             }
 
             const conn = newConnection(pool, false) catch {
-                try std.Io.sleep(io, .fromNanoseconds(retry_delay), .awake);
-                try self.mutex.lock(io);
+                std.Io.sleep(io, .fromNanoseconds(retry_delay), .awake) catch {};
+                self.mutex.lockUncancelable(io);
                 continue :loop;
             };
 
@@ -329,7 +329,7 @@ const Reconnector = struct {
             pool._mutex.unlock(io);
 
             conn.release(); // inserts it into the pool
-            try self.mutex.lock(io);
+            self.mutex.lockUncancelable(io);
             self.count -= 1;
         }
 
