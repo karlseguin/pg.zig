@@ -62,17 +62,18 @@ pub const Listener = struct {
         self._buf.deinit();
         self._reader.deinit();
 
-        self.stop();
+        self.stop() catch {};
+        self._stream.close();
     }
 
-    pub fn stop(self: *Listener) void {
+    pub fn stop(self: *Listener) !void {
         if (@atomicRmw(bool, &self.closed, .Xchg, true, .monotonic) == true) {
             return;
         }
 
         // try to send a Terminate to the DB
         self._stream.writeAll(&.{ 'X', 0, 0, 0, 4 }) catch {};
-        self._stream.close();
+        return self._stream.shutdown(.both);
     }
 
     pub fn auth(self: *Listener, opts: Conn.AuthOpts) !void {
@@ -156,6 +157,10 @@ pub const Listener = struct {
     }
 
     pub fn next(self: *Listener) ?NotificationResponse {
+        if (@atomicLoad(bool, &self.closed, .acquire) == true) {
+            return null;
+        }
+
         const msg = self.read() catch |err| {
             self.err = .{ .err = err };
             return null;
@@ -230,9 +235,9 @@ fn testListener(l: *Listener) !void {
     const io = t.io;
     var reset: std.Io.Event = .unset;
     var tt = try std.Thread.spawn(.{}, struct {
-        fn shutdown(io_p: Io, ll: *Listener, r: *std.Io.Event) Io.Cancelable!void {
+        fn shutdown(io_p: Io, ll: *Listener, r: *std.Io.Event) !void {
             try r.wait(io_p);
-            ll.stop();
+            try ll.stop();
         }
     }.shutdown, .{ io, l, &reset });
     tt.detach();
@@ -260,7 +265,7 @@ fn testListener(l: *Listener) !void {
     }
 
     reset.set(io);
-    // try t.expectEqual(null, l.next());
+    try t.expectEqual(null, l.next());
     thrd.join();
 }
 

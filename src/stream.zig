@@ -102,6 +102,10 @@ const TLSStream = struct {
         self.stream.close(self.io);
     }
 
+    pub fn shutdown(self: *const Stream, how: ShutdownHow) !void {
+        return sockShutdown(self.stream.socket.handle, how);
+    }
+
     pub fn writeAll(self: *Stream, data: []const u8) !void {
         if (self.ssl) |ssl| {
             const result = openssl.SSL_write(ssl, data.ptr, @intCast(data.len));
@@ -159,6 +163,11 @@ const PlainStream = struct {
         self.stream.close(self.io);
     }
 
+    pub fn shutdown(self: *const PlainStream, how: ShutdownHow) !void {
+        const sock = self.stream.socket.handle;
+        sockShutdown(sock, how);
+    }
+
     pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
         return writeStream(self.stream, self.io, data);
     }
@@ -168,6 +177,44 @@ const PlainStream = struct {
     }
 };
 
+const ShutdownHow = enum { recv, send, both };
+fn sockShutdown(sock: posix.socket_t, how: ShutdownHow) !void {
+    const native_os = @import("builtin").os.tag;
+    if (native_os == .windows) {
+        const windows = std.os.windows;
+        const result = windows.ws2_32.shutdown(sock, switch (how) {
+            .recv => windows.ws2_32.SD_RECEIVE,
+            .send => windows.ws2_32.SD_SEND,
+            .both => windows.ws2_32.SD_BOTH,
+        });
+        if (0 != result) switch (windows.ws2_32.WSAGetLastError()) {
+            .WSAECONNABORTED => return error.ConnectionAborted,
+            .WSAECONNRESET => return error.ConnectionResetByPeer,
+            .WSAEINPROGRESS => return error.BlockingOperationInProgress,
+            .WSAEINVAL => unreachable,
+            .WSAENETDOWN => return error.NetworkSubsystemFailed,
+            .WSAENOTCONN => return error.SocketNotConnected,
+            .WSAENOTSOCK => unreachable,
+            .WSANOTINITIALISED => unreachable,
+            else => |err| return windows.unexpectedWSAError(err),
+        };
+    } else {
+        const rc = posix.system.shutdown(sock, switch (how) {
+            .recv => posix.system.SHUT.RD,
+            .send => posix.system.SHUT.WR,
+            .both => posix.system.SHUT.RDWR,
+        });
+        switch (posix.errno(rc)) {
+            .SUCCESS => return,
+            .BADF => unreachable,
+            .INVAL => unreachable,
+            .NOTCONN => return error.SocketNotConnected,
+            .NOTSOCK => unreachable,
+            .NOBUFS => return error.SystemResources,
+            else => return error.Unexpected,
+        }
+    }
+}
 fn readStream(stream: Io.net.Stream, io: Io, buf: []u8) !usize {
     var vecs: [1][]u8 = .{buf};
     var reader = stream.reader(io, &.{});
