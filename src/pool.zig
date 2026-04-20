@@ -43,15 +43,15 @@ pub const Pool = struct {
         in_use: usize,
     };
 
-    pub fn initUri(allocator: Allocator, io: Io, uri: std.Uri, opts: Opts) !*Pool {
+    pub fn initUri(io: Io, allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
         var po = try lib.parseOpts(uri, allocator);
         defer po.deinit();
         po.opts.size = opts.size;
         po.opts.timeout = opts.timeout;
-        return Pool.init(allocator, io, po.opts);
+        return Pool.init(io, allocator, po.opts);
     }
 
-    pub fn init(allocator: Allocator, io: Io, opts: Opts) !*Pool {
+    pub fn init(io: Io, allocator: Allocator, opts: Opts) !*Pool {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const aa = arena.allocator();
         errdefer arena.deinit();
@@ -211,7 +211,7 @@ pub const Pool = struct {
     }
 
     pub fn newListener(self: *Pool) !Listener {
-        var listener = try Listener.open(self._allocator, self._io, self._opts.connect);
+        var listener = try Listener.open(self._io, self._allocator, self._opts.connect);
         try listener.auth(self._opts.auth);
         return listener;
     }
@@ -369,7 +369,7 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
     };
     errdefer allocator.destroy(conn);
 
-    conn.* = Conn.open(allocator, io, opts.connect) catch |err| {
+    conn.* = Conn.open(io, allocator, opts.connect) catch |err| {
         if (log_failure) log.err("connect error: {}", .{err});
         return err;
     };
@@ -391,7 +391,7 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
 
 const t = lib.testing;
 test "Pool" {
-    var pool = try Pool.init(t.allocator, t.io, .{
+    var pool = try Pool.init(t.io, t.allocator, .{
         .size = 2,
         .auth = t.authOpts(.{}),
         .connect_on_init_count = 1,
@@ -425,7 +425,7 @@ test "Pool" {
 }
 
 test "Pool: Release" {
-    var pool = try Pool.init(t.allocator, t.io, .{
+    var pool = try Pool.init(t.io, t.allocator, .{
         .size = 2,
         .auth = .{
             .database = "postgres",
@@ -441,7 +441,7 @@ test "Pool: Release" {
 }
 
 test "Pool: stats" {
-    var pool = try Pool.init(t.allocator, t.io, .{
+    var pool = try Pool.init(t.io, t.allocator, .{
         .size = 3,
         .auth = t.authOpts(.{}),
     });
@@ -498,7 +498,7 @@ test "Pool: stats" {
 }
 
 test "Pool: exec" {
-    var pool = try Pool.init(t.allocator, t.io, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -514,7 +514,7 @@ test "Pool: exec" {
 }
 
 test "Pool: Query/Row" {
-    var pool = try Pool.init(t.allocator, t.io, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -547,7 +547,7 @@ test "Pool: Query/Row" {
 }
 
 test "Pool: Row error" {
-    var pool = try Pool.init(t.allocator, t.io, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     _ = try pool.rowUnsafe("insert into all_types (id) values ($1)", .{200});

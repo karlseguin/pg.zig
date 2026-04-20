@@ -4,6 +4,9 @@ A native PostgresSQL driver / client for Zig. Supports [LISTEN](#listen--notify)
 
 See or run [example/main.zig](https://github.com/karlseguin/pg.zig/blob/master/example/main.zig) for a number of examples.
 
+## Zig Version
+This is for Zig 0.16.0. Use the [zig-0.15.2](https://github.com/karlseguin/pg.zig/tree/zig-0.15) branch for Zig 0.15 or the [dev](https://github.com/karlseguin/pg.zig/tree/dev) which may or may not be up to date with zig dev.
+
 ## Install
 1) Add pg.zig as a dependency in your `build.zig.zon`:
 
@@ -28,7 +31,7 @@ const exe = b.addExecutable(.{
 
 ## Example
 ```zig
-var pool = try pg.Pool.init(allocator, .{
+var pool = try pg.Pool.init(io, allocator, .{
   .size = 5,
   .connect = .{
     .port = 5432,
@@ -56,7 +59,7 @@ while (try result.next()) |row| {
 ## Pool
 The pool keeps a configured number of database connection open. The `acquire()` method is used to retrieve a connection from the pool. The pool may start one background thread to attempt to reconnect disconnected connections (or connections which are in an invalid state).
 
-### init(allocator: std.mem.allocator, opts: Opts) !*Pool
+### init(io: std.Io, allocator: std.mem.allocator, opts: Opts) !\*Pool
 Initializes a connection pool. Pool options are:
 
 * `size` - Number of connections to maintain. Defaults to `10`.
@@ -65,7 +68,7 @@ Initializes a connection pool. Pool options are:
 * `timeout`: - The amount of time, in milliseconds, to wait for a connection to be available when `acquire()` is called.
 * `connect_on_init_count`:  - The # of connections in the pool to eagerly connect during `init`. Defaults to `null` which will initiliaze all connections (`size`). The background reconnector is used to setup the remaining (`size - connect_on_init_count`) connections. This can be set to `0`, to prevent `init` from failing except in extreme cases (i.e. OOM), but that will hide any configuration/connection issue until the first query is executed.
 
-### initUri(allocator: std.mem.Allocator, uri: std.Uri, opts: Opts) !*Pool
+### initUri(io: std.Io, allocator: std.mem.Allocator, uri: std.Uri, opts: Opts) !\*Pool
 Initializes a connection pool using a std.Uri. When using this function, the `auth` and `connect` fields of `opts` should **not** be set, as these will automatically set based on the provided `uri`.
 
 ```zig
@@ -101,7 +104,7 @@ For single-query operations, the pool offers wrappers around the connection's `e
 
 ## Conn
 
-### open(allocator: std.mem.Allocator, opts: Opts) !Conn
+### open(io: std.Io, allocator: std.mem.Allocator, opts: Opts) !Conn
 Opens a connection, or returns an error. Prefer creating connections through the pool. Connection options are:
 
 * `host` - Defaults to `"127.0.0.1"`

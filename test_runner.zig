@@ -45,7 +45,7 @@ pub fn main(init: std.process.Init) !void {
 
     const io = std.testing.io;
 
-    var slowest = SlowTracker.init(allocator, io, 5);
+    var slowest = SlowTracker.init(io, allocator, 5);
     defer slowest.deinit();
 
     var pass: usize = 0;
@@ -186,7 +186,7 @@ const SlowTracker = struct {
 
     const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
 
-    fn init(allocator: Allocator, io: Io, count: u32) SlowTracker {
+    fn init(io: Io, allocator: Allocator, count: u32) SlowTracker {
         const timestamp = Io.Clock.awake.now(io);
         var slowest: SlowestQueue = .empty;
         slowest.ensureTotalCapacity(allocator, count) catch @panic("OOM");

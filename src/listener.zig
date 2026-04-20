@@ -36,8 +36,8 @@ pub const Listener = struct {
 
     _io: Io,
 
-    pub fn open(allocator: Allocator, io: Io, opts: Conn.Opts) !Listener {
-        var stream = try Stream.connect(allocator, io, opts, null);
+    pub fn open(io: Io, allocator: Allocator, opts: Conn.Opts) !Listener {
+        var stream = try Stream.connect(io, allocator, opts, null);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
@@ -207,14 +207,14 @@ pub const Listener = struct {
 
 const t = lib.testing;
 test "Listener" {
-    var l = try Listener.open(t.allocator, t.io, .{ .host = "127.0.0.1" });
+    var l = try Listener.open(t.io, t.allocator, .{ .host = "127.0.0.1" });
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
 }
 
 test "Listener: from Pool" {
-    var pool = try lib.Pool.init(t.allocator, t.io, .{
+    var pool = try lib.Pool.init(t.io, t.allocator, .{
         .size = 1,
         .auth = t.authOpts(.{}),
     });

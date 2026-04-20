@@ -19,8 +19,8 @@ const TLSStream = struct {
     stream: Io.net.Stream,
     io: Io,
 
-    pub fn connect(allocator: Allocator, io: Io, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
-        const plain = try PlainStream.connect(allocator, io, opts, null);
+    pub fn connect(io: Io, allocator: Allocator, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
+        const plain = try PlainStream.connect(io, allocator, opts, null);
         errdefer plain.close();
 
         const stream = plain.stream;
@@ -133,7 +133,7 @@ const PlainStream = struct {
     io: Io,
     stream: Io.net.Stream,
 
-    pub fn connect(_: Allocator, io: Io, opts: Conn.Opts, _: anytype) !PlainStream {
+    pub fn connect(io: Io, _: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
         const stream = try blk: {
             const host = opts.host orelse DEFAULT_HOST;
             if (host.len > 0 and host[0] == '/') {
