@@ -382,7 +382,7 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
             return value;
         }
 
-        fn mapColumn(self: *const Self, field: *const std.builtin.Type.StructField, optional_column_index: ?usize, allocator: ?Allocator) !field.type {
+        fn mapColumn(self: *const Self, comptime field: *const std.builtin.Type.StructField, optional_column_index: ?usize, allocator: ?Allocator) !field.type {
             const T = field.type;
             const column_index = optional_column_index orelse {
                 if (field.default_value_ptr) |dflt| {
@@ -803,7 +803,7 @@ pub fn RecordT(comptime fail_mode: lib.FailMode) type {
 const t = lib.testing;
 
 test "Result: ints" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::smallint, $2::int, $3::bigint";
 
@@ -871,7 +871,7 @@ test "Result: ints" {
 }
 
 test "Result: floats" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::float4, $2::float8";
 
@@ -911,7 +911,7 @@ test "Result: floats" {
 }
 
 test "Result: bool" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::bool";
 
@@ -949,7 +949,7 @@ test "Result: bool" {
 }
 
 test "Result: text and bytea" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::text, $2::bytea";
 
@@ -1021,7 +1021,7 @@ fn constString() []const u8 {
 }
 
 test "Result: optional" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::int, $2::int";
 
@@ -1039,7 +1039,7 @@ test "Result: optional" {
 }
 
 test "Result: iterator" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1141,7 +1141,7 @@ test "Result: iterator" {
 }
 
 test "Result: null iterator" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1172,7 +1172,7 @@ test "Result: null iterator" {
 }
 
 test "Result: int[]" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::smallint[], $2::int[], $3::bigint[]";
 
@@ -1195,7 +1195,7 @@ test "Result: int[]" {
 }
 
 test "Result: float[]" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::float4[], $2::float8[]";
 
@@ -1214,7 +1214,7 @@ test "Result: float[]" {
 }
 
 test "Result: bool[]" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::bool[]";
 
@@ -1229,7 +1229,7 @@ test "Result: bool[]" {
 }
 
 test "Result: text[] & bytea[]" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::text[], $2::bytea[]";
 
@@ -1262,7 +1262,7 @@ test "Result: text[] & bytea[]" {
 }
 
 test "Result: text[] alloc dupes" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     var arr1: [][]const u8 = undefined;
@@ -1296,7 +1296,7 @@ test "Result: text[] alloc dupes" {
 }
 
 test "Result: UUID" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::uuid, $2::uuid";
     var result = try c.query(sql, .{ "fcbebf0f-b996-43b9-9818-672bc689cda8", &[_]u8{ 174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222 } });
@@ -1308,7 +1308,7 @@ test "Result: UUID" {
 }
 
 test "Result: lsn" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::pg_lsn + 1";
     var result = try c.query(sql, .{32788447688});
@@ -1319,7 +1319,7 @@ test "Result: lsn" {
 }
 
 test "Row: column names" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select 923 as id, 'Leto' as name";
     var row = (try c.rowUnsafeOpts(sql, .{}, .{ .column_names = true })).?;
@@ -1330,7 +1330,7 @@ test "Row: column names" {
 }
 
 test "Result: mutable []u8" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select 'Leto'";
     var row = (try c.rowUnsafe(sql, .{})).?;
@@ -1342,7 +1342,7 @@ test "Result: mutable []u8" {
 }
 
 test "Result: mutable [][]u8" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select array['Leto', 'Test']::text[]";
     var row = (try c.rowUnsafe(sql, .{})).?;
@@ -1374,7 +1374,7 @@ test "Row.to: ordinal" {
         };
     };
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1469,7 +1469,7 @@ test "Row.to: name no map" {
         note: ?[]const u8 = null,
     };
 
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1584,7 +1584,7 @@ test "Row.to: name no map" {
 }
 
 test "Result.Mapper" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1670,7 +1670,7 @@ test "Row.to: iterator" {
     };
 
     defer t.reset();
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1754,7 +1754,7 @@ test "Row.to: array" {
     };
 
     defer t.reset();
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     {
@@ -1789,7 +1789,7 @@ test "Row.to: array" {
 }
 
 test "Result: safe" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     const sql = "select $1::int, $2::int";
 

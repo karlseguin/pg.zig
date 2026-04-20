@@ -1,10 +1,7 @@
 // Exposed within this library
 const std = @import("std");
 
-pub const openssl = @cImport({
-    @cInclude("openssl/ssl.h");
-    @cInclude("openssl/err.h");
-});
+pub const openssl = @import("openssl");
 
 const build_config = @import("config");
 
@@ -176,7 +173,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
         }
     }
 
-    const path = std.mem.trimLeft(u8, try uri.path.toRawMaybeAlloc(aa), "/");
+    const path = std.mem.trimStart(u8, try uri.path.toRawMaybeAlloc(aa), "/");
     const host = if (uri.host) |host| try host.toRawMaybeAlloc(aa) else null;
     const username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres";
     const password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null;

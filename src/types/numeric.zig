@@ -91,10 +91,10 @@ pub const Numeric = struct {
     fn encodeValue(value: anytype, buf: *buffer.Buffer) !void {
         // turn our float into a string
         var str_buf: [512]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&str_buf);
+        var stream: std.Io.Writer = .fixed(&str_buf);
+        try stream.print("{d}", .{value});
 
-        try std.fmt.format(stream.writer(), "{d}", .{value});
-        return encodeValidString(stream.getWritten(), buf);
+        return encodeValidString(stream.buffered(), buf);
     }
 
     pub fn decode(comptime fail_mode: lib.FailMode, data: []const u8, data_oid: i32) if (fail_mode == .unsafe) Numeric else lib.TypeError!Numeric {

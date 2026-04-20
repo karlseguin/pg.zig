@@ -7,6 +7,14 @@ pub fn build(b: *std.Build) !void {
     // setup our dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
 
+    const Translator = @import("translate_c").Translator;
+    const translate_c = b.dependency("translate_c", .{});
+    const t: Translator = .init(translate_c, .{
+        .c_source_file = b.path("src/openssl.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Expose this as a module that others can import
     const pg_module = b.addModule("pg", .{
         .target = target,
@@ -15,6 +23,7 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
             .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
+            .{ .name = "openssl", .module = t.mod },
         },
     });
 
@@ -25,7 +34,7 @@ pub fn build(b: *std.Build) !void {
 
     if (openssl_include_path) |p| {
         openssl = true;
-        pg_module.addIncludePath(p);
+        t.addIncludePath(p);
     }
     if (openssl_lib_path) |p| {
         openssl = true;
@@ -65,16 +74,17 @@ pub fn build(b: *std.Build) !void {
                 .imports = &.{
                     .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
                     .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
+                    .{ .name = "openssl", .module = t.mod },
                 },
             }),
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
         });
         if (openssl_lib_path) |p|
-            lib_test.addLibraryPath(p);
+            lib_test.root_module.addLibraryPath(p);
         if (openssl_include_path) |p|
-            lib_test.addIncludePath(p);
-        lib_test.linkSystemLibrary("crypto");
-        lib_test.linkSystemLibrary("ssl");
+            t.addIncludePath(p);
+        lib_test.root_module.linkSystemLibrary("crypto", .{});
+        lib_test.root_module.linkSystemLibrary("ssl", .{});
 
         {
             const options = b.addOptions();

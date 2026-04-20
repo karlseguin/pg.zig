@@ -70,15 +70,17 @@ fn ReaderT(comptime T: type) type {
         // requires more than static.len other rows within the same result might
         // as well.
         pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
+            // FIX: set timeout
             if (timeout_ms) |ms| {
-                const timeval = std.mem.toBytes(posix.timeval{
-                    .sec = @intCast(@divTrunc(ms, 1000)),
-                    .usec = @intCast(@mod(ms, 1000) * 1000),
-                });
-                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
+                _ = ms; // autofix
+                // const timeval = std.mem.toBytes(posix.timeval{
+                //     .sec = @intCast(@divTrunc(ms, 1000)),
+                //     .usec = @intCast(@mod(ms, 1000) * 1000),
+                // });
+                // try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
                 self.has_timeout = true;
             } else if (self.has_timeout) {
-                try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
+                // try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
                 self.has_timeout = false;
             }
 

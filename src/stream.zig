@@ -7,6 +7,7 @@ const posix = std.posix;
 
 const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 const DEFAULT_HOST = "127.0.0.1";
 
@@ -15,20 +16,21 @@ pub const Stream = if (lib.has_openssl) TLSStream else PlainStream;
 const TLSStream = struct {
     valid: bool,
     ssl: ?*openssl.SSL,
-    socket: posix.socket_t,
+    stream: Io.net.Stream,
+    io: Io,
 
-    pub fn connect(allocator: Allocator, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
-        const plain = try PlainStream.connect(allocator, opts, null);
+    pub fn connect(allocator: Allocator, io: Io, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
+        const plain = try PlainStream.connect(allocator, io, opts, null);
         errdefer plain.close();
 
-        const socket = plain.socket;
+        const stream = plain.stream;
 
         var ssl: ?*openssl.SSL = null;
         if (ctx_) |ctx| {
             // PostgreSQL TLS starts off as a plain connection which we upgrade
-            try writeSocket(socket, &.{ 0, 0, 0, 8, 4, 210, 22, 47 });
+            try writeStream(stream, io, &.{ 0, 0, 0, 8, 4, 210, 22, 47 });
             var buf = [1]u8{0};
-            _ = try readSocket(socket, &buf);
+            _ = try readStream(stream, io, &buf);
             if (buf[0] != 'S') {
                 return error.SSLNotSupportedByServer;
             }
@@ -59,7 +61,7 @@ const TLSStream = struct {
                 }
             }
 
-            if (openssl.SSL_set_fd(ssl, if (@import("builtin").os.tag == .windows) @intCast(@intFromPtr(socket)) else socket) != 1) {
+            if (openssl.SSL_set_fd(ssl, if (@import("builtin").os.tag == .windows) @intCast(@intFromPtr(stream.socket.handle)) else stream.socket.handle) != 1) {
                 return error.SSLSetFdFailed;
             }
 
@@ -84,7 +86,8 @@ const TLSStream = struct {
         return .{
             .ssl = ssl,
             .valid = true,
-            .socket = socket,
+            .stream = stream,
+            .io = io,
         };
     }
 
@@ -96,7 +99,7 @@ const TLSStream = struct {
             }
             openssl.SSL_free(ssl);
         }
-        posix.close(self.socket);
+        self.stream.close(self.io);
     }
 
     pub fn writeAll(self: *Stream, data: []const u8) !void {
@@ -108,7 +111,7 @@ const TLSStream = struct {
             }
             return;
         }
-        return writeSocket(self.socket, data);
+        return writeStream(self.stream, self.io, data);
     }
 
     pub fn read(self: *Stream, buf: []u8) !usize {
@@ -122,66 +125,68 @@ const TLSStream = struct {
             return read_len;
         }
 
-        return readSocket(self.socket, buf);
+        return readStream(self.stream, self.io, buf);
     }
 };
 
 const PlainStream = struct {
-    socket: posix.socket_t,
+    io: Io,
+    stream: Io.net.Stream,
 
-    pub fn connect(allocator: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
-        const socket = blk: {
+    pub fn connect(_: Allocator, io: Io, opts: Conn.Opts, _: anytype) !PlainStream {
+        const stream = try blk: {
             const host = opts.host orelse DEFAULT_HOST;
             if (host.len > 0 and host[0] == '/') {
-                if (comptime std.net.has_unix_sockets == false or std.posix.AF == void) {
+                if (comptime Io.net.has_unix_sockets == false or std.posix.AF == void) {
                     return error.UnixPathNotSupported;
                 }
-                break :blk (try std.net.connectUnixSocket(host)).handle;
+                const addr: Io.net.UnixAddress = try .init(host);
+                break :blk addr.connect(io);
             }
             const port = opts.port orelse 5432;
-            break :blk (try std.net.tcpConnectToHost(allocator, host, port)).handle;
+            const hostname: Io.net.HostName = try .init(host);
+            break :blk hostname.connect(io, port, .{ .mode = .stream });
         };
-        errdefer posix.close(socket);
+        errdefer stream.close(io);
 
         return .{
-            .socket = socket,
+            .io = io,
+            .stream = stream,
         };
     }
 
     pub fn close(self: *const PlainStream) void {
-        posix.close(self.socket);
+        self.stream.close(self.io);
     }
 
     pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
-        return writeSocket(self.socket, data);
+        return writeStream(self.stream, self.io, data);
     }
 
     pub fn read(self: *const PlainStream, buf: []u8) !usize {
-        return readSocket(self.socket, buf);
+        return readStream(self.stream, self.io, buf);
     }
 };
 
-fn readSocket(socket: posix.socket_t, buf: []u8) !usize {
-    const stream: std.net.Stream = .{ .handle = socket };
+fn readStream(stream: Io.net.Stream, io: Io, buf: []u8) !usize {
     var vecs: [1][]u8 = .{buf};
-    var reader = stream.reader(&.{});
-    const r = reader.interface();
+    var reader = stream.reader(io, &.{});
+    const r = &reader.interface;
     return try r.readVec(&vecs);
 }
 
-fn writeSocket(socket: posix.socket_t, data: []const u8) !void {
-    const stream: std.net.Stream = .{ .handle = socket };
+fn writeStream(stream: Io.net.Stream, io: Io, data: []const u8) !void {
     var buf: [1024]u8 = undefined;
-    var writer = stream.writer(&buf);
+    var writer = stream.writer(io, &buf);
     const w = &writer.interface;
     try w.writeAll(data);
     try w.flush();
 }
 
 fn isHostName(host: []const u8) bool {
-    if (std.mem.indexOfScalar(u8, host, ':') != null) {
+    if (std.mem.findScalar(u8, host, ':') != null) {
         // IPv6
         return false;
     }
-    return std.mem.indexOfNone(u8, host, "0123456789.") != null;
+    return std.mem.findNone(u8, host, "0123456789.") != null;
 }

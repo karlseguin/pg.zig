@@ -28,7 +28,7 @@ pub fn writeMetrics(writer: anytype) !void {
 }
 
 const t = lib.testing;
-test {
+test "tests:beforeAll" {
     try t.setup();
     std.testing.refAllDecls(@This());
 }
