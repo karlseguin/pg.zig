@@ -6,10 +6,11 @@ const proto = lib.proto;
 const types = lib.types;
 const Pool = lib.Pool;
 const Stmt = lib.Stmt;
-const SSLCtx = lib.SSLCtx;
 const Reader = lib.Reader;
 const Result = lib.Result;
 const Stream = lib.Stream;
+const StreamReader = lib.StreamReader;
+const StreamWriter = lib.StreamWriter;
 const Timeout = lib.Timeout;
 const QueryRow = lib.QueryRow;
 const QueryRowUnsafe = lib.QueryRowUnsafe;
@@ -21,10 +22,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const Io = std.Io;
 
 pub const Conn = struct {
-    // If we own the ssl context (which only happens if the connection is
-    // created directly and NOT through a pool), then we have to free it
-    _ssl_ctx: ?*SSLCtx,
-
     // If we get a postgreSQL error, this will be set.
     err: ?proto.Error,
 
@@ -43,7 +40,13 @@ pub const Conn = struct {
     _buf: Buffer,
 
     // Used to read data from PG. Has its own buffer which can grow dynamically
-    _reader: Reader,
+    _pgreader: Reader,
+
+    _reader_buffer: []u8,
+    _reader: *StreamReader,
+
+    _writer_buffer: []u8,
+    _writer: *StreamWriter,
 
     _allocator: Allocator,
 
@@ -83,6 +86,8 @@ pub const Conn = struct {
         port: ?u16 = null,
         write_buffer: ?u16 = null,
         read_buffer: ?u16 = null,
+        reader_buffer: u16 = 1024,
+        writer_buffer: u16 = 1024,
         result_state_size: u16 = 32,
         tls: TLS = .off,
         _hostz: ?[:0]const u8 = null,
@@ -134,31 +139,26 @@ pub const Conn = struct {
     }
 
     pub fn open(io: Io, allocator: Allocator, opts: Opts) !Conn {
-        var ssl_ctx: ?*SSLCtx = null;
-        switch (opts.tls) {
-            .off => {},
-            else => |tls_config| {
-                if (comptime lib.has_openssl == false) {
-                    return error.OpenSSLNotConfigured;
-                }
-                ssl_ctx = try lib.initializeSSLContext(tls_config);
-            },
-        }
-        errdefer lib.freeSSLContext(ssl_ctx);
-        var conn = try openWithContext(io, allocator, opts, ssl_ctx);
-        conn._ssl_ctx = ssl_ctx;
-        return conn;
-    }
-
-    pub fn openWithContext(io: Io, allocator: Allocator, opts: Opts, ssl_ctx: ?*SSLCtx) !Conn {
-        var stream = try Stream.connect(io, allocator, opts, ssl_ctx);
+        var stream = try Stream.connect(io, allocator, opts, opts.tls);
         errdefer stream.close();
+
+        const reader_buffer = try allocator.alloc(u8, opts.reader_buffer);
+        errdefer allocator.free(reader_buffer);
+        var reader = try allocator.create(StreamReader);
+        errdefer allocator.destroy(reader);
+        reader.* = stream.reader(reader_buffer);
+
+        const writer_buffer = try allocator.alloc(u8, opts.writer_buffer);
+        errdefer allocator.free(writer_buffer);
+        const writer = try allocator.create(StreamWriter);
+        errdefer allocator.destroy(writer);
+        writer.* = stream.writer(writer_buffer);
 
         const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));
         errdefer buf.deinit();
 
-        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
-        errdefer reader.deinit();
+        const pg_reader = try Reader.init(allocator, opts.read_buffer orelse 4096, reader.interface());
+        errdefer pg_reader.deinit();
 
         const result_state = try Result.State.init(allocator, opts.result_state_size);
         errdefer result_state.deinit(allocator);
@@ -169,8 +169,11 @@ pub const Conn = struct {
         return .{
             .err = null,
             ._buf = buf,
-            ._ssl_ctx = null,
+            ._pgreader = pg_reader,
             ._reader = reader,
+            ._reader_buffer = reader_buffer,
+            ._writer = writer,
+            ._writer_buffer = writer_buffer,
             ._stream = stream,
             ._err_data = null,
             ._state = .idle,
@@ -188,14 +191,20 @@ pub const Conn = struct {
             allocator.free(err_data);
         }
         self._buf.deinit();
-        self._reader.deinit();
+        self._pgreader.deinit();
         allocator.free(self._param_oids);
         self._result_state.deinit(allocator);
 
         // try to send a Terminate to the DB
-        self.write(&.{ 'X', 0, 0, 0, 4 }) catch {};
-        lib.freeSSLContext(self._ssl_ctx);
+        const w = self._writer.interface();
+        w.writeAll(&.{ 'X', 0, 0, 0, 4 }) catch {};
+        w.flush() catch {};
         self._stream.close();
+
+        allocator.free(self._reader_buffer);
+        allocator.destroy(self._reader);
+        allocator.free(self._writer_buffer);
+        allocator.destroy(self._writer);
 
         var it = self._prepared_statements.valueIterator();
         while (it.next()) |value_ptr| {
@@ -214,7 +223,8 @@ pub const Conn = struct {
     }
 
     pub fn auth(self: *Conn, opts: AuthOpts) !void {
-        if (try lib.auth.auth(self._io, &self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
+        const w = self._writer.interface();
+        if (try lib.auth.auth(self._io, w, &self._pgreader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
 
@@ -259,7 +269,7 @@ pub const Conn = struct {
                 stmt = try Stmt.fromDescribe(self, describe, opts);
                 errdefer stmt.deinit();
 
-                try self._reader.startFlow(stmt.arena.allocator(), opts.timeout);
+                try self._pgreader.startFlow(stmt.arena.allocator(), opts.timeout);
                 // Send a "SYNC" command
                 try self.write(&.{ 'S', 0, 0, 0, 4 });
                 stmt.buf.reset();
@@ -361,23 +371,22 @@ pub const Conn = struct {
         if (self.canQuery() == false) {
             return error.ConnectionBusy;
         }
-        var buf = &self._buf;
-        buf.reset();
+
+        const w = self._writer.interface();
 
         if (values.len == 0) {
-            try self._reader.startFlow(opts.allocator, opts.timeout);
-            defer self._reader.endFlow() catch {
+            try self._pgreader.startFlow(opts.allocator, opts.timeout);
+            defer self._pgreader.endFlow() catch {
                 // this can only fail in extreme conditions (OOM) and it will only impact
                 // the next query (and if the app is using the pool, the pool will try to
                 // recover from this anyways)
                 self._state = .fail;
             };
             const simple_query = proto.Query{ .sql = sql };
-            try simple_query.write(buf);
             // no longer idle, we're now in a query
             lib.metrics.query();
             self._state = .query;
-            try self.write(buf.string());
+            try simple_query.write(w);
         } else {
             // TODO: there's some optimization opportunities here, since we know
             // we aren't expecting any result. We don't have to ask PG to DESCRIBE
@@ -434,14 +443,11 @@ pub const Conn = struct {
     }
 
     pub fn execIgnoringState(self: *Conn, sql: []const u8) !void {
-        var buf = &self._buf;
-        buf.reset();
-
+        const w = self._writer.interface();
         const state = self._state;
 
         const simple_query = proto.Query{ .sql = sql };
-        try simple_query.write(buf);
-        try self.write(buf.string());
+        try simple_query.write(w);
         while (true) {
             const msg = self.read() catch |err| {
                 if (state != .fail and err == error.PG) {
@@ -469,14 +475,15 @@ pub const Conn = struct {
 
     // Should not be called directly
     pub fn peekForError(self: *Conn) !void {
-        const data = (try self._reader.peekForError()) orelse return;
+        const data = (try self._pgreader.peekForError()) orelse return;
+        const e = self.setErr(data);
         try self.readyForQuery();
-        return self.setErr(data);
+        return e;
     }
 
     // Should not be called directly
     pub fn read(self: *Conn) !lib.Message {
-        var reader = &self._reader;
+        var reader = &self._pgreader;
         while (true) {
             const msg = reader.next() catch |err| {
                 self._state = .fail;
@@ -501,7 +508,12 @@ pub const Conn = struct {
     }
 
     pub fn write(self: *Conn, data: []const u8) !void {
-        self._stream.writeAll(data) catch |err| {
+        const w = self._writer.interface();
+        w.writeAll(data) catch |err| {
+            self._state = .fail;
+            return err;
+        };
+        w.flush() catch |err| {
             self._state = .fail;
             return err;
         };
@@ -1935,11 +1947,13 @@ test "Conn: TLS required" {
 }
 
 test "Conn: TLS verify-full" {
-    try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.io, t.allocator, .{ .tls = .{ .verify_full = null } }));
+    if (comptime has_openssl) {
+        try t.expectError(error.SSLCertificationVerificationError, Conn.open(t.io, t.allocator, .{ .tls = .{ .verify_full = null } }));
 
-    {
-        var conn = try t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
-        defer conn.deinit();
+        {
+            var conn = try t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+            defer conn.deinit();
+        }
     }
 }
 

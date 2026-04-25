@@ -14,9 +14,10 @@ pub const Conn = @import("conn.zig").Conn;
 pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
 pub const Stream = @import("stream.zig").Stream;
+pub const StreamReader = @import("stream.zig").StreamReader;
+pub const StreamWriter = @import("stream.zig").StreamWriter;
 pub const metrics = @import("metrics.zig");
 pub const has_openssl = build_config.openssl;
-pub const SSLCtx = if (has_openssl) openssl.SSL_CTX else void;
 pub const default_column_names = build_config.column_names;
 
 const result = @import("result.zig");
@@ -198,7 +199,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
     } };
 }
 
-pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
+pub fn initializeSSLContext(config: Conn.Opts.TLS) !*openssl.SSL_CTX {
     // OpenSSL documentation says these are implicitly called, and only need to
     // be called if you're doing something special
 
@@ -249,7 +250,7 @@ pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
     return ctx;
 }
 
-pub fn freeSSLContext(ctx: ?*SSLCtx) void {
+pub fn freeSSLContext(ctx: ?*openssl.SSL_CTX) void {
     if (comptime has_openssl == false) {
         return;
     }

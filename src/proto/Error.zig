@@ -1,6 +1,7 @@
 const std = @import("std");
 const proto = @import("_proto.zig");
 
+const Io = std.Io;
 const Error = @This();
 
 code: []const u8,
@@ -71,24 +72,24 @@ pub fn parse(data: []const u8) Error {
 
 const t = proto.testing;
 test "Error: parse" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
     {
         // only required
-        try buf.writeByte('C');
-        try buf.write("10391A");
-        try buf.writeByte(0);
+        try w.writeByte('C');
+        try w.writeAll("10391A");
+        try w.writeByte(0);
 
-        try buf.writeByte('M');
-        try buf.write("The Message");
-        try buf.writeByte(0);
+        try w.writeByte('M');
+        try w.writeAll("The Message");
+        try w.writeByte(0);
 
-        try buf.writeByte('S');
-        try buf.write("FATAL");
-        try buf.writeByte(0);
+        try w.writeByte('S');
+        try w.writeAll("FATAL");
+        try w.writeByte(0);
 
-        const err = Error.parse(buf.string());
+        const err = Error.parse(w.buffered());
         try t.expectString("10391A", err.code);
         try t.expectString("The Message", err.message);
         try t.expectString("FATAL", err.severity);
@@ -98,13 +99,13 @@ test "Error: parse" {
         // all fields
         const fields = [_]u8{ 'S', 'V', 'C', 'M', 'D', 'H', 'P', 'p', 'q', 'W', 's', 't', 'c', 'd', 'n', 'F', 'L', 'R' };
         for (fields) |field| {
-            try buf.writeByte(field);
-            try buf.writeByte(field);
-            try buf.write("-value");
-            try buf.writeByte(0);
+            try w.writeByte(field);
+            try w.writeByte(field);
+            try w.writeAll("-value");
+            try w.writeByte(0);
         }
 
-        const err = Error.parse(buf.string());
+        const err = Error.parse(w.buffered());
         try t.expectString("C-value", err.code);
         try t.expectString("M-value", err.message);
         try t.expectString("S-value", err.severity);

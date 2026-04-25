@@ -1,6 +1,7 @@
 const std = @import("std");
 const proto = @import("_proto.zig");
 const Reader = proto.Reader;
+const Io = std.Io;
 
 // #2 - Server responds with this
 const AuthenticationSASLContinue = @This();
@@ -21,31 +22,31 @@ pub fn parse(data: []const u8) !AuthenticationSASLContinue {
 
 const t = proto.testing;
 test "AuthenticationSASLContinue: parse" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
     {
         // too short
-        try t.expectError(error.NoMoreData, AuthenticationSASLContinue.parse(buf.string()));
+        try t.expectError(error.NoMoreData, AuthenticationSASLContinue.parse(&.{}));
 
-        try buf.write("123");
-        try t.expectError(error.NoMoreData, AuthenticationSASLContinue.parse(buf.string()));
+        try w.writeAll("123");
+        try t.expectError(error.NoMoreData, AuthenticationSASLContinue.parse(w.buffered()));
     }
 
     {
         // wrong special sasl type
-        buf.reset();
-        try buf.writeIntBig(u32, 12);
-        try t.expectError(error.NotSASLChallenge, AuthenticationSASLContinue.parse(buf.string()));
+        _ = w.consumeAll();
+        try w.writeInt(u32, 12, .big);
+        try t.expectError(error.NotSASLChallenge, AuthenticationSASLContinue.parse(w.buffered()));
     }
 
     {
         // success
-        buf.reset();
-        try buf.writeIntBig(u32, 11);
-        try buf.write("r=a-nounce,s=the-S@lt,i=4096");
+        _ = w.consumeAll();
+        try w.writeInt(u32, 11, .big);
+        try w.writeAll("r=a-nounce,s=the-S@lt,i=4096");
 
-        const c = try AuthenticationSASLContinue.parse(buf.string());
+        const c = try AuthenticationSASLContinue.parse(w.buffered());
         try t.expectString("r=a-nounce,s=the-S@lt,i=4096", c.data);
     }
 }

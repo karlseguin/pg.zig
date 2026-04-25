@@ -4,7 +4,6 @@ const lib = @import("lib.zig");
 const log = lib.log;
 const Conn = lib.Conn;
 const Result = lib.Result;
-const SSLCtx = lib.SSLCtx;
 const QueryRow = lib.QueryRow;
 const QueryRowUnsafe = lib.QueryRowUnsafe;
 const Listener = @import("listener.zig").Listener;
@@ -24,7 +23,6 @@ pub const Pool = struct {
     _allocator: Allocator,
     _mutex: Io.Mutex,
     _cond: Io.Condition,
-    _ssl_ctx: ?*lib.SSLCtx,
     _reconnector: Reconnector,
     _arena: std.heap.ArenaAllocator,
 
@@ -60,20 +58,6 @@ pub const Pool = struct {
         const size = opts.size;
         const conns = try aa.alloc(*Conn, size);
 
-        var opts_copy = opts;
-        var ssl_ctx: ?*SSLCtx = null;
-        if (comptime lib.has_openssl) {
-            switch (opts.connect.tls) {
-                .off => {},
-                else => |tls_config| {
-                    if (opts.connect.host) |h| {
-                        opts_copy.connect._hostz = try aa.dupeZ(u8, h);
-                    }
-                    ssl_ctx = try lib.initializeSSLContext(tls_config);
-                },
-            }
-        }
-        errdefer lib.freeSSLContext(ssl_ctx);
         const connect_on_init_count = opts.connect_on_init_count orelse size;
 
         pool.* = .{
@@ -82,8 +66,7 @@ pub const Pool = struct {
             ._mutex = .init,
             ._conns = conns,
             ._arena = arena,
-            ._opts = opts_copy,
-            ._ssl_ctx = ssl_ctx,
+            ._opts = opts,
             ._missing = 0,
             ._allocator = allocator,
             ._available = connect_on_init_count,
@@ -119,7 +102,6 @@ pub const Pool = struct {
             conn.deinit();
             allocator.destroy(conn);
         }
-        lib.freeSSLContext(self._ssl_ctx);
         self._arena.deinit();
     }
 
