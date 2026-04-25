@@ -1,10 +1,11 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const Buffer = @import("buffer").Buffer;
 
 const proto = lib.proto;
 const Conn = lib.Conn;
 const Reader = lib.Reader;
+const StreamReader = lib.StreamReader;
+const StreamWriter = lib.StreamWriter;
 const NotificationResponse = lib.proto.NotificationResponse;
 
 const Stream = lib.Stream;
@@ -22,11 +23,14 @@ pub const Listener = struct {
 
     _stream: Stream,
 
-    // A buffer used for writing to PG. This can grow dynamically as needed.
-    _buf: Buffer,
-
     // Used to read data from PG. Has its own buffer which can grow dynamically
-    _reader: Reader,
+    _pgreader: Reader,
+
+    _reader_buffer: []u8,
+    _reader: *StreamReader,
+
+    _writer_buffer: []u8,
+    _writer: *StreamWriter,
 
     // If we get a PG error, we'll return a LIstenError.pg, and we'll own its
     // memory.
@@ -37,33 +41,45 @@ pub const Listener = struct {
     _io: Io,
 
     pub fn open(io: Io, allocator: Allocator, opts: Conn.Opts) !Listener {
-        var stream = try Stream.connect(io, allocator, opts, null);
+        var stream = try Stream.connect(io, allocator, opts, .off);
         errdefer stream.close();
 
-        const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
-        errdefer buf.deinit();
+        const reader_buffer = try allocator.alloc(u8, opts.reader_buffer);
+        var pgreader = try allocator.create(StreamReader);
+        pgreader.* = stream.reader(reader_buffer);
 
-        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
+        const writer_buffer = try allocator.alloc(u8, opts.writer_buffer);
+        const pgwriter = try allocator.create(StreamWriter);
+        pgwriter.* = stream.writer(writer_buffer);
+
+        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, pgreader.interface());
         errdefer reader.deinit();
 
         return .{
-            ._buf = buf,
             ._stream = stream,
-            ._reader = reader,
+            ._pgreader = reader,
+            ._reader = pgreader,
+            ._reader_buffer = reader_buffer,
+            ._writer = pgwriter,
+            ._writer_buffer = writer_buffer,
             ._allocator = allocator,
             ._io = io,
         };
     }
 
     pub fn deinit(self: *Listener) void {
+        self.stop() catch {};
+        self._stream.close();
+
         if (self._err_data) |err_data| {
             self._allocator.free(err_data);
         }
-        self._buf.deinit();
-        self._reader.deinit();
 
-        self.stop() catch {};
-        self._stream.close();
+        self._pgreader.deinit();
+        self._allocator.free(self._reader_buffer);
+        self._allocator.destroy(self._reader);
+        self._allocator.free(self._writer_buffer);
+        self._allocator.destroy(self._writer);
     }
 
     pub fn stop(self: *Listener) !void {
@@ -72,12 +88,16 @@ pub const Listener = struct {
         }
 
         // try to send a Terminate to the DB
-        self._stream.writeAll(&.{ 'X', 0, 0, 0, 4 }) catch {};
+        const w = self._writer.interface();
+        try w.writeAll(&.{ 'X', 0, 0, 0, 4 });
+        try w.flush();
+
         return self._stream.shutdown(.both);
     }
 
     pub fn auth(self: *Listener, opts: Conn.AuthOpts) !void {
-        if (try lib.auth.auth(self._io, &self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
+        const w = self._writer.interface();
+        if (try lib.auth.auth(self._io, w, &self._pgreader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
 
@@ -99,20 +119,18 @@ pub const Listener = struct {
         // LISTEN doesn't support parameterized queries. It has to be a simple query.
         // We don't use proto.Query because we want to quote the identifier.
 
-        const buf = &self._buf;
-        buf.reset();
+        const w = self._writer.interface();
+        try w.writeByte('Q');
 
         // "LISTEN " = 7
         // "IDENTIFIER" = 128
         // max identifier size is 63, but if we need to quote every character, that's
         // 126. + 2 for the opening and closing quote
         // + 1 for null terminator
-        try buf.ensureTotalCapacity(136);
-        buf.writeByteAssumeCapacity('Q');
+        var buf: [136]u8 = undefined;
+        var b: Io.Writer = .fixed(&buf);
 
-        var len_view = try buf.skip(4);
-
-        buf.writeAssumeCapacity("LISTEN \"");
+        try b.writeAll("LISTEN \"");
 
         // + 4 for the length itself
         // + 7 for the LISTEN
@@ -122,18 +140,21 @@ pub const Listener = struct {
         for (channel) |c| {
             if (c == '"') {
                 len += 1;
-                buf.writeAssumeCapacity("\"\"");
+                try b.writeAll("\"\"");
             } else {
-                buf.writeByteAssumeCapacity(c);
+                try b.writeByte(c);
             }
         }
-        buf.writeByteAssumeCapacity('"');
-        buf.writeByteAssumeCapacity(0);
+        try b.writeByte('"');
+        try b.writeByte(0);
+
+        const content = b.buffered();
 
         // fill in the length
-        len_view.writeIntBig(u32, @intCast(len));
+        try w.writeInt(u32, @intCast(len), .big);
 
-        try self._stream.writeAll(buf.string());
+        try w.writeAll(content);
+        try w.flush();
 
         {
             // we expect a command complete ('C')
@@ -153,7 +174,7 @@ pub const Listener = struct {
             }
         }
 
-        try self._reader.startFlow(null, opts.timeout);
+        try self._pgreader.startFlow(null, opts.timeout);
     }
 
     pub fn next(self: *Listener) ?NotificationResponse {
@@ -179,7 +200,7 @@ pub const Listener = struct {
     }
 
     fn read(self: *Listener) !lib.Message {
-        var reader = &self._reader;
+        var reader = &self._pgreader;
         while (true) {
             const msg = try reader.next();
             switch (msg.type) {

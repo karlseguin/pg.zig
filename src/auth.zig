@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const Buffer = @import("buffer").Buffer;
 
 const proto = lib.proto;
 const Reader = lib.Reader;
@@ -18,7 +17,7 @@ const Opts = lib.Conn.AuthOpts;
 //   - is only valid until the next call to reader.read()
 //     (we expect our caller to clone the value)
 // a normal zig error on any other error
-pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
+pub fn auth(io: Io, writer: *Io.Writer, reader: *Reader, opts: Opts) !?[]const u8 {
     try reader.startFlow(null, opts.timeout);
 
     // ignore errors on endFlow, because it's troublesome to handle, and only
@@ -34,9 +33,7 @@ pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) 
             .database = opts.database orelse opts.username,
         };
 
-        buf.resetRetainingCapacity();
-        try startup_message.write(buf);
-        try stream.writeAll(buf.string());
+        try startup_message.write(writer);
     }
 
     // read the server's response
@@ -50,11 +47,11 @@ pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) 
 
         switch (try proto.AuthenticationRequest.parse(msg.data)) {
             .ok => return null,
-            .sasl => |sasl| if (try saslAuth(io, sasl, stream, buf, reader, opts)) |raw_pg_err| {
+            .sasl => |sasl| if (try saslAuth(io, sasl, writer, reader, opts)) |raw_pg_err| {
                 return raw_pg_err;
             },
-            .md5 => |salt| try md5PasswordAuth(salt, stream, buf, opts),
-            .password => try passwordAuth(opts.password orelse "", stream, buf),
+            .md5 => |salt| try md5PasswordAuth(salt, writer, opts),
+            .password => try passwordAuth(opts.password orelse "", writer),
         }
     }
 
@@ -75,7 +72,7 @@ pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) 
     }
 }
 
-fn saslAuth(io: Io, req: proto.AuthenticationRequest.SASL, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
+fn saslAuth(io: Io, req: proto.AuthenticationRequest.SASL, writer: *Io.Writer, reader: *Reader, opts: Opts) !?[]const u8 {
     if (!req.scram_sha_256) {
         return error.UnexpectedDBMessage;
     }
@@ -89,9 +86,7 @@ fn saslAuth(io: Io, req: proto.AuthenticationRequest.SASL, stream: *Stream, buf:
             .response = sasl.client_first_message,
             .mechanism = "SCRAM-SHA-256",
         };
-        buf.resetRetainingCapacity();
-        try msg.write(buf);
-        try stream.writeAll(buf.string());
+        try msg.write(writer);
     }
 
     {
@@ -111,9 +106,7 @@ fn saslAuth(io: Io, req: proto.AuthenticationRequest.SASL, stream: *Stream, buf:
         const msg = proto.SASLResponse{
             .data = try sasl.clientFinalMessage(opts.password orelse ""),
         };
-        buf.resetRetainingCapacity();
-        try msg.write(buf);
-        try stream.writeAll(buf.string());
+        try msg.write(writer);
     }
 
     {
@@ -130,7 +123,7 @@ fn saslAuth(io: Io, req: proto.AuthenticationRequest.SASL, stream: *Stream, buf:
     return null;
 }
 
-fn md5PasswordAuth(salt: []const u8, stream: *Stream, buf: *Buffer, opts: Opts) !void {
+fn md5PasswordAuth(salt: []const u8, writer: *Io.Writer, opts: Opts) !void {
     var hash: [16]u8 = undefined;
     {
         var hasher = std.crypto.hash.Md5.init(.{});
@@ -148,14 +141,12 @@ fn md5PasswordAuth(salt: []const u8, stream: *Stream, buf: *Buffer, opts: Opts) 
     }
     var hashed_password: [35]u8 = undefined;
     const password = try std.fmt.bufPrint(&hashed_password, "md5{s}", .{&std.fmt.bytesToHex(&hash, .lower)});
-    try passwordAuth(password, stream, buf);
+    try passwordAuth(password, writer);
 }
 
-fn passwordAuth(password: []const u8, stream: *Stream, buf: *Buffer) !void {
-    buf.resetRetainingCapacity();
+fn passwordAuth(password: []const u8, writer: *Io.Writer) !void {
     const pw = proto.PasswordMessage{ .password = password };
-    try pw.write(buf);
-    try stream.writeAll(buf.string());
+    try pw.write(writer);
 }
 
 const SASL = struct {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const proto = @import("_proto.zig");
 
+const Io = std.Io;
 const Reader = proto.Reader;
 
 const NotificationResponse = @This();
@@ -16,16 +17,16 @@ pub fn parse(data: []const u8) !NotificationResponse {
 
 const t = proto.testing;
 test "NotificationResponse: parse" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
-    try buf.writeIntBig(u32, 912);
-    try buf.write("chan-1");
-    try buf.writeByte(0);
-    try buf.write("payload-2");
-    try buf.writeByte(0);
+    try w.writeInt(u32, 912, .big);
+    try w.writeAll("chan-1");
+    try w.writeByte(0);
+    try w.writeAll("payload-2");
+    try w.writeByte(0);
 
-    const nr = try NotificationResponse.parse(buf.string());
+    const nr = try NotificationResponse.parse(w.buffered());
     try t.expectEqual(912, nr.process_id);
     try t.expectString("chan-1", nr.channel);
     try t.expectString("payload-2", nr.payload);

@@ -1,6 +1,7 @@
 const std = @import("std");
 const proto = @import("_proto.zig");
 
+const Io = std.Io;
 const Reader = proto.Reader;
 
 // #4 - Server finalizes with this
@@ -24,31 +25,31 @@ pub fn parse(data: []const u8) !AuthenticationSASLFinal {
 
 const t = proto.testing;
 test "AuthenticationSASLFinal: parse" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
     {
         // too short
-        try t.expectError(error.NoMoreData, AuthenticationSASLFinal.parse(buf.string()));
+        try t.expectError(error.NoMoreData, AuthenticationSASLFinal.parse(&.{}));
 
-        try buf.write("123");
-        try t.expectError(error.NoMoreData, AuthenticationSASLFinal.parse(buf.string()));
+        try w.writeAll("123");
+        try t.expectError(error.NoMoreData, AuthenticationSASLFinal.parse(w.buffered()));
     }
 
     {
         // wrong special sasl type
-        buf.reset();
-        try buf.writeIntBig(u32, 13);
-        try t.expectError(error.NotSASLChallenge, AuthenticationSASLFinal.parse(buf.string()));
+        _ = w.consumeAll();
+        try w.writeInt(u32, 13, .big);
+        try t.expectError(error.NotSASLChallenge, AuthenticationSASLFinal.parse(w.buffered()));
     }
 
     {
         // success
-        buf.reset();
-        try buf.writeIntBig(u32, 12);
-        try buf.write("some server data");
+        _ = w.consumeAll();
+        try w.writeInt(u32, 12, .big);
+        try w.writeAll("some server data");
 
-        const final = try AuthenticationSASLFinal.parse(buf.string());
+        const final = try AuthenticationSASLFinal.parse(w.buffered());
         try t.expectString("some server data", final.data);
     }
 }

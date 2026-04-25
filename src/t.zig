@@ -126,19 +126,18 @@ pub const Stream = struct {
     _to_read: std.ArrayList(u8),
     _received: std.ArrayList(u8),
 
-    pub fn init() *Stream {
+    pub fn init(buf: []u8) *Stream {
         const s = allocator.create(Stream) catch unreachable;
         s.* = .{
             .closed = false,
             ._read_index = 0,
-            ._to_read = .empty,
+            ._to_read = std.ArrayList(u8).initBuffer(buf),
             ._received = .empty,
         };
         return s;
     }
 
     pub fn deinit(self: *Stream) void {
-        self._to_read.deinit(allocator);
         self._received.deinit(allocator);
         allocator.destroy(self);
     }
@@ -153,8 +152,9 @@ pub const Stream = struct {
         return self._received.items;
     }
 
-    pub fn add(self: *Stream, value: []const u8) void {
-        self._to_read.appendSlice(allocator, value) catch unreachable;
+    pub fn add(self: *Stream, value: []const u8) usize {
+        self._to_read.appendSliceAssumeCapacity(value);
+        return self._to_read.items.len;
     }
 
     pub fn read(self: *Stream, buf: []u8) !usize {
@@ -204,6 +204,8 @@ pub fn connect(opts: anytype) !Conn {
         .tls = if (@hasField(T, "tls")) opts.tls else .off,
         .host = if (@hasField(T, "host")) opts.host else "127.0.0.1",
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
+        .reader_buffer = if (@hasField(T, "reader_buffer")) opts.reader_buffer else 4096,
+        .writer_buffer = if (@hasField(T, "writer_buffer")) opts.writer_buffer else 4096,
     });
 
     c.auth(authOpts(opts)) catch |err| {
