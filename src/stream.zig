@@ -11,14 +11,29 @@ const Io = std.Io;
 
 const DEFAULT_HOST = "127.0.0.1";
 
+pub const Opts = struct {
+    host: ?[]const u8 = null,
+    port: ?u16 = null,
+    reader_buffer: u16 = 1024,
+    writer_buffer: u16 = 1024,
+    tls: TLS = .off,
+    _hostz: ?[:0]const u8 = null,
+
+    pub const TLS = union(enum) {
+        off: void,
+        require: void,
+        verify_full: ?[]const u8,
+    };
+};
+
 pub const Stream = if (lib.has_openssl) OpensslStream else union(enum) {
     tls: TlsStream,
     plain: PlainStream,
 
-    pub fn connect(io: Io, allocator: Allocator, opts: Conn.Opts, tls: Conn.Opts.TLS) !Stream {
-        switch (tls) {
-            .off => return .{ .plain = try PlainStream.connect(io, allocator, opts, tls) },
-            .require => return .{ .tls = try TlsStream.connect(io, allocator, opts, tls) },
+    pub fn connect(io: Io, allocator: Allocator, opts: Opts) !Stream {
+        switch (opts.tls) {
+            .off => return .{ .plain = try PlainStream.connect(io, allocator, opts) },
+            .require => return .{ .tls = try TlsStream.connect(io, allocator, opts) },
             .verify_full => @panic("Unsupported by std.crypto.tls.Client"),
         }
     }
@@ -92,7 +107,7 @@ pub const StreamWriter = if (lib.has_openssl) union(enum) {
     }
 };
 
-const OpensslStream = struct {
+pub const OpensslStream = struct {
     valid: bool,
     ssl: ?*openssl.SSL,
     ctx: ?*openssl.SSL_CTX,
@@ -247,14 +262,14 @@ const OpensslStream = struct {
         }
     }
 
-    pub fn connect(io: Io, allocator: Allocator, opts: Conn.Opts, tls: Conn.Opts.TLS) !OpensslStream {
-        const plain = try PlainStream.connect(io, allocator, opts, null);
+    pub fn connect(io: Io, allocator: Allocator, opts: Opts) !OpensslStream {
+        const plain = try PlainStream.connect(io, allocator, opts);
         errdefer plain.close();
 
         const stream = plain.stream;
 
         var ssl_ctx: ?*openssl.SSL_CTX = null;
-        switch (tls) {
+        switch (opts.tls) {
             .off => {},
             else => |tls_config| {
                 if (comptime lib.has_openssl == false) {
@@ -354,7 +369,7 @@ const OpensslStream = struct {
     }
 };
 
-const TlsStream = struct {
+pub const TlsStream = struct {
     io: Io,
     allocator: Allocator,
     stream: Io.net.Stream,
@@ -390,7 +405,7 @@ const TlsStream = struct {
             w.client.writer.end = io_w.end;
             defer io_w.end = w.client.writer.end;
 
-            try w.client.writer.vtable.flush(&w.client.writer);
+            try w.client.writer.flush();
             return w.client.output.flush();
         }
     };
@@ -407,7 +422,7 @@ const TlsStream = struct {
         };
     }
 
-    pub fn connect(io: Io, allocator: Allocator, opts: Conn.Opts, _: anytype) !TlsStream {
+    pub fn connect(io: Io, allocator: Allocator, opts: Opts) !TlsStream {
         const tls = std.crypto.tls;
 
         const host = opts.host orelse DEFAULT_HOST;
@@ -488,7 +503,7 @@ const TlsStream = struct {
     }
 };
 
-const PlainStream = struct {
+pub const PlainStream = struct {
     io: Io,
     stream: Io.net.Stream,
 
@@ -504,7 +519,7 @@ const PlainStream = struct {
         };
     }
 
-    pub fn connect(io: Io, _: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
+    pub fn connect(io: Io, _: Allocator, opts: Opts) !PlainStream {
         const stream = try blk: {
             const host = opts.host orelse DEFAULT_HOST;
             if (host.len > 0 and host[0] == '/') {

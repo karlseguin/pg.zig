@@ -151,7 +151,7 @@ pub const Stmt = struct {
             const bind_payload_len = 8 + sql.len + name.len;
             const describe_payload_len = 6 + name.len;
 
-            writeParseDescribeSync(self.conn._writer.interface(), @intCast(bind_payload_len), @intCast(describe_payload_len), name, sql) catch |err| {
+            writeParseDescribeSync(self.conn._writer, @intCast(bind_payload_len), @intCast(describe_payload_len), name, sql) catch |err| {
                 self.conn._state = .fail;
                 return err;
             };
@@ -339,7 +339,7 @@ pub const Stmt = struct {
         // -1 because the length doesn't include the 'B'
         std.mem.writeInt(u32, buf.buf[1..5], @intCast(buf.len() - 1), .big);
 
-        writeExecute(self.conn._writer.interface(), buf.string()) catch |err| {
+        writeExecute(self.conn._writer, buf.string()) catch |err| {
             self.conn._state = .fail;
             return err;
         };

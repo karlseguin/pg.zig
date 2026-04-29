@@ -4,11 +4,8 @@ const lib = @import("lib.zig");
 const proto = lib.proto;
 const Conn = lib.Conn;
 const Reader = lib.Reader;
-const StreamReader = lib.StreamReader;
-const StreamWriter = lib.StreamWriter;
 const NotificationResponse = lib.proto.NotificationResponse;
 
-const Stream = lib.Stream;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
@@ -21,16 +18,10 @@ pub const Listener = struct {
     err: ?ListenError = null,
     closed: bool = false,
 
-    _stream: Stream,
-
     // Used to read data from PG. Has its own buffer which can grow dynamically
     _pgreader: Reader,
 
-    _reader_buffer: []u8,
-    _reader: *StreamReader,
-
-    _writer_buffer: []u8,
-    _writer: *StreamWriter,
+    _writer: *Io.Writer,
 
     // If we get a PG error, we'll return a LIstenError.pg, and we'll own its
     // memory.
@@ -40,28 +31,13 @@ pub const Listener = struct {
 
     _io: Io,
 
-    pub fn open(io: Io, allocator: Allocator, opts: Conn.Opts) !Listener {
-        var stream = try Stream.connect(io, allocator, opts, .off);
-        errdefer stream.close();
-
-        const reader_buffer = try allocator.alloc(u8, opts.reader_buffer);
-        var pgreader = try allocator.create(StreamReader);
-        pgreader.* = stream.reader(reader_buffer);
-
-        const writer_buffer = try allocator.alloc(u8, opts.writer_buffer);
-        const pgwriter = try allocator.create(StreamWriter);
-        pgwriter.* = stream.writer(writer_buffer);
-
-        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, pgreader.interface());
-        errdefer reader.deinit();
+    pub fn open(io: Io, allocator: Allocator, reader: *Io.Reader, writer: *Io.Writer, opts: Conn.Opts) !Listener {
+        const pgreader = try Reader.init(allocator, opts.read_buffer orelse 4096, reader);
+        errdefer pgreader.deinit();
 
         return .{
-            ._stream = stream,
-            ._pgreader = reader,
-            ._reader = pgreader,
-            ._reader_buffer = reader_buffer,
-            ._writer = pgwriter,
-            ._writer_buffer = writer_buffer,
+            ._pgreader = pgreader,
+            ._writer = writer,
             ._allocator = allocator,
             ._io = io,
         };
@@ -69,17 +45,12 @@ pub const Listener = struct {
 
     pub fn deinit(self: *Listener) void {
         self.stop() catch {};
-        self._stream.close();
 
         if (self._err_data) |err_data| {
             self._allocator.free(err_data);
         }
 
         self._pgreader.deinit();
-        self._allocator.free(self._reader_buffer);
-        self._allocator.destroy(self._reader);
-        self._allocator.free(self._writer_buffer);
-        self._allocator.destroy(self._writer);
     }
 
     pub fn stop(self: *Listener) !void {
@@ -88,15 +59,15 @@ pub const Listener = struct {
         }
 
         // try to send a Terminate to the DB
-        const w = self._writer.interface();
+        const w = self._writer;
         try w.writeAll(&.{ 'X', 0, 0, 0, 4 });
         try w.flush();
 
-        return self._stream.shutdown(.both);
+        // return self._stream.shutdown(.both);
     }
 
     pub fn auth(self: *Listener, opts: Conn.AuthOpts) !void {
-        const w = self._writer.interface();
+        const w = self._writer;
         if (try lib.auth.auth(self._io, w, &self._pgreader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
@@ -119,7 +90,7 @@ pub const Listener = struct {
         // LISTEN doesn't support parameterized queries. It has to be a simple query.
         // We don't use proto.Query because we want to quote the identifier.
 
-        const w = self._writer.interface();
+        const w = self._writer;
         try w.writeByte('Q');
 
         // "LISTEN " = 7
@@ -233,24 +204,31 @@ pub const Listener = struct {
 
 const t = lib.testing;
 test "Listener" {
-    var l = try Listener.open(t.io, t.allocator, .{ .host = "127.0.0.1" });
+    var rb: [1024]u8 = undefined;
+    var wb: [1024]u8 = undefined;
+
+    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{ .host = "127.0.0.1" });
+    defer stream.close();
+    var sr = stream.reader(&rb);
+    var sw = stream.writer(&wb);
+    var l = try Listener.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
 }
 
-test "Listener: from Pool" {
-    var pool = try lib.Pool.init(t.io, t.allocator, .{
-        .size = 1,
-        .auth = t.authOpts(.{}),
-    });
-    defer pool.deinit();
+// test "Listener: from Pool" {
+//     var pool = try lib.Pool.init(t.io, t.allocator, .{
+//         .size = 1,
+//         .auth = t.authOpts(.{}),
+//     });
+//     defer pool.deinit();
 
-    var l = try pool.newListener();
-    defer l.deinit();
+//     var l = try pool.newListener();
+//     defer l.deinit();
 
-    try testListener(&l);
-}
+//     try testListener(&l);
+// }
 
 fn testListener(l: *Listener) !void {
     const io = t.io;
@@ -291,7 +269,15 @@ fn testListener(l: *Listener) !void {
 }
 
 fn testNotifier() !void {
-    var c = try t.connect(.{});
+    var rb: [1024]u8 = undefined;
+    var wb: [1024]u8 = undefined;
+
+    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    defer stream.close();
+    var sr = stream.reader(&rb);
+    var sw = stream.writer(&wb);
+
+    var c = try t.connect(sr.interface(), sw.interface(), .{});
     defer c.deinit();
     _ = c.exec("select pg_notify($1, $2)", .{ "chan_x", "pl-x" }) catch unreachable;
     _ = c.exec("select pg_notify($1, $2)", .{ "chan-1", "pl-1" }) catch unreachable;

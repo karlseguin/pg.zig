@@ -1,5 +1,7 @@
 const std = @import("std");
+const lib = @import("lib.zig");
 
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Conn = @import("conn.zig").Conn;
 
@@ -44,8 +46,17 @@ pub fn getRandom() std.Random.DefaultPrng {
     return std.Random.DefaultPrng.init(seed);
 }
 
+const t = lib.testing;
 pub fn setup() !void {
-    var c = try connect(.{});
+    var rb: [1024]u8 = undefined;
+    var wb: [1024]u8 = undefined;
+
+    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    defer stream.close();
+    var sr = stream.reader(&rb);
+    var sw = stream.writer(&wb);
+
+    var c = try connect(sr.interface(), sw.interface(), .{});
     defer c.deinit();
     _ = c.exec(
         \\ drop user if exists pgz_user_nopass;
@@ -197,15 +208,11 @@ pub const Stream = struct {
     }
 };
 
-pub fn connect(opts: anytype) !Conn {
+pub fn connect(reader: *Io.Reader, writer: *Io.Writer, opts: anytype) !Conn {
     const T = @TypeOf(opts);
 
-    var c = try Conn.open(io, allocator, .{
-        .tls = if (@hasField(T, "tls")) opts.tls else .off,
-        .host = if (@hasField(T, "host")) opts.host else "127.0.0.1",
+    var c = try Conn.open(io, allocator, reader, writer, .{
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
-        .reader_buffer = if (@hasField(T, "reader_buffer")) opts.reader_buffer else 4096,
-        .writer_buffer = if (@hasField(T, "writer_buffer")) opts.writer_buffer else 4096,
     });
 
     c.auth(authOpts(opts)) catch |err| {

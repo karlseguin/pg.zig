@@ -1,8 +1,12 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const stream = @import("stream.zig");
 
 const log = lib.log;
 const Conn = lib.Conn;
+const Stream = stream.Stream;
+const StreamReader = stream.StreamReader;
+const StreamWriter = stream.StreamWriter;
 const Result = lib.Result;
 const QueryRow = lib.QueryRow;
 const QueryRowUnsafe = lib.QueryRowUnsafe;
@@ -29,7 +33,8 @@ pub const Pool = struct {
     pub const Opts = struct {
         size: u16 = 10,
         auth: Conn.AuthOpts = .{},
-        connect: Conn.Opts = .{},
+        stream: stream.Opts = .{},
+        conn: Conn.Opts = .{},
         timeout: u32 = 10 * std.time.ms_per_s,
         connect_on_init_count: ?u16 = null,
     };
@@ -39,6 +44,15 @@ pub const Pool = struct {
         available: usize,
         missing: usize,
         in_use: usize,
+    };
+
+    const Item = struct {
+        conn: Conn,
+        stream: Stream,
+        reader_buffer: []u8,
+        writer_buffer: []u8,
+        sr: StreamReader,
+        sw: StreamWriter,
     };
 
     pub fn initUri(io: Io, allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
@@ -99,8 +113,7 @@ pub const Pool = struct {
         self._reconnector.stop();
         const allocator = self._allocator;
         for (self._conns) |conn| {
-            conn.deinit();
-            allocator.destroy(conn);
+            releaseConn(allocator, conn);
         }
         self._arena.deinit();
     }
@@ -156,6 +169,15 @@ pub const Pool = struct {
         }
     }
 
+    fn releaseConn(allocator: Allocator, conn: *Conn) void {
+        const item: *Pool.Item = @alignCast(@fieldParentPtr("conn", conn));
+        conn.deinit();
+        item.stream.close();
+        allocator.free(item.reader_buffer);
+        allocator.free(item.writer_buffer);
+        allocator.destroy(item);
+    }
+
     pub fn release(self: *Pool, conn: *Conn) void {
         var conn_to_add = conn;
         const io = self._io;
@@ -166,8 +188,7 @@ pub const Pool = struct {
             // recover from this (e.g. maybe we just need to read until we get a
             // ReadyForQuery), but we wouldn't want to block for too long. For now,
             // we'll just replace the connection.
-            conn.deinit();
-            self._allocator.destroy(conn);
+            releaseConn(self._allocator, conn);
 
             conn_to_add = newConnection(self, true) catch |err1| {
                 // we failed to create the connection, track it as missing and let
@@ -192,11 +213,11 @@ pub const Pool = struct {
         self._cond.signal(io);
     }
 
-    pub fn newListener(self: *Pool) !Listener {
-        var listener = try Listener.open(self._io, self._allocator, self._opts.connect);
-        try listener.auth(self._opts.auth);
-        return listener;
-    }
+    // pub fn newListener(self: *Pool) !Listener {
+    //     var listener = try Listener.open(self._io, self._allocator, self._opts.connect);
+    //     try listener.auth(self._opts.auth);
+    //     return listener;
+    // }
 
     pub fn stats(self: *Pool) Stats {
         const io = self._io;
@@ -345,21 +366,28 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
     const allocator = pool._allocator;
     const io = pool._io;
 
-    const conn = allocator.create(Conn) catch |err| {
+    var item = try allocator.create(Pool.Item);
+
+    item.stream = try Stream.connect(io, allocator, opts.stream);
+    errdefer item.stream.close();
+
+    item.reader_buffer = try allocator.alloc(u8, opts.stream.reader_buffer);
+    errdefer allocator.free(item.reader_buffer);
+    item.sr = item.stream.reader(item.reader_buffer);
+
+    item.writer_buffer = try allocator.alloc(u8, opts.stream.writer_buffer);
+    errdefer allocator.free(item.writer_buffer);
+    item.sw = item.stream.writer(item.writer_buffer);
+
+    item.conn = Conn.open(io, allocator, item.sr.interface(), item.sw.interface(), opts.conn) catch |err| {
         if (log_failure) log.err("connect error: {}", .{err});
         return err;
     };
-    errdefer allocator.destroy(conn);
+    errdefer item.conn.deinit();
 
-    conn.* = Conn.open(io, allocator, opts.connect) catch |err| {
-        if (log_failure) log.err("connect error: {}", .{err});
-        return err;
-    };
-    errdefer conn.deinit();
-
-    conn.auth(opts.auth) catch |err| {
+    item.conn.auth(opts.auth) catch |err| {
         if (log_failure) {
-            if (conn.err) |pg_err| {
+            if (item.conn.err) |pg_err| {
                 log.err("connect error: {s}", .{pg_err.message});
             } else {
                 log.err("connect error: {}", .{err});
@@ -367,8 +395,8 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
         }
         return err;
     };
-    conn._pool = pool;
-    return conn;
+    item.conn._pool = pool;
+    return &item.conn;
 }
 
 const t = lib.testing;
