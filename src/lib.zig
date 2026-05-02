@@ -1,6 +1,6 @@
 // Exposed within this library
 const std = @import("std");
-pub const stream = @import("stream.zig");
+const stream = @import("stream.zig");
 
 pub const openssl = @import("openssl");
 
@@ -14,6 +14,7 @@ pub const auth = @import("auth.zig");
 pub const Conn = @import("conn.zig").Conn;
 pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
+pub const ConnFactory = @import("ConnFactory.zig");
 pub const PlainStream = stream.PlainStream;
 pub const OpensslStream = stream.OpensslStream;
 pub const TlsStream = stream.TlsStream;
@@ -132,8 +133,17 @@ pub fn verifyColumnName(comptime fail_mode: FailMode, name: []const u8, valid: b
     unreachable;
 }
 
+pub const Opts = struct {
+    size: u16 = 10,
+    auth: Conn.AuthOpts = .{},
+    stream: stream.Opts = .{},
+    conn: Conn.Opts = .{},
+    timeout: u32 = 10 * std.time.ms_per_s,
+    connect_on_init_count: ?u16 = null,
+};
+
 pub const ParsedOpts = struct {
-    opts: Pool.Opts,
+    opts: Opts,
     arena: std.heap.ArenaAllocator,
 
     pub fn deinit(self: *ParsedOpts) void {
@@ -282,7 +292,7 @@ pub const Binary = struct {
 
 const TestCase = struct {
     uri: []const u8,
-    expected_opts: Pool.Opts,
+    expected_opts: Opts,
 };
 
 pub const FailMode = enum {

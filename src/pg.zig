@@ -3,6 +3,10 @@ const lib = @import("lib.zig");
 
 pub const Row = lib.Row;
 pub const Conn = lib.Conn;
+pub const ConnFactory = lib.ConnFactory;
+pub const PlainStream = lib.PlainStream;
+pub const OpensslStream = lib.OpensslStream;
+pub const TlsStream = lib.TlsStream;
 pub const Pool = lib.Pool;
 pub const Stmt = lib.Stmt;
 pub const Result = lib.Result;

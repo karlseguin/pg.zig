@@ -51,12 +51,12 @@ pub fn setup() !void {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try connect(sr.interface(), sw.interface(), .{});
+    var c = try connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     _ = c.exec(
         \\ drop user if exists pgz_user_nopass;

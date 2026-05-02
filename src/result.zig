@@ -806,12 +806,12 @@ test "Result: ints" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::smallint, $2::int, $3::bigint";
 
@@ -882,12 +882,12 @@ test "Result: floats" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::float4, $2::float8";
 
@@ -930,12 +930,12 @@ test "Result: bool" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::bool";
 
@@ -976,12 +976,12 @@ test "Result: text and bytea" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::text, $2::bytea";
 
@@ -1056,12 +1056,12 @@ test "Result: optional" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::int, $2::int";
 
@@ -1082,12 +1082,12 @@ test "Result: iterator" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1192,12 +1192,12 @@ test "Result: null iterator" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1231,12 +1231,12 @@ test "Result: int[]" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::smallint[], $2::int[], $3::bigint[]";
 
@@ -1262,12 +1262,12 @@ test "Result: float[]" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::float4[], $2::float8[]";
 
@@ -1289,12 +1289,12 @@ test "Result: bool[]" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::bool[]";
 
@@ -1312,12 +1312,12 @@ test "Result: text[] & bytea[]" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::text[], $2::bytea[]";
 
@@ -1353,12 +1353,12 @@ test "Result: text[] alloc dupes" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     var arr1: [][]const u8 = undefined;
@@ -1395,12 +1395,12 @@ test "Result: UUID" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::uuid, $2::uuid";
     var result = try c.query(sql, .{ "fcbebf0f-b996-43b9-9818-672bc689cda8", &[_]u8{ 174, 47, 71, 95, 128, 112, 65, 183, 186, 51, 134, 187, 168, 137, 123, 222 } });
@@ -1415,12 +1415,12 @@ test "Result: lsn" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::pg_lsn + 1";
     var result = try c.query(sql, .{32788447688});
@@ -1434,12 +1434,12 @@ test "Row: column names" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select 923 as id, 'Leto' as name";
     var row = (try c.rowUnsafeOpts(sql, .{}, .{ .column_names = true })).?;
@@ -1453,12 +1453,12 @@ test "Result: mutable []u8" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select 'Leto'";
     var row = (try c.rowUnsafe(sql, .{})).?;
@@ -1473,12 +1473,12 @@ test "Result: mutable [][]u8" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select array['Leto', 'Test']::text[]";
     var row = (try c.rowUnsafe(sql, .{})).?;
@@ -1513,12 +1513,12 @@ test "Row.to: ordinal" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1616,12 +1616,12 @@ test "Row.to: name no map" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1739,12 +1739,12 @@ test "Result.Mapper" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1833,12 +1833,12 @@ test "Row.to: iterator" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1925,12 +1925,12 @@ test "Row.to: array" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1968,12 +1968,12 @@ test "Result: safe" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const sql = "select $1::int, $2::int";
 

@@ -117,7 +117,7 @@ pub const Conn = struct {
         return conn;
     }
 
-    pub fn open(io: Io, allocator: Allocator, reader: *Io.Reader, writer: *Io.Writer, opts: Opts) !Conn {
+    pub fn open(io: Io, allocator: Allocator, reader: *Io.Reader, writer: *Io.Writer, opts: Opts) Allocator.Error!Conn {
         const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));
         errdefer buf.deinit();
 
@@ -522,110 +522,68 @@ pub const Conn = struct {
 
 const t = lib.testing;
 test "Conn: auth trust (no pass)" {
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-    defer stream.close();
-
-    var rb: [1024]u8 = undefined;
-    var wb: [1024]u8 = undefined;
-    var sr = stream.reader(&rb);
-    var sw = stream.writer(&wb);
-
-    var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-    defer conn.deinit();
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    const f = &cf.interface;
+    var conn = try f.create();
+    defer f.destroy(conn);
     try conn.auth(.{ .username = "pgz_user_nopass", .database = "postgres" });
 }
 
 test "Conn: auth unknown user" {
-    var rb: [1024]u8 = undefined;
-    var wb: [1024]u8 = undefined;
-
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-    defer stream.close();
-    var sr = stream.reader(&rb);
-    var sw = stream.writer(&wb);
-
-    var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-    defer conn.deinit();
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    const f = &cf.interface;
+    var conn = try f.create();
+    defer f.destroy(conn);
     try t.expectError(error.PG, conn.auth(.{ .username = "does_not_exist" }));
     try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "user \"does_not_exist\"") != null);
 }
 
 test "Conn: auth cleartext password" {
-    var rb: [1024]u8 = undefined;
-    var wb: [1024]u8 = undefined;
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    const f = &cf.interface;
 
     {
-        var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-        defer stream.close();
-        var sr = stream.reader(&rb);
-        var sw = stream.writer(&wb);
-
-        var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-        defer conn.deinit();
+        var conn = try f.create();
+        defer f.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear" }));
         try t.expectString("empty password returned by client", conn.err.?.message);
     }
 
     {
-        var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-        defer stream.close();
-        var sr = stream.reader(&rb);
-        var sw = stream.writer(&wb);
-
-        var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-        defer conn.deinit();
+        var conn = try f.create();
+        defer f.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear", .password = "wrong" }));
         try t.expectString("password authentication failed for user \"pgz_user_clear\"", conn.err.?.message);
     }
 
     {
-        var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-        defer stream.close();
-        var sr = stream.reader(&rb);
-        var sw = stream.writer(&wb);
-
-        var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-        defer conn.deinit();
+        var conn = try f.create();
+        defer f.destroy(conn);
         try conn.auth(.{ .username = "pgz_user_clear", .password = "pgz_user_clear_pw", .database = "postgres" });
     }
 }
 
 test "Conn: auth scram-sha-256 password" {
-    var rb: [1024]u8 = undefined;
-    var wb: [1024]u8 = undefined;
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    const f = &cf.interface;
 
     {
-        var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-        defer stream.close();
-        var sr = stream.reader(&rb);
-        var sw = stream.writer(&wb);
-
-        var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-        defer conn.deinit();
+        var conn = try f.create();
+        defer f.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256" }));
         try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
     }
 
     {
-        var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-        defer stream.close();
-        var sr = stream.reader(&rb);
-        var sw = stream.writer(&wb);
-
-        var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-        defer conn.deinit();
+        var conn = try f.create();
+        defer f.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "wrong" }));
         try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
     }
 
     {
-        var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-        defer stream.close();
-        var sr = stream.reader(&rb);
-        var sw = stream.writer(&wb);
-
-        var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-        defer conn.deinit();
+        var conn = try f.create();
+        defer f.destroy(conn);
         try conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "pgz_user_scram_sha256_pw", .database = "postgres" });
     }
 }
@@ -634,12 +592,12 @@ test "Conn: exec rowsAffected" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -667,12 +625,12 @@ test "Conn: exec with values rowsAffected" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -685,12 +643,12 @@ test "Conn: exec query that returns rows" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     _ = try c.exec("insert into simple_table values ('exec_sel_1'), ('exec_sel_2')", .{});
     try t.expectEqual(0, c.exec("select * from simple_table where value = 'none'", .{}));
@@ -701,12 +659,12 @@ test "Conn: parse error" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     try t.expectError(error.PG, c.query("selct 1", .{}));
 
@@ -723,12 +681,12 @@ test "Conn: Query within Query error" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     var rows = try c.query("select 1", .{});
     defer rows.deinit();
@@ -743,12 +701,12 @@ test "PG: type support" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     var bytea1 = [_]u8{ 0, 1 };
     var bytea2 = [_]u8{ 255, 253, 253 };
@@ -1092,12 +1050,12 @@ test "PG: binary support" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1210,12 +1168,12 @@ test "PG: null support" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     {
         const result = c.exec(
@@ -1378,12 +1336,12 @@ test "PG: query column names" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     {
         var result = try c.query("select 1 as id, 'leto' as name", .{});
@@ -1405,12 +1363,12 @@ test "PG: JSON struct" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1439,12 +1397,12 @@ test "Conn: prepare" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     var stmt = try c.prepare("select $1::int where $2");
@@ -1464,12 +1422,12 @@ test "PG: row" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     const r1 = try c.row("select 1 where $1", .{false});
@@ -1494,12 +1452,12 @@ test "PG: begin/commit" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     try c.begin();
@@ -1517,12 +1475,12 @@ test "PG: begin/rollback" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     _ = try c.exec("delete from simple_table", .{});
@@ -1538,12 +1496,12 @@ test "PG: bind enums" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     _ = try c.exec(
@@ -1586,12 +1544,12 @@ test "PG: numeric" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1685,12 +1643,12 @@ test "PG: char" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     // read
@@ -1714,12 +1672,12 @@ test "PG: bind []const u8" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const value: []const u8 = "hello";
 
@@ -1746,12 +1704,12 @@ test "PG: bind []?i64" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const values = [_]?i64{ 1, null, 3 };
 
@@ -1784,12 +1742,12 @@ test "PG: bind []?f64" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const values = [_]?f64{ null, null, 0.2, null };
 
@@ -1823,12 +1781,12 @@ test "PG: bind []?bool" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const values = [_]?bool{ null, true, false, null };
 
@@ -1862,12 +1820,12 @@ test "PG: bind []?[]const u8" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     const values = [_]?[]const u8{ "hello", null, null };
 
@@ -1900,12 +1858,12 @@ test "PG: binary wrapper" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     _ = try c.exec(
@@ -1930,12 +1888,12 @@ test "PG: isUnique" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -1960,12 +1918,12 @@ test "PG: large read" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{ .read_buffer = 500 });
+    var c = try t.connect(&sr.interface, &sw.interface, .{ .read_buffer = 500 });
     defer c.deinit();
 
     {
@@ -1990,12 +1948,12 @@ test "Conn: dynamic buffer freed on error" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{ .read_buffer = 100 });
+    var c = try t.connect(&sr.interface, &sw.interface, .{ .read_buffer = 100 });
     defer c.deinit();
 
     var rows = try c.query("select $1::text", .{"!" ** 200});
@@ -2014,12 +1972,12 @@ test "PG: Record" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -2043,16 +2001,10 @@ test "PG: Record" {
 }
 
 test "Conn: application_name" {
-    var rb: [1024]u8 = undefined;
-    var wb: [1024]u8 = undefined;
-
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
-    defer stream.close();
-    var sr = stream.reader(&rb);
-    var sw = stream.writer(&wb);
-
-    var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
-    defer conn.deinit();
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    const f = &cf.interface;
+    var conn = try f.create();
+    defer f.destroy(conn);
     try conn.auth(.{
         .username = "pgz_user_clear",
         .password = "pgz_user_clear_pw",
@@ -2070,12 +2022,12 @@ test "PG: bind strictness" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     try t.expectError(error.BindWrongType, c.row("select $1", .{100}));
     try t.expectError(error.BindWrongType, c.row("select $1", .{10.2}));
@@ -2092,12 +2044,12 @@ test "PG: eager error" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -2118,7 +2070,8 @@ test "PG: eager error" {
 
 // https://github.com/karlseguin/pg.zig/issues/44
 test "PG: eager error conn state" {
-    var pool = try lib.Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try lib.Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -2141,7 +2094,8 @@ test "PG: eager error conn state" {
 
 // https://github.com/karlseguin/pg.zig/issues/45
 test "PG: rollback during error" {
-    var pool = try lib.Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try lib.Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     _ = try pool.exec("truncate table all_types", .{});
@@ -2176,13 +2130,13 @@ test "open URI" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
     const uri = try std.Uri.parse("postgresql://postgres:postgres@127.0.0.1:5432/postgres?tcp_user_timeout=5000");
-    var conn = try Conn.openAndAuthUri(t.io, t.allocator, sr.interface(), sw.interface(), uri);
+    var conn = try Conn.openAndAuthUri(t.io, t.allocator, &sr.interface, &sw.interface, uri);
     conn.deinit();
 }
 
@@ -2191,23 +2145,44 @@ test "Conn: TLS required" {
     var wb: [1024]u8 = undefined;
 
     {
-        var stream = if (comptime has_openssl) try lib.OpensslStream.connect(t.io, t.allocator, .{}) else try lib.PlainStream.connect(t.io, t.allocator, .{});
+        var stream: lib.PlainStream = try .connect(t.io, .{});
         defer stream.close();
         var sr = stream.reader(&rb);
         var sw = stream.writer(&wb);
 
-        var conn = try Conn.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
+        var conn = try Conn.open(t.io, t.allocator, &sr.interface, &sw.interface, .{});
         defer conn.deinit();
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
         try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "no encryption") != null);
     }
 
-    {
-        var stream = if (comptime has_openssl) try lib.OpensslStream.connect(t.io, t.allocator, .{ .tls = .require }) else try lib.TlsStream.connect(t.io, t.allocator, .{});
+    if (comptime has_openssl) {
+        var cf = lib.ConnFactory.Openssl.init(t.io, t.allocator, .{ .tls = .require }, .{});
+        const f = &cf.interface;
+        var conn = try f.create();
+        defer f.destroy(conn);
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
+        try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "empty password") != null);
+    } else {
+        var cf = lib.ConnFactory.Tls.init(t.io, t.allocator, .no_verification, .no_verification, .{ .tls = .require }, .{});
+        const f = &cf.interface;
+        var conn = try f.create();
+        defer f.destroy(conn);
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
+        try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "empty password") != null);
+    }
+
+    if (comptime has_openssl) {
+        var stream = try lib.OpensslStream.connect(t.io, t.allocator, .{ .tls = .require });
         defer stream.close();
         var sr = stream.reader(&rb);
         var sw = stream.writer(&wb);
-        var conn = try t.connect(sr.interface(), sw.interface(), .{ .tls = .require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        var conn = try t.connect(&sr.interface, &sw.interface, .{ .tls = .require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        defer conn.deinit();
+    } else {
+        var stream = try lib.TlsStream.connect(t.io, t.allocator, &rb, &wb, .no_verification, .no_verification, .{});
+        defer stream.close();
+        var conn = try t.connect(stream.reader(), stream.writer(), .{ .tls = .require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
         defer conn.deinit();
     }
 }
@@ -2224,7 +2199,7 @@ test "Conn: TLS verify-full" {
             defer stream.close();
             var sr = stream.reader(&rb);
             var sw = stream.writer(&wb);
-            var conn = try t.connect(sr.interface(), sw.interface(), .{ .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+            var conn = try t.connect(&sr.interface, &sw.interface, .{ .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
             defer conn.deinit();
         }
     }
@@ -2234,12 +2209,12 @@ test "PG: cached query" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {
@@ -2276,12 +2251,12 @@ test "PG: cached query with column names" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
 
     {

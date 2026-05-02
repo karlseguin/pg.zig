@@ -4,9 +4,7 @@ const stream = @import("stream.zig");
 
 const log = lib.log;
 const Conn = lib.Conn;
-const Stream = stream.Stream;
-const StreamReader = stream.StreamReader;
-const StreamWriter = stream.StreamWriter;
+const ConnFactory = lib.ConnFactory;
 const Result = lib.Result;
 const QueryRow = lib.QueryRow;
 const QueryRowUnsafe = lib.QueryRowUnsafe;
@@ -22,6 +20,7 @@ pub const Pool = struct {
     _opts: Opts,
     _timeout: u64,
     _conns: []*Conn,
+    _factory: *ConnFactory,
     _available: usize,
     _missing: usize,
     _allocator: Allocator,
@@ -33,8 +32,6 @@ pub const Pool = struct {
     pub const Opts = struct {
         size: u16 = 10,
         auth: Conn.AuthOpts = .{},
-        stream: stream.Opts = .{},
-        conn: Conn.Opts = .{},
         timeout: u32 = 10 * std.time.ms_per_s,
         connect_on_init_count: ?u16 = null,
     };
@@ -46,24 +43,15 @@ pub const Pool = struct {
         in_use: usize,
     };
 
-    const Item = struct {
-        conn: Conn,
-        stream: Stream,
-        reader_buffer: []u8,
-        writer_buffer: []u8,
-        sr: StreamReader,
-        sw: StreamWriter,
-    };
-
-    pub fn initUri(io: Io, allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
+    pub fn initUri(io: Io, allocator: Allocator, factory: *ConnFactory, uri: std.Uri, opts: Opts) !*Pool {
         var po = try lib.parseOpts(uri, allocator);
         defer po.deinit();
         po.opts.size = opts.size;
         po.opts.timeout = opts.timeout;
-        return Pool.init(io, allocator, po.opts);
+        return Pool.init(io, allocator, factory, po.opts);
     }
 
-    pub fn init(io: Io, allocator: Allocator, opts: Opts) !*Pool {
+    pub fn init(io: Io, allocator: Allocator, factory: *ConnFactory, opts: Opts) !*Pool {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const aa = arena.allocator();
         errdefer arena.deinit();
@@ -78,6 +66,7 @@ pub const Pool = struct {
             ._io = io,
             ._cond = .init,
             ._mutex = .init,
+            ._factory = factory,
             ._conns = conns,
             ._arena = arena,
             ._opts = opts,
@@ -111,9 +100,8 @@ pub const Pool = struct {
 
     pub fn deinit(self: *Pool) void {
         self._reconnector.stop();
-        const allocator = self._allocator;
         for (self._conns) |conn| {
-            releaseConn(allocator, conn);
+            self._factory.destroy(conn);
         }
         self._arena.deinit();
     }
@@ -169,15 +157,6 @@ pub const Pool = struct {
         }
     }
 
-    fn releaseConn(allocator: Allocator, conn: *Conn) void {
-        const item: *Pool.Item = @alignCast(@fieldParentPtr("conn", conn));
-        conn.deinit();
-        item.stream.close();
-        allocator.free(item.reader_buffer);
-        allocator.free(item.writer_buffer);
-        allocator.destroy(item);
-    }
-
     pub fn release(self: *Pool, conn: *Conn) void {
         var conn_to_add = conn;
         const io = self._io;
@@ -188,7 +167,7 @@ pub const Pool = struct {
             // recover from this (e.g. maybe we just need to read until we get a
             // ReadyForQuery), but we wouldn't want to block for too long. For now,
             // we'll just replace the connection.
-            releaseConn(self._allocator, conn);
+            self._factory.destroy(conn);
 
             conn_to_add = newConnection(self, true) catch |err1| {
                 // we failed to create the connection, track it as missing and let
@@ -363,31 +342,15 @@ const Reconnector = struct {
 
 fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
     const opts = &pool._opts;
-    const allocator = pool._allocator;
-    const io = pool._io;
 
-    var item = try allocator.create(Pool.Item);
-
-    item.stream = try Stream.connect(io, allocator, opts.stream);
-    errdefer item.stream.close();
-
-    item.reader_buffer = try allocator.alloc(u8, opts.stream.reader_buffer);
-    errdefer allocator.free(item.reader_buffer);
-    item.sr = item.stream.reader(item.reader_buffer);
-
-    item.writer_buffer = try allocator.alloc(u8, opts.stream.writer_buffer);
-    errdefer allocator.free(item.writer_buffer);
-    item.sw = item.stream.writer(item.writer_buffer);
-
-    item.conn = Conn.open(io, allocator, item.sr.interface(), item.sw.interface(), opts.conn) catch |err| {
-        if (log_failure) log.err("connect error: {}", .{err});
+    var conn = pool._factory.create() catch |err| {
+        if (log_failure)
+            log.err("connect error: {}", .{err});
         return err;
     };
-    errdefer item.conn.deinit();
-
-    item.conn.auth(opts.auth) catch |err| {
+    conn.auth(opts.auth) catch |err| {
         if (log_failure) {
-            if (item.conn.err) |pg_err| {
+            if (conn.err) |pg_err| {
                 log.err("connect error: {s}", .{pg_err.message});
             } else {
                 log.err("connect error: {}", .{err});
@@ -395,13 +358,14 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
         }
         return err;
     };
-    item.conn._pool = pool;
-    return &item.conn;
+    conn._pool = pool;
+    return conn;
 }
 
 const t = lib.testing;
 test "Pool" {
-    var pool = try Pool.init(t.io, t.allocator, .{
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 2,
         .auth = t.authOpts(.{}),
         .connect_on_init_count = 1,
@@ -435,7 +399,8 @@ test "Pool" {
 }
 
 test "Pool: Release" {
-    var pool = try Pool.init(t.io, t.allocator, .{
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 2,
         .auth = .{
             .database = "postgres",
@@ -451,7 +416,8 @@ test "Pool: Release" {
 }
 
 test "Pool: stats" {
-    var pool = try Pool.init(t.io, t.allocator, .{
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 3,
         .auth = t.authOpts(.{}),
     });
@@ -508,7 +474,8 @@ test "Pool: stats" {
 }
 
 test "Pool: exec" {
-    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -524,7 +491,8 @@ test "Pool: exec" {
 }
 
 test "Pool: Query/Row" {
-    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -557,7 +525,8 @@ test "Pool: Query/Row" {
 }
 
 test "Pool: Row error" {
-    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     _ = try pool.rowUnsafe("insert into all_types (id) values ($1)", .{200});

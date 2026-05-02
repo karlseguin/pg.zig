@@ -1,11 +1,8 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-
 const openssl = lib.openssl;
-
 const posix = std.posix;
 
-const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
@@ -26,87 +23,6 @@ pub const Opts = struct {
     };
 };
 
-pub const Stream = if (lib.has_openssl) OpensslStream else union(enum) {
-    tls: TlsStream,
-    plain: PlainStream,
-
-    pub fn connect(io: Io, allocator: Allocator, opts: Opts) !Stream {
-        switch (opts.tls) {
-            .off => return .{ .plain = try PlainStream.connect(io, allocator, opts) },
-            .require => return .{ .tls = try TlsStream.connect(io, allocator, opts) },
-            .verify_full => @panic("Unsupported by std.crypto.tls.Client"),
-        }
-    }
-
-    pub fn reader(self: *Stream, buffer: []u8) StreamReader {
-        switch (self.*) {
-            inline else => |*s| return s.reader(buffer),
-        }
-    }
-
-    pub fn writer(self: *Stream, buffer: []u8) StreamWriter {
-        switch (self.*) {
-            inline else => |*s| return s.writer(buffer),
-        }
-    }
-
-    pub fn close(self: *Stream) void {
-        switch (self.*) {
-            inline else => |*s| return s.close(),
-        }
-    }
-
-    pub fn shutdown(self: *const Stream, how: ShutdownHow) !void {
-        switch (self.*) {
-            inline else => |*s| return s.shutdown(how),
-        }
-    }
-};
-
-pub const StreamReader = if (lib.has_openssl) union(enum) {
-    plain: Io.net.Stream.Reader,
-    openssl: OpensslStream.Reader,
-    tls: *Io.Reader,
-
-    pub fn interface(sr: *StreamReader) *Io.Reader {
-        switch (sr.*) {
-            .tls => |r| return r,
-            inline else => |*r| return &r.interface,
-        }
-    }
-} else union(enum) {
-    plain: Io.net.Stream.Reader,
-    tls: *Io.Reader,
-
-    pub fn interface(sr: *StreamReader) *Io.Reader {
-        switch (sr.*) {
-            .tls => |r| return r,
-            inline else => |*r| return &r.interface,
-        }
-    }
-};
-
-pub const StreamWriter = if (lib.has_openssl) union(enum) {
-    plain: Io.net.Stream.Writer,
-    openssl: OpensslStream.Writer,
-    tls: TlsStream.Writer,
-
-    pub fn interface(sw: *StreamWriter) *Io.Writer {
-        switch (sw.*) {
-            inline else => |*w| return &w.interface,
-        }
-    }
-} else union(enum) {
-    plain: Io.net.Stream.Writer,
-    tls: TlsStream.Writer,
-
-    pub fn interface(sw: *StreamWriter) *Io.Writer {
-        switch (sw.*) {
-            inline else => |*w| return &w.interface,
-        }
-    }
-};
-
 pub const OpensslStream = struct {
     valid: bool,
     ssl: ?*openssl.SSL,
@@ -114,11 +30,25 @@ pub const OpensslStream = struct {
     stream: Io.net.Stream,
     io: Io,
 
+    pub const Error = error{
+        SSLNotSupportedByServer,
+        OpenSSLNotConfigured,
+        SSLNewFailed,
+        SSLContextNew,
+        SSLMinVersion,
+        SSLVerifyPaths,
+        SSLDefaultVerifyPaths,
+        SSLHostNameFailed,
+        SSLSetFdFailed,
+        SSLCertificationVerificationError,
+        SSLConnectFailed,
+    } || PlainStream.Error || Allocator.Error || Io.Writer.Error || Io.Reader.Error;
+
     pub const Reader = struct {
         io: Io,
         interface: Io.Reader,
         tlsstream: OpensslStream,
-        err: ?Error,
+        err: ?Reader.Error,
 
         const max_iovecs_len = 2;
 
@@ -180,7 +110,7 @@ pub const OpensslStream = struct {
         io: Io,
         interface: Io.Writer,
         tlsstream: OpensslStream,
-        err: ?Error = null,
+        err: ?Writer.Error = null,
 
         pub const Error = error{
             SSLWriteFailed,
@@ -205,7 +135,7 @@ pub const OpensslStream = struct {
             const buffered = io_w.buffered();
 
             var result: i32 = undefined;
-            const ssl = w.tlsstream.ssl.?;
+            const ssl = w.tlsstream.ssl;
 
             if (buffered.len > 0) {
                 result = openssl.SSL_write(ssl, buffered.ptr, @intCast(buffered.len));
@@ -246,31 +176,23 @@ pub const OpensslStream = struct {
         }
     };
 
-    pub fn reader(stream: OpensslStream, buffer: []u8) StreamReader {
-        if (stream.ssl) |_| {
-            return .{ .openssl = .init(stream, stream.io, buffer) };
-        } else {
-            return .{ .plain = stream.stream.reader(stream.io, buffer) };
-        }
+    pub fn reader(stream: OpensslStream, buffer: []u8) Reader {
+        return .init(stream, stream.io, buffer);
     }
 
-    pub fn writer(stream: OpensslStream, buffer: []u8) StreamWriter {
-        if (stream.ssl) |_| {
-            return .{ .openssl = .init(stream, stream.io, buffer) };
-        } else {
-            return .{ .plain = stream.stream.writer(stream.io, buffer) };
-        }
+    pub fn writer(stream: OpensslStream, buffer: []u8) Writer {
+        return .init(stream, stream.io, buffer);
     }
 
-    pub fn connect(io: Io, allocator: Allocator, opts: Opts) !OpensslStream {
-        const plain = try PlainStream.connect(io, allocator, opts);
+    pub fn connect(io: Io, allocator: Allocator, opts: Opts) Error!OpensslStream {
+        const plain = try PlainStream.connect(io, opts);
         errdefer plain.close();
 
         const stream = plain.stream;
 
         var ssl_ctx: ?*openssl.SSL_CTX = null;
         switch (opts.tls) {
-            .off => {},
+            .off => @panic("Not supported."),
             else => |tls_config| {
                 if (comptime lib.has_openssl == false) {
                     return error.OpenSSLNotConfigured;
@@ -374,6 +296,14 @@ pub const TlsStream = struct {
     allocator: Allocator,
     stream: Io.net.Stream,
     client: *std.crypto.tls.Client,
+    output: Writer,
+
+    pub const Error = error{
+        SSLNotSupportedByServer,
+    } || Allocator.Error || Io.RandomSecureError || Io.net.HostName.ValidateError || Io.net.HostName.ConnectError || Io.Reader.ShortError || Io.Writer.Error || std.crypto.tls.Client.InitError;
+
+    pub const HostVerification = @FieldType(std.crypto.tls.Client.Options, "host");
+    pub const CAVerification = @FieldType(std.crypto.tls.Client.Options, "ca");
 
     const Writer = struct {
         client: *std.crypto.tls.Client,
@@ -410,19 +340,23 @@ pub const TlsStream = struct {
         }
     };
 
-    pub fn reader(stream: *TlsStream, _: []u8) StreamReader {
-        return .{
-            .tls = &stream.client.reader,
-        };
+    pub fn reader(stream: *TlsStream) *Io.Reader {
+        return &stream.client.reader;
     }
 
-    pub fn writer(stream: *TlsStream, _: []u8) StreamWriter {
-        return .{
-            .tls = .init(stream.client),
-        };
+    pub fn writer(stream: *TlsStream) *Io.Writer {
+        return &stream.output.interface;
     }
 
-    pub fn connect(io: Io, allocator: Allocator, opts: Opts) !TlsStream {
+    pub fn connect(
+        io: Io,
+        allocator: Allocator,
+        read_buffer: []u8,
+        write_buffer: []u8,
+        host_verification: HostVerification,
+        ca_verification: CAVerification,
+        opts: Opts,
+    ) Error!TlsStream {
         const tls = std.crypto.tls;
 
         const host = opts.host orelse DEFAULT_HOST;
@@ -433,17 +367,17 @@ pub const TlsStream = struct {
 
         const min_size = tls.Client.min_buffer_len;
 
-        const read_buffer = try allocator.alloc(u8, min_size);
-        errdefer allocator.free(read_buffer);
-        const write_buffer = try allocator.alloc(u8, min_size);
-        errdefer allocator.free(write_buffer);
+        const rb = try allocator.alloc(u8, min_size);
+        errdefer allocator.free(rb);
+        const wb = try allocator.alloc(u8, min_size);
+        errdefer allocator.free(wb);
 
         var plain_reader = try allocator.create(Io.net.Stream.Reader);
         errdefer allocator.destroy(plain_reader);
-        plain_reader.* = stream.reader(io, read_buffer);
+        plain_reader.* = stream.reader(io, rb);
         var plain_writer = try allocator.create(Io.net.Stream.Writer);
         errdefer allocator.destroy(plain_writer);
-        plain_writer.* = stream.writer(io, write_buffer);
+        plain_writer.* = stream.writer(io, wb);
 
         const pr = &plain_reader.interface;
         const pw = &plain_writer.interface;
@@ -461,15 +395,13 @@ pub const TlsStream = struct {
         try std.Io.randomSecure(io, &entropy);
 
         const opt: tls.Client.Options = .{
-            .host = .no_verification,
-            .ca = .no_verification,
-            .read_buffer = try allocator.alloc(u8, opts.reader_buffer),
-            .write_buffer = try allocator.alloc(u8, opts.writer_buffer),
+            .host = host_verification,
+            .ca = ca_verification,
+            .read_buffer = read_buffer,
+            .write_buffer = write_buffer,
             .entropy = &entropy,
             .realtime_now = .now(io, .real),
         };
-        errdefer allocator.free(opt.read_buffer);
-        errdefer allocator.free(opt.write_buffer);
 
         const client = try allocator.create(tls.Client);
         errdefer allocator.destroy(client);
@@ -481,6 +413,7 @@ pub const TlsStream = struct {
             .allocator = allocator,
             .stream = stream,
             .client = client,
+            .output = .init(client),
         };
     }
 
@@ -493,8 +426,6 @@ pub const TlsStream = struct {
         self.allocator.free(self.client.output.buffer);
         self.allocator.destroy(r);
         self.allocator.destroy(w);
-        self.allocator.free(self.client.reader.buffer);
-        self.allocator.free(self.client.writer.buffer);
         self.allocator.destroy(self.client);
     }
 
@@ -507,19 +438,19 @@ pub const PlainStream = struct {
     io: Io,
     stream: Io.net.Stream,
 
-    pub fn reader(stream: *PlainStream, buffer: []u8) StreamReader {
-        return .{
-            .plain = stream.stream.reader(stream.io, buffer),
-        };
+    pub const Error = error{
+        UnixPathNotSupported,
+    } || Io.net.UnixAddress.ConnectError || Io.net.HostName.ValidateError || Io.net.HostName.ConnectError;
+
+    pub fn reader(stream: *PlainStream, buffer: []u8) Io.net.Stream.Reader {
+        return stream.stream.reader(stream.io, buffer);
     }
 
-    pub fn writer(stream: *PlainStream, buffer: []u8) StreamWriter {
-        return .{
-            .plain = stream.stream.writer(stream.io, buffer),
-        };
+    pub fn writer(stream: *PlainStream, buffer: []u8) Io.net.Stream.Writer {
+        return stream.stream.writer(stream.io, buffer);
     }
 
-    pub fn connect(io: Io, _: Allocator, opts: Opts) !PlainStream {
+    pub fn connect(io: Io, opts: Opts) Error!PlainStream {
         const stream = try blk: {
             const host = opts.host orelse DEFAULT_HOST;
             if (host.len > 0 and host[0] == '/') {

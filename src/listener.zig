@@ -207,11 +207,11 @@ test "Listener" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{ .host = "127.0.0.1" });
+    var stream: lib.PlainStream = try .connect(t.io, .{ .host = "127.0.0.1" });
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
-    var l = try Listener.open(t.io, t.allocator, sr.interface(), sw.interface(), .{});
+    var l = try Listener.open(t.io, t.allocator, &sr.interface, &sw.interface, .{});
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
@@ -272,12 +272,12 @@ fn testNotifier() !void {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
-    var stream: lib.PlainStream = try .connect(t.io, t.allocator, .{});
+    var stream: lib.PlainStream = try .connect(t.io, .{});
     defer stream.close();
     var sr = stream.reader(&rb);
     var sw = stream.writer(&wb);
 
-    var c = try t.connect(sr.interface(), sw.interface(), .{});
+    var c = try t.connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     _ = c.exec("select pg_notify($1, $2)", .{ "chan_x", "pl-x" }) catch unreachable;
     _ = c.exec("select pg_notify($1, $2)", .{ "chan-1", "pl-1" }) catch unreachable;
