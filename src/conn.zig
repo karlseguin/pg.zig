@@ -73,8 +73,8 @@ pub const Conn = struct {
     };
 
     pub const Opts = struct {
-        write_buffer: ?u16 = null,
-        read_buffer: ?u16 = null,
+        write_buffer: u16 = 2048,
+        read_buffer: u16 = 4096,
         result_state_size: u16 = 32,
     };
 
@@ -118,10 +118,10 @@ pub const Conn = struct {
     }
 
     pub fn open(io: Io, allocator: Allocator, reader: *Io.Reader, writer: *Io.Writer, opts: Opts) Allocator.Error!Conn {
-        const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));
+        const buf = try Buffer.init(allocator, @max(opts.write_buffer, 128));
         errdefer buf.deinit();
 
-        const pg_reader = try Reader.init(allocator, opts.read_buffer orelse 4096, reader);
+        const pg_reader = try Reader.init(allocator, opts.read_buffer, reader);
         errdefer pg_reader.deinit();
 
         const result_state = try Result.State.init(allocator, opts.result_state_size);
@@ -522,7 +522,7 @@ pub const Conn = struct {
 
 const t = lib.testing;
 test "Conn: auth trust (no pass)" {
-    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
     const f = &cf.interface;
     var conn = try f.create();
     defer f.destroy(conn);
@@ -530,7 +530,7 @@ test "Conn: auth trust (no pass)" {
 }
 
 test "Conn: auth unknown user" {
-    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
     const f = &cf.interface;
     var conn = try f.create();
     defer f.destroy(conn);
@@ -539,7 +539,7 @@ test "Conn: auth unknown user" {
 }
 
 test "Conn: auth cleartext password" {
-    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
     const f = &cf.interface;
 
     {
@@ -564,7 +564,7 @@ test "Conn: auth cleartext password" {
 }
 
 test "Conn: auth scram-sha-256 password" {
-    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
     const f = &cf.interface;
 
     {
@@ -2001,7 +2001,7 @@ test "PG: Record" {
 }
 
 test "Conn: application_name" {
-    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
     const f = &cf.interface;
     var conn = try f.create();
     defer f.destroy(conn);
@@ -2070,7 +2070,7 @@ test "PG: eager error" {
 
 // https://github.com/karlseguin/pg.zig/issues/44
 test "PG: eager error conn state" {
-    var f = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try lib.Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
@@ -2094,7 +2094,7 @@ test "PG: eager error conn state" {
 
 // https://github.com/karlseguin/pg.zig/issues/45
 test "PG: rollback during error" {
-    var f = lib.ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try lib.Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
@@ -2140,7 +2140,7 @@ test "open URI" {
     conn.deinit();
 }
 
-test "Conn: TLS required" {
+test "Conn: Openssl required" {
     var rb: [1024]u8 = undefined;
     var wb: [1024]u8 = undefined;
 
@@ -2157,14 +2157,7 @@ test "Conn: TLS required" {
     }
 
     if (comptime has_openssl) {
-        var cf = lib.ConnFactory.Openssl.init(t.io, t.allocator, .{ .tls = .require }, .{});
-        const f = &cf.interface;
-        var conn = try f.create();
-        defer f.destroy(conn);
-        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
-        try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "empty password") != null);
-    } else {
-        var cf = lib.ConnFactory.Tls.init(t.io, t.allocator, .no_verification, .no_verification, .{ .tls = .require }, .{});
+        var cf = lib.ConnFactory.Openssl.init(t.io, t.allocator, .{});
         const f = &cf.interface;
         var conn = try f.create();
         defer f.destroy(conn);
@@ -2173,21 +2166,16 @@ test "Conn: TLS required" {
     }
 
     if (comptime has_openssl) {
-        var stream = try lib.OpensslStream.connect(t.io, t.allocator, .{ .tls = .require });
+        var stream = try lib.OpensslStream.connect(t.io, t.allocator, .{});
         defer stream.close();
         var sr = stream.reader(&rb);
         var sw = stream.writer(&wb);
-        var conn = try t.connect(&sr.interface, &sw.interface, .{ .tls = .require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
-        defer conn.deinit();
-    } else {
-        var stream = try lib.TlsStream.connect(t.io, t.allocator, &rb, &wb, .no_verification, .no_verification, .{});
-        defer stream.close();
-        var conn = try t.connect(stream.reader(), stream.writer(), .{ .tls = .require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        var conn = try t.connect(&sr.interface, &sw.interface, .{ .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
         defer conn.deinit();
     }
 }
 
-test "Conn: TLS verify-full" {
+test "Conn: Openssl verify-full" {
     if (comptime has_openssl) {
         var rb: [1024]u8 = undefined;
         var wb: [1024]u8 = undefined;
@@ -2202,6 +2190,27 @@ test "Conn: TLS verify-full" {
             var conn = try t.connect(&sr.interface, &sw.interface, .{ .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
             defer conn.deinit();
         }
+    }
+}
+
+test "Conn: Tls required" {
+    var rb: [1024]u8 = undefined;
+    var wb: [1024]u8 = undefined;
+
+    {
+        var cf = lib.ConnFactory.Tls.init(t.io, t.allocator, .{});
+        const f = &cf.interface;
+        var conn = try f.create();
+        defer f.destroy(conn);
+        try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
+        try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "empty password") != null);
+    }
+
+    {
+        var stream = try lib.TlsStream.connect(t.io, t.allocator, &rb, &wb, .{});
+        defer stream.close();
+        var conn = try t.connect(stream.reader(), stream.writer(), .{ .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+        defer conn.deinit();
     }
 }
 

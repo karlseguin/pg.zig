@@ -15,8 +15,6 @@ pub const Error = error{
 
 io: Io,
 allocator: Allocator,
-stream_opts: stream.Opts,
-conn_opts: Conn.Opts,
 
 vtable: *const VTable,
 
@@ -37,25 +35,31 @@ pub fn destroy(factory: *const ConnFactory, conn: *Conn) void {
 
 pub const Plain = struct {
     interface: ConnFactory,
+    opts: Opts,
     err: ?PlainStream.Error,
+
+    pub const Opts = struct {
+        read_buffer: u16 = 1024,
+        write_buffer: u16 = 1024,
+        stream_opts: PlainStream.Opts = .{},
+        conn_opts: Conn.Opts = .{},
+    };
 
     pub fn init(
         io: Io,
         allocator: Allocator,
-        stream_opts: stream.Opts,
-        conn_opts: Conn.Opts,
+        opts: Opts,
     ) Plain {
         return .{
             .interface = .{
                 .io = io,
                 .allocator = allocator,
-                .stream_opts = stream_opts,
-                .conn_opts = conn_opts,
                 .vtable = &.{
                     .create = Plain.create,
                     .destroy = Plain.destroy,
                 },
             },
+            .opts = opts,
             .err = null,
         };
     }
@@ -70,15 +74,14 @@ pub const Plain = struct {
     };
 
     pub fn create(cf: *ConnFactory) Error!*Conn {
+        var f: *Plain = @alignCast(@fieldParentPtr("interface", cf));
+
         const io = cf.io;
         const allocator = cf.allocator;
-        const stream_opts = cf.stream_opts;
-        const conn_opts = cf.conn_opts;
 
         const item = try allocator.create(Item);
         errdefer allocator.destroy(item);
-        item.stream = PlainStream.connect(io, stream_opts) catch |err| {
-            var f: *Plain = @alignCast(@fieldParentPtr("interface", cf));
+        item.stream = PlainStream.connect(io, f.opts.stream_opts) catch |err| {
             switch (err) {
                 error.Canceled => return error.Canceled,
                 else => |e| {
@@ -88,10 +91,10 @@ pub const Plain = struct {
             }
         };
         errdefer item.stream.close();
-        item.read_buffer = try allocator.alloc(u8, stream_opts.reader_buffer);
+        item.read_buffer = try allocator.alloc(u8, f.opts.read_buffer);
         errdefer allocator.free(item.read_buffer);
         item.reader = item.stream.reader(item.read_buffer);
-        item.write_buffer = try allocator.alloc(u8, stream_opts.writer_buffer);
+        item.write_buffer = try allocator.alloc(u8, f.opts.write_buffer);
         errdefer allocator.free(item.write_buffer);
         item.writer = item.stream.writer(item.write_buffer);
         item.conn = try Conn.open(
@@ -99,7 +102,7 @@ pub const Plain = struct {
             allocator,
             &item.reader.interface,
             &item.writer.interface,
-            conn_opts,
+            f.opts.conn_opts,
         );
         errdefer item.conn.deinit();
         return &item.conn;
@@ -118,31 +121,31 @@ pub const Plain = struct {
 
 pub const Tls = struct {
     interface: ConnFactory,
-    host_verification: TlsStream.HostVerification,
-    ca_verification: TlsStream.CAVerification,
+    opts: Opts,
     err: ?TlsStream.Error,
+
+    pub const Opts = struct {
+        read_buffer: u16 = 4096,
+        write_buffer: u16 = 1024,
+        stream_opts: TlsStream.Opts = .{},
+        conn_opts: Conn.Opts = .{},
+    };
 
     pub fn init(
         io: Io,
         allocator: Allocator,
-        host_verification: TlsStream.HostVerification,
-        ca_verification: TlsStream.CAVerification,
-        stream_opts: stream.Opts,
-        conn_opts: Conn.Opts,
+        opts: Opts,
     ) Tls {
         return .{
             .interface = .{
                 .io = io,
                 .allocator = allocator,
-                .stream_opts = stream_opts,
-                .conn_opts = conn_opts,
                 .vtable = &.{
                     .create = Tls.create,
                     .destroy = Tls.destroy,
                 },
             },
-            .host_verification = host_verification,
-            .ca_verification = ca_verification,
+            .opts = opts,
             .err = null,
         };
     }
@@ -157,20 +160,18 @@ pub const Tls = struct {
     pub fn create(
         cf: *ConnFactory,
     ) Error!*Conn {
+        var f: *Tls = @alignCast(@fieldParentPtr("interface", cf));
+
         const io = cf.io;
         const allocator = cf.allocator;
-        const stream_opts = cf.stream_opts;
-        const conn_opts = cf.conn_opts;
-
-        var f: *Tls = @alignCast(@fieldParentPtr("interface", cf));
 
         const item = try allocator.create(Item);
         errdefer allocator.destroy(item);
-        item.read_buffer = try allocator.alloc(u8, stream_opts.reader_buffer);
+        item.read_buffer = try allocator.alloc(u8, f.opts.read_buffer);
         errdefer allocator.free(item.read_buffer);
-        item.write_buffer = try allocator.alloc(u8, stream_opts.writer_buffer);
+        item.write_buffer = try allocator.alloc(u8, f.opts.write_buffer);
         errdefer allocator.free(item.write_buffer);
-        item.stream = TlsStream.connect(io, allocator, item.read_buffer, item.write_buffer, f.host_verification, f.ca_verification, stream_opts) catch |err| {
+        item.stream = TlsStream.connect(io, allocator, item.read_buffer, item.write_buffer, f.opts.stream_opts) catch |err| {
             switch (err) {
                 error.Canceled => return error.Canceled,
                 else => |e| {
@@ -185,7 +186,7 @@ pub const Tls = struct {
             allocator,
             item.stream.reader(),
             item.stream.writer(),
-            conn_opts,
+            f.opts.conn_opts,
         );
         errdefer item.conn.deinit();
         return &item.conn;
@@ -204,25 +205,31 @@ pub const Tls = struct {
 
 pub const Openssl = struct {
     interface: ConnFactory,
+    opts: Opts,
     err: ?OpensslStream.Error,
+
+    pub const Opts = struct {
+        read_buffer: u16 = 1024,
+        write_buffer: u16 = 1024,
+        stream_opts: OpensslStream.Opts = .{},
+        conn_opts: Conn.Opts = .{},
+    };
 
     pub fn init(
         io: Io,
         allocator: Allocator,
-        stream_opts: stream.Opts,
-        conn_opts: Conn.Opts,
+        opts: Opts,
     ) Openssl {
         return .{
             .interface = .{
                 .io = io,
                 .allocator = allocator,
-                .stream_opts = stream_opts,
-                .conn_opts = conn_opts,
                 .vtable = &.{
                     .create = Openssl.create,
                     .destroy = Openssl.destroy,
                 },
             },
+            .opts = opts,
             .err = null,
         };
     }
@@ -237,16 +244,14 @@ pub const Openssl = struct {
     };
 
     pub fn create(cf: *ConnFactory) Error!*Conn {
+        var f: *Openssl = @alignCast(@fieldParentPtr("interface", cf));
+
         const io = cf.io;
         const allocator = cf.allocator;
-        const stream_opts = cf.stream_opts;
-        const conn_opts = cf.conn_opts;
-        std.debug.assert(stream_opts.tls != .off);
 
         const item = try allocator.create(Item);
         errdefer allocator.destroy(item);
-        item.stream = OpensslStream.connect(io, allocator, stream_opts) catch |err| {
-            var f: *Openssl = @alignCast(@fieldParentPtr("interface", cf));
+        item.stream = OpensslStream.connect(io, allocator, f.opts.stream_opts) catch |err| {
             switch (err) {
                 error.Canceled => return error.Canceled,
                 else => |e| {
@@ -256,10 +261,10 @@ pub const Openssl = struct {
             }
         };
         errdefer item.stream.close();
-        item.read_buffer = try allocator.alloc(u8, stream_opts.reader_buffer);
+        item.read_buffer = try allocator.alloc(u8, f.opts.read_buffer);
         errdefer allocator.free(item.read_buffer);
         item.reader = item.stream.reader(item.read_buffer);
-        item.write_buffer = try allocator.alloc(u8, stream_opts.writer_buffer);
+        item.write_buffer = try allocator.alloc(u8, f.opts.write_buffer);
         errdefer allocator.free(item.write_buffer);
         item.writer = item.stream.writer(item.write_buffer);
         item.conn = try Conn.open(
@@ -267,7 +272,7 @@ pub const Openssl = struct {
             allocator,
             &item.reader.interface,
             &item.writer.interface,
-            conn_opts,
+            f.opts.conn_opts,
         );
         errdefer item.conn.deinit();
         return &item.conn;

@@ -32,7 +32,7 @@ pub const Listener = struct {
     _io: Io,
 
     pub fn open(io: Io, allocator: Allocator, reader: *Io.Reader, writer: *Io.Writer, opts: Conn.Opts) !Listener {
-        const pgreader = try Reader.init(allocator, opts.read_buffer orelse 4096, reader);
+        const pgreader = try Reader.init(allocator, opts.read_buffer, reader);
         errdefer pgreader.deinit();
 
         return .{
