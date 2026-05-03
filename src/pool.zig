@@ -1,10 +1,11 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const stream = @import("stream.zig");
 
 const log = lib.log;
 const Conn = lib.Conn;
+const ConnFactory = lib.ConnFactory;
 const Result = lib.Result;
-const SSLCtx = lib.SSLCtx;
 const QueryRow = lib.QueryRow;
 const QueryRowUnsafe = lib.QueryRowUnsafe;
 const Listener = @import("listener.zig").Listener;
@@ -19,19 +20,18 @@ pub const Pool = struct {
     _opts: Opts,
     _timeout: u64,
     _conns: []*Conn,
+    _factory: *ConnFactory,
     _available: usize,
     _missing: usize,
     _allocator: Allocator,
     _mutex: Io.Mutex,
     _cond: Io.Condition,
-    _ssl_ctx: ?*lib.SSLCtx,
     _reconnector: Reconnector,
     _arena: std.heap.ArenaAllocator,
 
     pub const Opts = struct {
         size: u16 = 10,
         auth: Conn.AuthOpts = .{},
-        connect: Conn.Opts = .{},
         timeout: u32 = 10 * std.time.ms_per_s,
         connect_on_init_count: ?u16 = null,
     };
@@ -43,15 +43,15 @@ pub const Pool = struct {
         in_use: usize,
     };
 
-    pub fn initUri(io: Io, allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
+    pub fn initUri(io: Io, allocator: Allocator, factory: *ConnFactory, uri: std.Uri, opts: Opts) !*Pool {
         var po = try lib.parseOpts(uri, allocator);
         defer po.deinit();
         po.opts.size = opts.size;
         po.opts.timeout = opts.timeout;
-        return Pool.init(io, allocator, po.opts);
+        return Pool.init(io, allocator, factory, po.opts);
     }
 
-    pub fn init(io: Io, allocator: Allocator, opts: Opts) !*Pool {
+    pub fn init(io: Io, allocator: Allocator, factory: *ConnFactory, opts: Opts) !*Pool {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const aa = arena.allocator();
         errdefer arena.deinit();
@@ -60,30 +60,16 @@ pub const Pool = struct {
         const size = opts.size;
         const conns = try aa.alloc(*Conn, size);
 
-        var opts_copy = opts;
-        var ssl_ctx: ?*SSLCtx = null;
-        if (comptime lib.has_openssl) {
-            switch (opts.connect.tls) {
-                .off => {},
-                else => |tls_config| {
-                    if (opts.connect.host) |h| {
-                        opts_copy.connect._hostz = try aa.dupeZ(u8, h);
-                    }
-                    ssl_ctx = try lib.initializeSSLContext(tls_config);
-                },
-            }
-        }
-        errdefer lib.freeSSLContext(ssl_ctx);
         const connect_on_init_count = opts.connect_on_init_count orelse size;
 
         pool.* = .{
             ._io = io,
             ._cond = .init,
             ._mutex = .init,
+            ._factory = factory,
             ._conns = conns,
             ._arena = arena,
-            ._opts = opts_copy,
-            ._ssl_ctx = ssl_ctx,
+            ._opts = opts,
             ._missing = 0,
             ._allocator = allocator,
             ._available = connect_on_init_count,
@@ -114,12 +100,9 @@ pub const Pool = struct {
 
     pub fn deinit(self: *Pool) void {
         self._reconnector.stop();
-        const allocator = self._allocator;
         for (self._conns) |conn| {
-            conn.deinit();
-            allocator.destroy(conn);
+            self._factory.destroy(conn);
         }
-        lib.freeSSLContext(self._ssl_ctx);
         self._arena.deinit();
     }
 
@@ -184,8 +167,7 @@ pub const Pool = struct {
             // recover from this (e.g. maybe we just need to read until we get a
             // ReadyForQuery), but we wouldn't want to block for too long. For now,
             // we'll just replace the connection.
-            conn.deinit();
-            self._allocator.destroy(conn);
+            self._factory.destroy(conn);
 
             conn_to_add = newConnection(self, true) catch |err1| {
                 // we failed to create the connection, track it as missing and let
@@ -210,11 +192,11 @@ pub const Pool = struct {
         self._cond.signal(io);
     }
 
-    pub fn newListener(self: *Pool) !Listener {
-        var listener = try Listener.open(self._io, self._allocator, self._opts.connect);
-        try listener.auth(self._opts.auth);
-        return listener;
-    }
+    // pub fn newListener(self: *Pool) !Listener {
+    //     var listener = try Listener.open(self._io, self._allocator, self._opts.connect);
+    //     try listener.auth(self._opts.auth);
+    //     return listener;
+    // }
 
     pub fn stats(self: *Pool) Stats {
         const io = self._io;
@@ -360,21 +342,12 @@ const Reconnector = struct {
 
 fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
     const opts = &pool._opts;
-    const allocator = pool._allocator;
-    const io = pool._io;
 
-    const conn = allocator.create(Conn) catch |err| {
-        if (log_failure) log.err("connect error: {}", .{err});
+    var conn = pool._factory.create() catch |err| {
+        if (log_failure)
+            log.err("connect error: {}", .{err});
         return err;
     };
-    errdefer allocator.destroy(conn);
-
-    conn.* = Conn.open(io, allocator, opts.connect) catch |err| {
-        if (log_failure) log.err("connect error: {}", .{err});
-        return err;
-    };
-    errdefer conn.deinit();
-
     conn.auth(opts.auth) catch |err| {
         if (log_failure) {
             if (conn.err) |pg_err| {
@@ -391,7 +364,8 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
 
 const t = lib.testing;
 test "Pool" {
-    var pool = try Pool.init(t.io, t.allocator, .{
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 2,
         .auth = t.authOpts(.{}),
         .connect_on_init_count = 1,
@@ -425,7 +399,8 @@ test "Pool" {
 }
 
 test "Pool: Release" {
-    var pool = try Pool.init(t.io, t.allocator, .{
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 2,
         .auth = .{
             .database = "postgres",
@@ -441,7 +416,8 @@ test "Pool: Release" {
 }
 
 test "Pool: stats" {
-    var pool = try Pool.init(t.io, t.allocator, .{
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 3,
         .auth = t.authOpts(.{}),
     });
@@ -498,7 +474,8 @@ test "Pool: stats" {
 }
 
 test "Pool: exec" {
-    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -514,7 +491,8 @@ test "Pool: exec" {
 }
 
 test "Pool: Query/Row" {
-    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     {
@@ -547,7 +525,8 @@ test "Pool: Query/Row" {
 }
 
 test "Pool: Row error" {
-    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
+    var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
     _ = try pool.rowUnsafe("insert into all_types (id) values ($1)", .{200});

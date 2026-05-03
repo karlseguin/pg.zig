@@ -1,145 +1,447 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-
 const openssl = lib.openssl;
-
 const posix = std.posix;
 
-const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
-const DEFAULT_HOST = "127.0.0.1";
-
-pub const Stream = if (lib.has_openssl) TLSStream else PlainStream;
-
-const TLSStream = struct {
+pub const OpensslStream = struct {
     valid: bool,
-    ssl: ?*openssl.SSL,
+    ssl: *openssl.SSL,
+    ctx: *openssl.SSL_CTX,
     stream: Io.net.Stream,
     io: Io,
 
-    pub fn connect(io: Io, allocator: Allocator, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
-        const plain = try PlainStream.connect(io, allocator, opts, null);
+    pub const Error = error{
+        SSLNotSupportedByServer,
+        OpenSSLNotConfigured,
+        SSLNewFailed,
+        SSLContextNew,
+        SSLMinVersion,
+        SSLVerifyPaths,
+        SSLDefaultVerifyPaths,
+        SSLHostNameFailed,
+        SSLSetFdFailed,
+        SSLCertificationVerificationError,
+        SSLConnectFailed,
+    } || PlainStream.Error || Allocator.Error || Io.Writer.Error || Io.Reader.Error;
+
+    pub const Opts = struct {
+        host: []const u8 = "localhost",
+        port: u16 = 5432,
+        tls: TLS = .require,
+        _hostz: ?[:0]const u8 = null,
+
+        pub const TLS = union(enum) {
+            require: void,
+            verify_full: ?[]const u8,
+        };
+    };
+
+    pub const Reader = struct {
+        io: Io,
+        interface: Io.Reader,
+        tlsstream: OpensslStream,
+        err: ?Reader.Error,
+
+        const max_iovecs_len = 2;
+
+        pub const Error = error{
+            SSLReadFailed,
+        };
+
+        pub fn init(stream: OpensslStream, io: Io, buffer: []u8) Reader {
+            return .{
+                .io = io,
+                .interface = .{
+                    .vtable = &.{
+                        .stream = streamImpl,
+                        .readVec = readVec,
+                    },
+                    .buffer = buffer,
+                    .seek = 0,
+                    .end = 0,
+                },
+                .tlsstream = stream,
+                .err = null,
+            };
+        }
+
+        fn streamImpl(io_r: *Io.Reader, io_w: *Io.Writer, limit: Io.Limit) Io.Reader.StreamError!usize {
+            const dest = limit.slice(try io_w.writableSliceGreedy(1));
+            var data: [1][]u8 = .{dest};
+            const n = try readVec(io_r, &data);
+            io_w.advance(n);
+            return n;
+        }
+
+        fn readVec(io_r: *Io.Reader, data: [][]u8) Io.Reader.Error!usize {
+            const r: *Reader = @alignCast(@fieldParentPtr("interface", io_r));
+            var iovecs_buffer: [max_iovecs_len][]u8 = undefined;
+            const dest_n, const data_size = try io_r.writableVector(&iovecs_buffer, data);
+            const dest = iovecs_buffer[0..dest_n];
+            std.debug.assert(dest[0].len > 0);
+
+            var n: usize = undefined;
+            const result = openssl.SSL_read_ex(r.tlsstream.ssl, dest[0].ptr, @intCast(dest[0].len), &n);
+            if (result <= 0) {
+                r.tlsstream.valid = false;
+                r.err = error.SSLReadFailed;
+                return error.ReadFailed;
+            }
+            if (n == 0) {
+                return error.EndOfStream;
+            }
+            if (n > data_size) {
+                r.interface.end += n - data_size;
+                return data_size;
+            }
+            return n;
+        }
+    };
+
+    pub const Writer = struct {
+        io: Io,
+        interface: Io.Writer,
+        stream: OpensslStream,
+        err: ?Writer.Error = null,
+
+        pub const Error = error{
+            SSLWriteFailed,
+        };
+
+        pub fn init(stream: OpensslStream, io: Io, buffer: []u8) Writer {
+            return .{
+                .io = io,
+                .stream = stream,
+                .interface = .{
+                    .vtable = &.{
+                        .drain = drain,
+                    },
+                    .buffer = buffer,
+                },
+            };
+        }
+
+        fn drain(io_w: *Io.Writer, data: []const []const u8, splat: usize) Io.Writer.Error!usize {
+            const w: *Writer = @alignCast(@fieldParentPtr("interface", io_w));
+
+            const buffered = io_w.buffered();
+
+            var result: i32 = undefined;
+            const ssl = w.stream.ssl;
+
+            if (buffered.len > 0) {
+                result = openssl.SSL_write(ssl, buffered.ptr, @intCast(buffered.len));
+                if (result <= 0) {
+                    w.stream.valid = false;
+                    w.err = error.SSLWriteFailed;
+                    return error.WriteFailed;
+                }
+                _ = io_w.consumeAll();
+            }
+
+            var n: usize = 0;
+            for (data[0 .. data.len - 1]) |buf| {
+                if (buf.len == 0) continue;
+                result = openssl.SSL_write(ssl, buf.ptr, @intCast(buf.len));
+                if (result <= 0) {
+                    w.stream.valid = false;
+                    w.err = error.SSLWriteFailed;
+                    return error.WriteFailed;
+                }
+                n += buf.len;
+            }
+
+            const pattern = data[data.len - 1];
+            if (pattern.len > 0 and splat > 0) {
+                for (0..splat) |_| {
+                    result = openssl.SSL_write(ssl, pattern.ptr, @intCast(pattern.len));
+                    if (result <= 0) {
+                        w.stream.valid = false;
+                        w.err = error.SSLWriteFailed;
+                        return error.WriteFailed;
+                    }
+                    n += pattern.len;
+                }
+            }
+
+            return io_w.consume(n);
+        }
+    };
+
+    pub fn reader(stream: OpensslStream, buffer: []u8) Reader {
+        return .init(stream, stream.io, buffer);
+    }
+
+    pub fn writer(stream: OpensslStream, buffer: []u8) Writer {
+        return .init(stream, stream.io, buffer);
+    }
+
+    pub fn connect(io: Io, allocator: Allocator, opts: Opts) Error!OpensslStream {
+        const plain = try PlainStream.connect(io, .{ .host = opts.host, .port = opts.port });
         errdefer plain.close();
 
         const stream = plain.stream;
 
-        var ssl: ?*openssl.SSL = null;
-        if (ctx_) |ctx| {
-            // PostgreSQL TLS starts off as a plain connection which we upgrade
-            try writeStream(stream, io, &.{ 0, 0, 0, 8, 4, 210, 22, 47 });
-            var buf = [1]u8{0};
-            _ = try readStream(stream, io, &buf);
-            if (buf[0] != 'S') {
-                return error.SSLNotSupportedByServer;
+        const ssl_ctx = try lib.initializeSSLContext(opts.tls);
+        errdefer lib.freeSSLContext(ssl_ctx);
+
+        // PostgreSQL TLS starts off as a plain connection which we upgrade
+        var w = stream.writer(io, &.{});
+        const w_io = &w.interface;
+        try w_io.writeAll(&.{ 0, 0, 0, 8, 4, 210, 22, 47 });
+
+        var buf = [1]u8{0};
+        var r = stream.reader(io, &.{});
+        const r_io = &r.interface;
+        try r_io.readSliceAll(&buf);
+        if (buf[0] != 'S') {
+            return error.SSLNotSupportedByServer;
+        }
+
+        const ssl = openssl.SSL_new(ssl_ctx) orelse return error.SSLNewFailed;
+        errdefer openssl.SSL_free(ssl);
+
+        if (isHostName(opts.host)) {
+            // don't send this for an ip address
+            var owned = false;
+            const h = opts._hostz orelse blk: {
+                owned = true;
+                break :blk try allocator.dupeZ(u8, opts.host);
+            };
+
+            defer if (owned) {
+                allocator.free(h);
+            };
+
+            if (openssl.SSL_set_tlsext_host_name(ssl, h.ptr) != 1) {
+                return error.SSLHostNameFailed;
             }
+        }
+        switch (opts.tls) {
+            .verify_full => openssl.SSL_set_verify(ssl, openssl.SSL_VERIFY_PEER, null),
+            else => {},
+        }
 
-            ssl = openssl.SSL_new(ctx) orelse return error.SSLNewFailed;
-            errdefer openssl.SSL_free(ssl);
+        if (openssl.SSL_set_fd(ssl, if (@import("builtin").os.tag == .windows) @intCast(@intFromPtr(stream.socket.handle)) else stream.socket.handle) != 1) {
+            return error.SSLSetFdFailed;
+        }
 
-            if (opts.host) |host| {
-                if (isHostName(host)) {
-                    // don't send this for an ip address
-                    var owned = false;
-                    const h = opts._hostz orelse blk: {
-                        owned = true;
-                        break :blk try allocator.dupeZ(u8, host);
-                    };
-
-                    defer if (owned) {
-                        allocator.free(h);
-                    };
-
-                    if (openssl.SSL_set_tlsext_host_name(ssl, h.ptr) != 1) {
-                        return error.SSLHostNameFailed;
-                    }
+        {
+            const ret = openssl.SSL_connect(ssl);
+            if (ret != 1) {
+                const verification_code = openssl.SSL_get_verify_result(ssl);
+                if (comptime lib._stderr_tls) {
+                    lib.printSSLError();
                 }
-                switch (opts.tls) {
-                    .verify_full => openssl.SSL_set_verify(ssl, openssl.SSL_VERIFY_PEER, null),
-                    else => {},
-                }
-            }
-
-            if (openssl.SSL_set_fd(ssl, if (@import("builtin").os.tag == .windows) @intCast(@intFromPtr(stream.socket.handle)) else stream.socket.handle) != 1) {
-                return error.SSLSetFdFailed;
-            }
-
-            {
-                const ret = openssl.SSL_connect(ssl);
-                if (ret != 1) {
-                    const verification_code = openssl.SSL_get_verify_result(ssl);
+                if (verification_code != openssl.X509_V_OK) {
                     if (comptime lib._stderr_tls) {
-                        lib.printSSLError();
+                        std.debug.print("ssl verification error: {s}\n", .{openssl.X509_verify_cert_error_string(verification_code)});
                     }
-                    if (verification_code != openssl.X509_V_OK) {
-                        if (comptime lib._stderr_tls) {
-                            std.debug.print("ssl verification error: {s}\n", .{openssl.X509_verify_cert_error_string(verification_code)});
-                        }
-                        return error.SSLCertificationVerificationError;
-                    }
-                    return error.SSLConnectFailed;
+                    return error.SSLCertificationVerificationError;
                 }
+                return error.SSLConnectFailed;
             }
         }
 
         return .{
             .ssl = ssl,
+            .ctx = ssl_ctx,
             .valid = true,
             .stream = stream,
             .io = io,
         };
     }
 
-    pub fn close(self: *Stream) void {
-        if (self.ssl) |ssl| {
-            if (self.valid) {
-                _ = openssl.SSL_shutdown(ssl);
-                self.valid = false;
-            }
-            openssl.SSL_free(ssl);
+    pub fn close(self: *OpensslStream) void {
+        lib.freeSSLContext(self.ctx);
+        if (self.valid) {
+            _ = openssl.SSL_shutdown(self.ssl);
+            self.valid = false;
         }
+        openssl.SSL_free(self.ssl);
         self.stream.close(self.io);
     }
 
-    pub fn shutdown(self: *const Stream, how: ShutdownHow) !void {
+    pub fn shutdown(self: *const OpensslStream, how: ShutdownHow) !void {
         return sockShutdown(self.stream.socket.handle, how);
-    }
-
-    pub fn writeAll(self: *Stream, data: []const u8) !void {
-        if (self.ssl) |ssl| {
-            const result = openssl.SSL_write(ssl, data.ptr, @intCast(data.len));
-            if (result <= 0) {
-                self.valid = false;
-                return error.SSLWriteFailed;
-            }
-            return;
-        }
-        return writeStream(self.stream, self.io, data);
-    }
-
-    pub fn read(self: *Stream, buf: []u8) !usize {
-        if (self.ssl) |ssl| {
-            var read_len: usize = undefined;
-            const result = openssl.SSL_read_ex(ssl, buf.ptr, @intCast(buf.len), &read_len);
-            if (result <= 0) {
-                self.valid = false;
-                return error.SSLReadFailed;
-            }
-            return read_len;
-        }
-
-        return readStream(self.stream, self.io, buf);
     }
 };
 
-const PlainStream = struct {
+pub const TlsStream = struct {
+    io: Io,
+    allocator: Allocator,
+    stream: Io.net.Stream,
+    client: *std.crypto.tls.Client,
+    output: Writer,
+
+    pub const Error = error{
+        SSLNotSupportedByServer,
+    } || Allocator.Error || Io.RandomSecureError || Io.net.HostName.ValidateError || Io.net.HostName.ConnectError || Io.Reader.ShortError || Io.Writer.Error || std.crypto.tls.Client.InitError;
+
+    pub const HostVerification = @FieldType(std.crypto.tls.Client.Options, "host");
+    pub const CAVerification = @FieldType(std.crypto.tls.Client.Options, "ca");
+
+    pub const Opts = struct {
+        host: []const u8 = "localhost",
+        port: u16 = 5432,
+        host_verification: HostVerification = .no_verification,
+        ca_verification: CAVerification = .no_verification,
+    };
+
+    const Writer = struct {
+        client: *std.crypto.tls.Client,
+        interface: Io.Writer,
+
+        pub fn init(c: *std.crypto.tls.Client) Writer {
+            return .{
+                .client = c,
+                .interface = .{
+                    .buffer = c.writer.buffer,
+                    .vtable = &.{
+                        .drain = drain,
+                        .flush = flush,
+                    },
+                },
+            };
+        }
+
+        fn drain(io_w: *Io.Writer, data: []const []const u8, splat: usize) Io.Writer.Error!usize {
+            const w: *Writer = @alignCast(@fieldParentPtr("interface", io_w));
+            w.client.writer.end = io_w.end;
+            defer io_w.end = w.client.writer.end;
+
+            return w.client.writer.vtable.drain(&w.client.writer, data, splat);
+        }
+
+        fn flush(io_w: *Io.Writer) Io.Writer.Error!void {
+            const w: *Writer = @alignCast(@fieldParentPtr("interface", io_w));
+            w.client.writer.end = io_w.end;
+            defer io_w.end = w.client.writer.end;
+
+            try w.client.writer.flush();
+            return w.client.output.flush();
+        }
+    };
+
+    pub fn reader(stream: *TlsStream) *Io.Reader {
+        return &stream.client.reader;
+    }
+
+    pub fn writer(stream: *TlsStream) *Io.Writer {
+        return &stream.output.interface;
+    }
+
+    pub fn connect(
+        io: Io,
+        allocator: Allocator,
+        read_buffer: []u8,
+        write_buffer: []u8,
+        opts: Opts,
+    ) Error!TlsStream {
+        const tls = std.crypto.tls;
+
+        const host = opts.host;
+        const port = opts.port;
+        const hostname: Io.net.HostName = try .init(host);
+        var stream = try hostname.connect(io, port, .{ .mode = .stream });
+        errdefer stream.close(io);
+
+        const min_size = tls.Client.min_buffer_len;
+
+        const rb = try allocator.alloc(u8, min_size);
+        errdefer allocator.free(rb);
+        const wb = try allocator.alloc(u8, min_size);
+        errdefer allocator.free(wb);
+
+        var plain_reader = try allocator.create(Io.net.Stream.Reader);
+        errdefer allocator.destroy(plain_reader);
+        plain_reader.* = stream.reader(io, rb);
+        var plain_writer = try allocator.create(Io.net.Stream.Writer);
+        errdefer allocator.destroy(plain_writer);
+        plain_writer.* = stream.writer(io, wb);
+
+        const pr = &plain_reader.interface;
+        const pw = &plain_writer.interface;
+
+        try pw.writeAll(&.{ 0, 0, 0, 8, 4, 210, 22, 47 });
+        try pw.flush();
+
+        var buf = [1]u8{0};
+        _ = try pr.readSliceShort(&buf);
+        if (buf[0] != 'S') {
+            return error.SSLNotSupportedByServer;
+        }
+
+        var entropy: [tls.Client.Options.entropy_len]u8 = undefined;
+        try std.Io.randomSecure(io, &entropy);
+
+        const opt: tls.Client.Options = .{
+            .host = opts.host_verification,
+            .ca = opts.ca_verification,
+            .read_buffer = read_buffer,
+            .write_buffer = write_buffer,
+            .entropy = &entropy,
+            .realtime_now = .now(io, .real),
+        };
+
+        const client = try allocator.create(tls.Client);
+        errdefer allocator.destroy(client);
+
+        client.* = try tls.Client.init(pr, pw, opt);
+
+        return .{
+            .io = io,
+            .allocator = allocator,
+            .stream = stream,
+            .client = client,
+            .output = .init(client),
+        };
+    }
+
+    pub fn close(self: *TlsStream) void {
+        self.client.end() catch {};
+        self.stream.close(self.io);
+        const r: *Io.net.Stream.Reader = @fieldParentPtr("interface", self.client.input);
+        const w: *Io.net.Stream.Writer = @fieldParentPtr("interface", self.client.output);
+        self.allocator.free(self.client.input.buffer);
+        self.allocator.free(self.client.output.buffer);
+        self.allocator.destroy(r);
+        self.allocator.destroy(w);
+        self.allocator.destroy(self.client);
+    }
+
+    pub fn shutdown(self: *const TlsStream, how: ShutdownHow) !void {
+        return sockShutdown(self.stream.socket.handle, how);
+    }
+};
+
+pub const PlainStream = struct {
     io: Io,
     stream: Io.net.Stream,
 
-    pub fn connect(io: Io, _: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
+    pub const Error = error{
+        UnixPathNotSupported,
+    } || Io.net.UnixAddress.ConnectError || Io.net.HostName.ValidateError || Io.net.HostName.ConnectError;
+
+    pub const Opts = struct {
+        host: []const u8 = "localhost",
+        port: u16 = 5432,
+    };
+
+    pub fn reader(stream: *PlainStream, buffer: []u8) Io.net.Stream.Reader {
+        return stream.stream.reader(stream.io, buffer);
+    }
+
+    pub fn writer(stream: *PlainStream, buffer: []u8) Io.net.Stream.Writer {
+        return stream.stream.writer(stream.io, buffer);
+    }
+
+    pub fn connect(io: Io, opts: Opts) Error!PlainStream {
         const stream = try blk: {
-            const host = opts.host orelse DEFAULT_HOST;
+            const host = opts.host;
             if (host.len > 0 and host[0] == '/') {
                 if (comptime Io.net.has_unix_sockets == false or std.posix.AF == void) {
                     return error.UnixPathNotSupported;
@@ -147,7 +449,7 @@ const PlainStream = struct {
                 const addr: Io.net.UnixAddress = try .init(host);
                 break :blk addr.connect(io);
             }
-            const port = opts.port orelse 5432;
+            const port = opts.port;
             const hostname: Io.net.HostName = try .init(host);
             break :blk hostname.connect(io, port, .{ .mode = .stream });
         };
@@ -164,16 +466,7 @@ const PlainStream = struct {
     }
 
     pub fn shutdown(self: *const PlainStream, how: ShutdownHow) !void {
-        const sock = self.stream.socket.handle;
-        sockShutdown(sock, how);
-    }
-
-    pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
-        return writeStream(self.stream, self.io, data);
-    }
-
-    pub fn read(self: *const PlainStream, buf: []u8) !usize {
-        return readStream(self.stream, self.io, buf);
+        return sockShutdown(self.stream.socket.handle, how);
     }
 };
 
@@ -214,20 +507,6 @@ fn sockShutdown(sock: posix.socket_t, how: ShutdownHow) !void {
             else => return error.Unexpected,
         }
     }
-}
-fn readStream(stream: Io.net.Stream, io: Io, buf: []u8) !usize {
-    var vecs: [1][]u8 = .{buf};
-    var reader = stream.reader(io, &.{});
-    const r = &reader.interface;
-    return try r.readVec(&vecs);
-}
-
-fn writeStream(stream: Io.net.Stream, io: Io, data: []const u8) !void {
-    var buf: [1024]u8 = undefined;
-    var writer = stream.writer(io, &buf);
-    const w = &writer.interface;
-    try w.writeAll(data);
-    try w.flush();
 }
 
 fn isHostName(host: []const u8) bool {

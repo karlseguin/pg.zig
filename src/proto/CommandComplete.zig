@@ -1,5 +1,6 @@
 const std = @import("std");
 const proto = @import("_proto.zig");
+const Io = std.Io;
 const Reader = proto.Reader;
 
 const CommandComplete = @This();
@@ -39,22 +40,22 @@ pub fn rowsAffected(self: CommandComplete) ?i64 {
 
 const t = proto.testing;
 test "CommandComplete: parse" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
     {
         // not a string (not null terminated)
-        try buf.write("123");
-        try t.expectError(error.NotAString, CommandComplete.parse(buf.string()));
+        try w.writeAll("123");
+        try t.expectError(error.NotAString, CommandComplete.parse(w.buffered()));
     }
 
     {
         // success
-        buf.reset();
-        try buf.write("CREATE ROLE");
-        try buf.writeByte(0);
+        _ = w.consumeAll();
+        try w.writeAll("CREATE ROLE");
+        try w.writeByte(0);
 
-        const c = try CommandComplete.parse(buf.string());
+        const c = try CommandComplete.parse(w.buffered());
         try t.expectString("CREATE ROLE", c.tag);
     }
 }

@@ -7,6 +7,7 @@ const Conn = lib.Conn;
 const Result = lib.Result;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const Io = std.Io;
 
 pub const Stmt = struct {
     buf: *Buffer,
@@ -90,7 +91,7 @@ pub const Stmt = struct {
     // stmt.execute() returns a result, stmt.deinit() must not be called (all
     // ownership is passed to the result).
     pub fn deinit(self: *Stmt) void {
-        self.conn._reader.endFlow() catch {
+        self.conn._pgreader.endFlow() catch {
             // this can only fail in extreme conditions (OOM) and it will only impact
             // the next query (and if the app is using the pool, the pool will try to
             // recover from this anyways)
@@ -103,6 +104,28 @@ pub const Stmt = struct {
         allocator.destroy(arena);
     }
 
+    fn writeParseDescribeSync(w: *Io.Writer, bind_payload_len: u32, describe_payload_len: u32, name: []const u8, sql: []const u8) !void {
+        // PARSE
+        try w.writeByte('P');
+        try w.writeInt(u32, @intCast(bind_payload_len), .big);
+        try w.writeAll(name);
+        try w.writeByte(0);
+        try w.writeAll(sql);
+        // null terminate sql string, and we'll be specifying 0 parameter types
+        try w.writeAll(&.{ 0, 0, 0 });
+
+        // DESCRIBE
+        try w.writeByte('D');
+        try w.writeInt(u32, @intCast(describe_payload_len), .big);
+        try w.writeByte('S'); // Describe a prepared statement
+        try w.writeAll(name);
+        try w.writeByte(0); // null terminate our name
+
+        // SYNC
+        try w.writeAll(&.{ 'S', 0, 0, 0, 4 });
+        try w.flush();
+    }
+
     // When describe_allocator != null, we intend to cache the query information
     // (in conn.__prepared_statements).
     pub fn prepare(self: *Stmt, sql: []const u8, describe_allocator: ?Allocator) !void {
@@ -110,10 +133,7 @@ pub const Stmt = struct {
         const opts = &self.opts;
         const statement_arena = self.arena.allocator();
 
-        try conn._reader.startFlow(statement_arena, opts.timeout);
-
-        var buf = self.buf;
-        buf.reset();
+        try conn._pgreader.startFlow(statement_arena, opts.timeout);
 
         const name = self.name;
 
@@ -130,33 +150,11 @@ pub const Stmt = struct {
             // bound checking
             const bind_payload_len = 8 + sql.len + name.len;
             const describe_payload_len = 6 + name.len;
-            const sync_payload_len = 4;
 
-            // the +3 for the initial byte message for each of the 3 messages
-            const total_length = 3 + bind_payload_len + describe_payload_len + sync_payload_len;
-
-            try buf.ensureTotalCapacity(total_length);
-            var view = buf.skip(total_length) catch unreachable;
-
-            // PARSE
-            view.writeByte('P');
-            view.writeIntBig(u32, @intCast(bind_payload_len));
-            view.write(name);
-            view.writeByte(0);
-            view.write(sql);
-            // null terminate sql string, and we'll be specifying 0 parameter types
-            view.write(&.{ 0, 0, 0 });
-
-            // DESCRIBE
-            view.writeByte('D');
-            view.writeIntBig(u32, @intCast(describe_payload_len));
-            view.writeByte('S'); // Describe a prepared statement
-            view.write(name);
-            view.writeByte(0); // null terminate our name
-
-            // SYNC
-            view.write(&.{ 'S', 0, 0, 0, 4 });
-            try conn.write(buf.string());
+            writeParseDescribeSync(self.conn._writer, @intCast(bind_payload_len), @intCast(describe_payload_len), name, sql) catch |err| {
+                self.conn._state = .fail;
+                return err;
+            };
         }
 
         // no longer idle, we're now in a query
@@ -295,26 +293,9 @@ pub const Stmt = struct {
         self.param_index = param_index + 1;
     }
 
-    pub fn execute(self: *Stmt) !*Result {
-        lib.assert(self.param_index == self.param_count);
-
-        // We haven't sent our `bind` message yet. We need to finish it, and then
-        // send it, along with our `Execute` and a final `Sync` message.
-
-        const buf = self.buf;
-        const conn = self.conn;
-
-        // The last part of the bind message is telling PostgreSQL the format we
-        // want to receive the result columns in.
-        try lib.types.resultEncoding(self.result_state.oids[0..self.column_count], buf);
-
-        // write the full payload length, which always starts at byte 1 (after
-        // the 'B' message type)
-        // Reaching directly into buf.buf is bad!
-        // -1 because the length doesn't include the 'B'
-        std.mem.writeInt(u32, buf.buf[1..5], @intCast(buf.len() - 1), .big);
-
-        try buf.write(&.{
+    fn writeExecute(w: *Io.Writer, bind_message: []const u8) !void {
+        try w.writeAll(bind_message);
+        try w.writeAll(&.{
             'E',
             // message length
             0,
@@ -336,8 +317,32 @@ pub const Stmt = struct {
             0,
             4,
         });
+        try w.flush();
+    }
 
-        try conn.write(buf.string());
+    pub fn execute(self: *Stmt) !*Result {
+        lib.assert(self.param_index == self.param_count);
+
+        // We haven't sent our `bind` message yet. We need to finish it, and then
+        // send it, along with our `Execute` and a final `Sync` message.
+
+        const buf = self.buf;
+        const conn = self.conn;
+
+        // The last part of the bind message is telling PostgreSQL the format we
+        // want to receive the result columns in.
+        try lib.types.resultEncoding(self.result_state.oids[0..self.column_count], buf);
+
+        // write the full payload length, which always starts at byte 1 (after
+        // the 'B' message type)
+        // Reaching directly into buf.buf is bad!
+        // -1 because the length doesn't include the 'B'
+        std.mem.writeInt(u32, buf.buf[1..5], @intCast(buf.len() - 1), .big);
+
+        writeExecute(self.conn._writer, buf.string()) catch |err| {
+            self.conn._state = .fail;
+            return err;
+        };
 
         {
             const msg = conn.read() catch |err| {
