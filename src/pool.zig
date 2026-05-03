@@ -364,7 +364,7 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
 
 const t = lib.testing;
 test "Pool" {
-    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 2,
         .auth = t.authOpts(.{}),
@@ -399,7 +399,7 @@ test "Pool" {
 }
 
 test "Pool: Release" {
-    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 2,
         .auth = .{
@@ -416,7 +416,7 @@ test "Pool: Release" {
 }
 
 test "Pool: stats" {
-    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try Pool.init(t.io, t.allocator, &f.interface, .{
         .size = 3,
         .auth = t.authOpts(.{}),
@@ -474,7 +474,7 @@ test "Pool: stats" {
 }
 
 test "Pool: exec" {
-    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
@@ -491,7 +491,7 @@ test "Pool: exec" {
 }
 
 test "Pool: Query/Row" {
-    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 
@@ -525,7 +525,7 @@ test "Pool: Query/Row" {
 }
 
 test "Pool: Row error" {
-    var f = ConnFactory.Plain.init(t.io, t.allocator, .{}, .{});
+    var f = ConnFactory.Plain.init(t.io, t.allocator, .{});
     var pool = try Pool.init(t.io, t.allocator, &f.interface, .{ .size = 1, .auth = t.authOpts(.{}) });
     defer pool.deinit();
 

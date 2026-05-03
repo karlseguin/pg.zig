@@ -9,10 +9,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
-    var f = pg.ConnFactory.Plain.init(io, allocator, .{
-        .port = 5432,
-        .host = "localhost",
-    }, .{});
+    var f = pg.ConnFactory.Plain.init(io, allocator, .{});
     // While a connection can be created directly, pools should be used in most
     // cases. The pool's `acquire` method, to get a connection is thread-safe.
     // The pool may start 1 background thread to reconnect disconnected

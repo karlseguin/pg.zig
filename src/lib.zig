@@ -136,7 +136,7 @@ pub fn verifyColumnName(comptime fail_mode: FailMode, name: []const u8, valid: b
 pub const Opts = struct {
     size: u16 = 10,
     auth: Conn.AuthOpts = .{},
-    stream: stream.Opts = .{},
+    stream: OpensslStream.Opts = .{},
     conn: Conn.Opts = .{},
     timeout: u32 = 10 * std.time.ms_per_s,
     connect_on_init_count: ?u16 = null,
@@ -160,7 +160,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
     errdefer arena.deinit();
     const aa = arena.allocator();
 
-    var tls: stream.Opts.TLS = .off;
+    var tls: OpensslStream.Opts.TLS = .require;
     var tcp_user_timeout: ?u32 = null;
     if (uri.query) |qry| {
         const query_string = try qry.toRawMaybeAlloc(aa);
@@ -204,13 +204,13 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
         },
         .stream = .{
             .tls = tls,
-            .port = uri.port orelse null,
-            .host = host,
+            .port = uri.port orelse 5432,
+            .host = host orelse "localhost",
         },
     } };
 }
 
-pub fn initializeSSLContext(config: stream.Opts.TLS) !*openssl.SSL_CTX {
+pub fn initializeSSLContext(config: OpensslStream.Opts.TLS) !*openssl.SSL_CTX {
     // OpenSSL documentation says these are implicitly called, and only need to
     // be called if you're doing something special
 
@@ -234,7 +234,7 @@ pub fn initializeSSLContext(config: stream.Opts.TLS) !*openssl.SSL_CTX {
     _ = openssl.SSL_CTX_set_mode(ctx, openssl.SSL_MODE_AUTO_RETRY);
 
     switch (config) {
-        .off, .require => {},
+        .require => {},
         .verify_full => |path_to_root| {
             if (path_to_root) |p| {
                 var pathz: [std.fs.max_path_bytes + 1]u8 = undefined;
