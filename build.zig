@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) !void {
     // <openssl/ssl.h> isn't reachable — e.g. when -Dtarget switches Zig into
     // cross-compile mode and stops searching the system include paths.
     const openssl_module = if (openssl) blk: {
-        const Translator = @import("translate_c").Translator;
+        const Translator = @import("vendor/translate-c/build/Translator.zig");
         const translate_c = b.dependency("translate_c", .{});
         const t: Translator = .init(translate_c, .{
             .c_source_file = b.path("src/openssl.h"),
@@ -62,9 +62,9 @@ pub fn build(b: *std.Build) !void {
         pg_module.addOptions("config", options);
     }
 
-    {
+    if (openssl) {
         // test step — always built with openssl enabled
-        const Translator = @import("translate_c").Translator;
+        const Translator = @import("vendor/translate-c/build/Translator.zig");
         const translate_c = b.dependency("translate_c", .{});
         const t: Translator = .init(translate_c, .{
             .c_source_file = b.path("src/openssl.h"),
