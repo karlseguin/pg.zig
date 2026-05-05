@@ -3,6 +3,7 @@ const buffer = @import("buffer");
 const lib = @import("../lib.zig");
 const types = @import("../types.zig");
 
+const Io = std.Io;
 const Encode = types.Encode;
 
 const math = std.math;
@@ -52,12 +53,16 @@ pub const Numeric = struct {
         negativeInf,
     };
 
-    pub fn encode(value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
-        buf.writeAt(encoding, format_pos);
+    fn writeAt(buf: *Io.Writer, data: []const u8, pos: usize) void {
+        @memcpy(buf.buffer[pos .. pos + data.len], data);
+    }
+
+    pub fn encode(value: anytype, buf: *Io.Writer, format_pos: usize) !void {
+        writeAt(buf, encoding, format_pos);
         return encodeBuf(value, buf);
     }
 
-    pub fn encodeBuf(value: anytype, buf: *buffer.Buffer) !void {
+    pub fn encodeBuf(value: anytype, buf: *Io.Writer) !void {
         const T = @TypeOf(value);
         if (T == comptime_float) {
             return encodeValue(value, buf);
@@ -88,7 +93,7 @@ pub const Numeric = struct {
         return encodeValue(v, buf);
     }
 
-    fn encodeValue(value: anytype, buf: *buffer.Buffer) !void {
+    fn encodeValue(value: anytype, buf: *Io.Writer) !void {
         // turn our float into a string
         var str_buf: [512]u8 = undefined;
         var stream: std.Io.Writer = .fixed(&str_buf);
@@ -267,14 +272,14 @@ pub const Numeric = struct {
 };
 
 // encode a string that we know isn't NaN, Inf or -Inf.
-fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
+fn encodeValidString(str: []const u8, buf: *Io.Writer) !void {
     // the length of our parameter is dynamic, we reserve 4 bytes to fill in once
     // we know what our length is.
     const length_state = try Encode.variableLengthStart(buf);
 
     // we have 8 bytes of meta (# of digits, weight, sign and scale) that we
     // don't yet know how to fill up, reserve the space.
-    var meta_view = try buf.skip(8);
+    var meta_view: Io.Writer = .fixed(try buf.writableSlice(8));
 
     // buf now points to 12 bytes ahead of where we started. 4 bytes for the
     // length and 8 bytes for the meta. This is the position where we fill in
@@ -310,7 +315,7 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
             // if first_group == 0, then it's a full 4-digit group and can be handled
             // by the more general case that follows
             const end = pos + first_group;
-            try buf.writeIntBig(u16, generateGroup(str[pos..end]));
+            try buf.writeInt(u16, generateGroup(str[pos..end]), .big);
             pos = end;
         }
 
@@ -318,7 +323,7 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
         // 0) and we can handle it 4 digits at a time.
         while (pos < decimal_pos) {
             const end = pos + 4;
-            try buf.writeIntBig(u16, generateGroup(str[pos..end]));
+            try buf.writeInt(u16, generateGroup(str[pos..end]), .big);
             pos = end;
         }
 
@@ -343,7 +348,7 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
             const loop_end = str.len - 4;
             while (pos < loop_end) {
                 const end = pos + 4;
-                try buf.writeIntBig(u16, generateGroup(str[pos..end]));
+                try buf.writeInt(u16, generateGroup(str[pos..end]), .big);
                 pos = end;
             }
         }
@@ -360,7 +365,7 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
                     1 => 1000,
                     else => 1,
                 };
-                try buf.writeIntBig(u16, group_value);
+                try buf.writeInt(u16, group_value, .big);
             }
         }
     }
@@ -371,40 +376,40 @@ fn encodeValidString(str: []const u8, buf: *buffer.Buffer) !void {
 
         // Fill in our meta
         // Number of base-10000 digits that we wrote.
-        meta_view.writeIntBig(u16, @intCast(integer_groups + try std.math.divCeil(u16, display_scale, 4)));
+        try meta_view.writeInt(u16, @intCast(integer_groups + try std.math.divCeil(u16, display_scale, 4)), .big);
 
         // weight is the number of integer groups - 1;
         if (integer_groups == 0 or integer_groups == 1) {
-            meta_view.write(&.{ 0, 0 });
+            try meta_view.writeAll(&.{ 0, 0 });
         } else {
-            meta_view.writeIntBig(u16, integer_groups - 1);
+            try meta_view.writeInt(u16, integer_groups - 1, .big);
         }
 
         if (positive) {
-            meta_view.write(&.{ 0, 0 });
+            try meta_view.writeAll(&.{ 0, 0 });
         } else {
-            meta_view.write(&.{ 64, 0 });
+            try meta_view.writeAll(&.{ 64, 0 });
         }
-        meta_view.writeIntBig(u16, display_scale);
+        try meta_view.writeInt(u16, display_scale, .big);
     }
 
     // fill our our length
     Encode.variableLengthFill(buf, length_state);
 }
 
-fn encodeNaN(buf: *buffer.Buffer) !void {
+fn encodeNaN(buf: *Io.Writer) !void {
     // 8 length, 0 digits, 0 weight, nan sign, 0 dscale
-    return buf.write(&.{ 0, 0, 0, 8, 0, 0, 0, 0, 192, 0, 0, 0 });
+    return buf.writeAll(&.{ 0, 0, 0, 8, 0, 0, 0, 0, 192, 0, 0, 0 });
 }
 
-fn encodeInf(buf: *buffer.Buffer) !void {
+fn encodeInf(buf: *Io.Writer) !void {
     // 8 length, 0 digits, 0 weight, inf sign, 0 dscale
-    return buf.write(&.{ 0, 0, 0, 8, 0, 0, 0, 0, 208, 0, 0, 0 });
+    return buf.writeAll(&.{ 0, 0, 0, 8, 0, 0, 0, 0, 208, 0, 0, 0 });
 }
 
-fn encodeNegativeInf(buf: *buffer.Buffer) !void {
+fn encodeNegativeInf(buf: *Io.Writer) !void {
     // 8 length, 0 digits, 0 weight, -inf sign, 0 dscale
-    return buf.write(&.{ 0, 0, 0, 8, 0, 0, 0, 0, 240, 0, 0, 0 });
+    return buf.writeAll(&.{ 0, 0, 0, 8, 0, 0, 0, 0, 240, 0, 0, 0 });
 }
 
 fn generateGroup(str: []const u8) u16 {

@@ -3,7 +3,6 @@
 // if editors let you override file ordering.
 const std = @import("std");
 
-pub const Buffer = @import("buffer").Buffer;
 pub const testing = @import("../lib.zig").testing;
 
 pub const Reader = struct {

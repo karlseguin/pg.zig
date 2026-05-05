@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const Buffer = @import("buffer").Buffer;
 
 const types = lib.types;
 const Conn = lib.Conn;
@@ -10,7 +9,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const Io = std.Io;
 
 pub const Stmt = struct {
-    buf: *Buffer,
+    buf: *Io.Writer.Allocating,
 
     opts: Conn.QueryOpts,
 
@@ -249,8 +248,8 @@ pub const Stmt = struct {
     pub fn prepareForBind(self: *Stmt, param_count: u16) !void {
         try self.conn.readyForQuery();
 
-        var buf = self.buf;
-        buf.resetRetainingCapacity();
+        var buf = &self.buf.writer;
+        buf.end = 0;
 
         const name = self.name;
 
@@ -258,24 +257,24 @@ pub const Stmt = struct {
         // 4 byte length placeholder - 0, 0, 0, 0
         // portal name (empty string, length 0) - 0
         // prepared statement name  + null terminator
-        try buf.ensureTotalCapacity(1 + 4 + 1 + name.len + 1 + 2);
+        try buf.ensureUnusedCapacity(1 + 4 + 1 + name.len + 1 + 2);
 
         // length of buffer is guaranteed to be 128, so it's safe to use
         // writeAssumeCapacity (4 byte length placeholder, 1 byte empty portal)
-        buf.writeAssumeCapacity(&.{ 'B', 0, 0, 0, 0, 0 });
+        try buf.writeAll(&.{ 'B', 0, 0, 0, 0, 0 });
 
-        buf.writeAssumeCapacity(name);
-        buf.writeByteAssumeCapacity(0);
+        try buf.writeAll(name);
+        try buf.writeByte(0);
 
         // number of parameters types we're sending a
-        try buf.writeIntBig(u16, param_count);
+        try buf.writeInt(u16, param_count, .big);
 
         // the format (text or binary) of each parameter. We'll default to text
         // for now, and fill this in as we get the data
-        try buf.writeByteNTimes(0, param_count * 2);
+        try buf.splatByteAll(0, param_count * 2);
 
         // number of parameters we're sending a
-        try buf.writeIntBig(u16, param_count);
+        try buf.writeInt(u16, param_count, .big);
     }
 
     pub fn bind(self: *Stmt, value: anytype) !void {
@@ -326,7 +325,7 @@ pub const Stmt = struct {
         // We haven't sent our `bind` message yet. We need to finish it, and then
         // send it, along with our `Execute` and a final `Sync` message.
 
-        const buf = self.buf;
+        const buf = &self.buf.writer;
         const conn = self.conn;
 
         // The last part of the bind message is telling PostgreSQL the format we
@@ -337,9 +336,9 @@ pub const Stmt = struct {
         // the 'B' message type)
         // Reaching directly into buf.buf is bad!
         // -1 because the length doesn't include the 'B'
-        std.mem.writeInt(u32, buf.buf[1..5], @intCast(buf.len() - 1), .big);
+        std.mem.writeInt(u32, buf.buffer[1..5], @intCast(buf.end - 1), .big);
 
-        writeExecute(self.conn._writer, buf.string()) catch |err| {
+        writeExecute(self.conn._writer, self.buf.written()) catch |err| {
             self.conn._state = .fail;
             return err;
         };

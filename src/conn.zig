@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const Buffer = @import("buffer").Buffer;
 
 const proto = lib.proto;
 const types = lib.types;
@@ -31,7 +30,7 @@ pub const Conn = struct {
     _state: State,
 
     // A buffer used for writing to PG. This can grow dynamically as needed.
-    _buf: Buffer,
+    _buf: Io.Writer.Allocating,
 
     // Used to read data from PG. Has its own buffer which can grow dynamically
     _pgreader: Reader,
@@ -117,7 +116,8 @@ pub const Conn = struct {
     }
 
     pub fn open(io: Io, allocator: Allocator, reader: *Io.Reader, writer: *Io.Writer, opts: Opts) Allocator.Error!Conn {
-        const buf = try Buffer.init(allocator, @max(opts.write_buffer, 128));
+        var buf: Io.Writer.Allocating = .init(allocator);
+        try buf.ensureTotalCapacity(@max(opts.write_buffer, 128));
         errdefer buf.deinit();
 
         const pg_reader = try Reader.init(allocator, opts.read_buffer, reader);
@@ -226,7 +226,7 @@ pub const Conn = struct {
                 // Send a "SYNC" command
                 try self._writer.writeAll(&.{ 'S', 0, 0, 0, 4 });
                 try self._writer.flush();
-                stmt.buf.reset();
+                stmt.buf.writer.end = 0;
                 try stmt.prepareForBind(@intCast(describe.param_oids.len));
             }
         }
