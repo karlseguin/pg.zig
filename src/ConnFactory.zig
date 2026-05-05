@@ -54,8 +54,8 @@ pub const Plain = struct {
                 .io = io,
                 .allocator = allocator,
                 .vtable = &.{
-                    .create = Plain.create,
-                    .destroy = Plain.destroy,
+                    .create = Plain.createImpl,
+                    .destroy = Plain.destroyImpl,
                 },
             },
             .opts = opts,
@@ -72,7 +72,11 @@ pub const Plain = struct {
         conn: Conn,
     };
 
-    pub fn create(cf: *ConnFactory) Error!*Conn {
+    pub fn create(cf: *Plain) Error!*Conn {
+        return createImpl(&cf.interface);
+    }
+
+    fn createImpl(cf: *ConnFactory) Error!*Conn {
         var f: *Plain = @alignCast(@fieldParentPtr("interface", cf));
 
         const io = cf.io;
@@ -107,7 +111,11 @@ pub const Plain = struct {
         return &item.conn;
     }
 
-    pub fn destroy(f: *const ConnFactory, conn: *Conn) void {
+    pub fn destroy(cf: *Plain, conn: *Conn) void {
+        destroyImpl(&cf.interface, conn);
+    }
+
+    fn destroyImpl(f: *const ConnFactory, conn: *Conn) void {
         const allocator = f.allocator;
         var item: *Item = @alignCast(@fieldParentPtr("conn", conn));
         item.conn.deinit();
@@ -140,8 +148,8 @@ pub const Tls = struct {
                 .io = io,
                 .allocator = allocator,
                 .vtable = &.{
-                    .create = Tls.create,
-                    .destroy = Tls.destroy,
+                    .create = Tls.createImpl,
+                    .destroy = Tls.destroyImpl,
                 },
             },
             .opts = opts,
@@ -156,7 +164,11 @@ pub const Tls = struct {
         conn: Conn,
     };
 
-    pub fn create(cf: *ConnFactory) Error!*Conn {
+    pub fn create(cf: *Tls) Error!*Conn {
+        return createImpl(&cf.interface);
+    }
+
+    fn createImpl(cf: *ConnFactory) Error!*Conn {
         var f: *Tls = @alignCast(@fieldParentPtr("interface", cf));
 
         const io = cf.io;
@@ -189,7 +201,11 @@ pub const Tls = struct {
         return &item.conn;
     }
 
-    pub fn destroy(f: *const ConnFactory, conn: *Conn) void {
+    pub fn destroy(cf: *Tls, conn: *Conn) void {
+        destroyImpl(&cf.interface, conn);
+    }
+
+    fn destroyImpl(f: *const ConnFactory, conn: *Conn) void {
         const allocator = f.allocator;
         var item: *Item = @alignCast(@fieldParentPtr("conn", conn));
         item.conn.deinit();
@@ -222,8 +238,8 @@ pub const Openssl = struct {
                 .io = io,
                 .allocator = allocator,
                 .vtable = &.{
-                    .create = Openssl.create,
-                    .destroy = Openssl.destroy,
+                    .create = Openssl.createImpl,
+                    .destroy = Openssl.destroyImpl,
                 },
             },
             .opts = opts,
@@ -240,7 +256,11 @@ pub const Openssl = struct {
         conn: Conn,
     };
 
-    pub fn create(cf: *ConnFactory) Error!*Conn {
+    pub fn create(cf: *Openssl) Error!*Conn {
+        return createImpl(&cf.interface);
+    }
+
+    fn createImpl(cf: *ConnFactory) Error!*Conn {
         var f: *Openssl = @alignCast(@fieldParentPtr("interface", cf));
 
         const io = cf.io;
@@ -275,7 +295,11 @@ pub const Openssl = struct {
         return &item.conn;
     }
 
-    pub fn destroy(f: *const ConnFactory, conn: *Conn) void {
+    pub fn destroy(cf: *Openssl, conn: *Conn) void {
+        destroyImpl(&cf.interface, conn);
+    }
+
+    fn destroyImpl(f: *const ConnFactory, conn: *Conn) void {
         const allocator = f.allocator;
         var item: *Item = @alignCast(@fieldParentPtr("conn", conn));
         item.conn.deinit();

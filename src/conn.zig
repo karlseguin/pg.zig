@@ -224,7 +224,8 @@ pub const Conn = struct {
 
                 try self._pgreader.startFlow(stmt.arena.allocator(), opts.timeout);
                 // Send a "SYNC" command
-                try self.write(&.{ 'S', 0, 0, 0, 4 });
+                try self._writer.writeAll(&.{ 'S', 0, 0, 0, 4 });
+                try self._writer.flush();
                 stmt.buf.reset();
                 try stmt.prepareForBind(@intCast(describe.param_oids.len));
             }
@@ -460,18 +461,6 @@ pub const Conn = struct {
         }
     }
 
-    pub fn write(self: *Conn, data: []const u8) !void {
-        const w = self._writer;
-        w.writeAll(data) catch |err| {
-            self._state = .fail;
-            return err;
-        };
-        w.flush() catch |err| {
-            self._state = .fail;
-            return err;
-        };
-    }
-
     fn setErr(self: *Conn, data: []const u8) error{ PG, OutOfMemory } {
         const allocator = self._allocator;
 
@@ -522,67 +511,63 @@ pub const Conn = struct {
 const t = lib.testing;
 test "Conn: auth trust (no pass)" {
     var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
-    const f = &cf.interface;
-    var conn = try f.create();
-    defer f.destroy(conn);
+    const conn = try cf.create();
+    defer cf.destroy(conn);
     try conn.auth(.{ .username = "pgz_user_nopass", .database = "postgres" });
 }
 
 test "Conn: auth unknown user" {
     var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
-    const f = &cf.interface;
-    var conn = try f.create();
-    defer f.destroy(conn);
+    const conn = try cf.create();
+    defer cf.destroy(conn);
     try t.expectError(error.PG, conn.auth(.{ .username = "does_not_exist" }));
     try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "user \"does_not_exist\"") != null);
 }
 
 test "Conn: auth cleartext password" {
     var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
-    const f = &cf.interface;
 
     {
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear" }));
         try t.expectString("empty password returned by client", conn.err.?.message);
     }
 
     {
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_clear", .password = "wrong" }));
         try t.expectString("password authentication failed for user \"pgz_user_clear\"", conn.err.?.message);
     }
 
     {
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try conn.auth(.{ .username = "pgz_user_clear", .password = "pgz_user_clear_pw", .database = "postgres" });
     }
 }
 
 test "Conn: auth scram-sha-256 password" {
     var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
-    const f = &cf.interface;
 
     {
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256" }));
         try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
     }
 
     {
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "wrong" }));
         try t.expectString("password authentication failed for user \"pgz_user_scram_sha256\"", conn.err.?.message);
     }
 
     {
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "pgz_user_scram_sha256_pw", .database = "postgres" });
     }
 }
@@ -2001,9 +1986,8 @@ test "PG: Record" {
 
 test "Conn: application_name" {
     var cf = lib.ConnFactory.Plain.init(t.io, t.allocator, .{});
-    const f = &cf.interface;
-    var conn = try f.create();
-    defer f.destroy(conn);
+    const conn = try cf.create();
+    defer cf.destroy(conn);
     try conn.auth(.{
         .username = "pgz_user_clear",
         .password = "pgz_user_clear_pw",
@@ -2157,9 +2141,8 @@ test "Conn: Openssl required" {
 
     if (comptime lib.has_openssl) {
         var cf = lib.ConnFactory.Openssl.init(t.io, t.allocator, .{});
-        const f = &cf.interface;
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
         try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "empty password") != null);
     }
@@ -2193,19 +2176,18 @@ test "Conn: Openssl verify-full" {
 }
 
 test "Conn: Tls required" {
-    var rb: [1024]u8 = undefined;
-    var wb: [1024]u8 = undefined;
-
     {
         var cf = lib.ConnFactory.Tls.init(t.io, t.allocator, .{});
-        const f = &cf.interface;
-        var conn = try f.create();
-        defer f.destroy(conn);
+        const conn = try cf.create();
+        defer cf.destroy(conn);
         try t.expectError(error.PG, conn.auth(.{ .username = "pgz_user_ssl" }));
         try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "empty password") != null);
     }
 
     {
+        var rb: [1024]u8 = undefined;
+        var wb: [1024]u8 = undefined;
+
         var stream = try lib.TlsStream.connect(t.io, t.allocator, &rb, &wb, .{});
         defer stream.close();
         var conn = try t.connect(stream.reader(), stream.writer(), .{ .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
