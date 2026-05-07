@@ -1,5 +1,7 @@
 const std = @import("std");
+const lib = @import("lib.zig");
 
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Conn = @import("conn.zig").Conn;
 
@@ -44,8 +46,17 @@ pub fn getRandom() std.Random.DefaultPrng {
     return std.Random.DefaultPrng.init(seed);
 }
 
+const t = lib.testing;
 pub fn setup() !void {
-    var c = try connect(.{});
+    var rb: [1024]u8 = undefined;
+    var wb: [1024]u8 = undefined;
+
+    var stream: lib.PlainStream = try .connect(t.io, .{});
+    defer stream.close();
+    var sr = stream.reader(&rb);
+    var sw = stream.writer(&wb);
+
+    var c = try connect(&sr.interface, &sw.interface, .{});
     defer c.deinit();
     _ = c.exec(
         \\ drop user if exists pgz_user_nopass;
@@ -126,19 +137,18 @@ pub const Stream = struct {
     _to_read: std.ArrayList(u8),
     _received: std.ArrayList(u8),
 
-    pub fn init() *Stream {
+    pub fn init(buf: []u8) *Stream {
         const s = allocator.create(Stream) catch unreachable;
         s.* = .{
             .closed = false,
             ._read_index = 0,
-            ._to_read = .empty,
+            ._to_read = std.ArrayList(u8).initBuffer(buf),
             ._received = .empty,
         };
         return s;
     }
 
     pub fn deinit(self: *Stream) void {
-        self._to_read.deinit(allocator);
         self._received.deinit(allocator);
         allocator.destroy(self);
     }
@@ -153,8 +163,9 @@ pub const Stream = struct {
         return self._received.items;
     }
 
-    pub fn add(self: *Stream, value: []const u8) void {
-        self._to_read.appendSlice(allocator, value) catch unreachable;
+    pub fn add(self: *Stream, value: []const u8) usize {
+        self._to_read.appendSliceAssumeCapacity(value);
+        return self._to_read.items.len;
     }
 
     pub fn read(self: *Stream, buf: []u8) !usize {
@@ -197,12 +208,10 @@ pub const Stream = struct {
     }
 };
 
-pub fn connect(opts: anytype) !Conn {
+pub fn connect(reader: *Io.Reader, writer: *Io.Writer, opts: anytype) !Conn {
     const T = @TypeOf(opts);
 
-    var c = try Conn.open(io, allocator, .{
-        .tls = if (@hasField(T, "tls")) opts.tls else .off,
-        .host = if (@hasField(T, "host")) opts.host else "127.0.0.1",
+    var c = try Conn.open(io, allocator, reader, writer, .{
         .read_buffer = if (@hasField(T, "read_buffer")) opts.read_buffer else 2000,
     });
 

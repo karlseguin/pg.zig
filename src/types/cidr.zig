@@ -1,5 +1,4 @@
 const std = @import("std");
-const buffer = @import("buffer");
 const lib = @import("../lib.zig");
 const types = @import("../types.zig");
 

@@ -1,5 +1,6 @@
 // Exposed within this library
 const std = @import("std");
+const stream = @import("stream.zig");
 
 pub const openssl = @import("openssl");
 
@@ -13,10 +14,12 @@ pub const auth = @import("auth.zig");
 pub const Conn = @import("conn.zig").Conn;
 pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
-pub const Stream = @import("stream.zig").Stream;
+pub const ConnFactory = @import("ConnFactory.zig");
+pub const PlainStream = stream.PlainStream;
+pub const OpensslStream = stream.OpensslStream;
+pub const TlsStream = stream.TlsStream;
 pub const metrics = @import("metrics.zig");
 pub const has_openssl = build_config.openssl;
-pub const SSLCtx = if (has_openssl) openssl.SSL_CTX else void;
 pub const default_column_names = build_config.column_names;
 
 const result = @import("result.zig");
@@ -130,8 +133,17 @@ pub fn verifyColumnName(comptime fail_mode: FailMode, name: []const u8, valid: b
     unreachable;
 }
 
+pub const Opts = struct {
+    size: u16 = 10,
+    auth: Conn.AuthOpts = .{},
+    stream: OpensslStream.Opts = .{},
+    conn: Conn.Opts = .{},
+    timeout: u32 = 10 * std.time.ms_per_s,
+    connect_on_init_count: ?u16 = null,
+};
+
 pub const ParsedOpts = struct {
-    opts: Pool.Opts,
+    opts: Opts,
     arena: std.heap.ArenaAllocator,
 
     pub fn deinit(self: *ParsedOpts) void {
@@ -148,7 +160,7 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
     errdefer arena.deinit();
     const aa = arena.allocator();
 
-    var tls: Conn.Opts.TLS = .off;
+    var tls: OpensslStream.Opts.TLS = .require;
     var tcp_user_timeout: ?u32 = null;
     if (uri.query) |qry| {
         const query_string = try qry.toRawMaybeAlloc(aa);
@@ -190,15 +202,15 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
             .database = if (path.len == 0) null else path,
             .timeout = tcp_user_timeout orelse 10_000,
         },
-        .connect = .{
+        .stream = .{
             .tls = tls,
-            .port = uri.port orelse null,
-            .host = host,
+            .port = uri.port orelse 5432,
+            .host = host orelse "localhost",
         },
     } };
 }
 
-pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
+pub fn initializeSSLContext(config: OpensslStream.Opts.TLS) !*openssl.SSL_CTX {
     // OpenSSL documentation says these are implicitly called, and only need to
     // be called if you're doing something special
 
@@ -222,7 +234,7 @@ pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
     _ = openssl.SSL_CTX_set_mode(ctx, openssl.SSL_MODE_AUTO_RETRY);
 
     switch (config) {
-        .off, .require => {},
+        .require => {},
         .verify_full => |path_to_root| {
             if (path_to_root) |p| {
                 var pathz: [std.fs.max_path_bytes + 1]u8 = undefined;
@@ -249,7 +261,7 @@ pub fn initializeSSLContext(config: Conn.Opts.TLS) !*SSLCtx {
     return ctx;
 }
 
-pub fn freeSSLContext(ctx: ?*SSLCtx) void {
+pub fn freeSSLContext(ctx: ?*openssl.SSL_CTX) void {
     if (comptime has_openssl == false) {
         return;
     }
@@ -280,7 +292,7 @@ pub const Binary = struct {
 
 const TestCase = struct {
     uri: []const u8,
-    expected_opts: Pool.Opts,
+    expected_opts: Opts,
 };
 
 pub const FailMode = enum {
@@ -295,13 +307,13 @@ pub const TypeError = error{
 };
 
 const valid_tcs: [2]TestCase = .{
-    .{ .uri = "postgresql:///", .expected_opts = .{ .size = 0, .auth = .{ .username = "postgres" }, .connect = .{}, .timeout = 0 } },
+    .{ .uri = "postgresql:///", .expected_opts = .{ .size = 0, .auth = .{ .username = "postgres" }, .conn = .{}, .timeout = 0 } },
     .{ .uri = "postgresql://user:pass@somehost:1234/somedb?tcp_user_timeout=5678", .expected_opts = .{ .size = 0, .auth = .{
         .username = "user",
         .password = "pass",
         .database = "somedb",
         .timeout = 5678,
-    }, .connect = .{
+    }, .stream = .{
         .host = "somehost",
         .port = 1234,
     }, .timeout = 0 } },

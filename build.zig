@@ -35,7 +35,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .root_source_file = b.path("src/pg.zig"),
         .imports = &.{
-            .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
             .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
             .{ .name = "openssl", .module = openssl_module },
         },
@@ -79,7 +78,6 @@ pub fn build(b: *std.Build) !void {
                 .optimize = optimize,
                 .root_source_file = b.path("src/pg.zig"),
                 .imports = &.{
-                    .{ .name = "buffer", .module = b.dependency("buffer", dep_opts).module("buffer") },
                     .{ .name = "metrics", .module = b.dependency("metrics", dep_opts).module("metrics") },
                     .{ .name = "openssl", .module = t.mod },
                 },

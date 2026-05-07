@@ -1,5 +1,6 @@
 const std = @import("std");
 const proto = @import("_proto.zig");
+const Io = std.Io;
 const Reader = proto.Reader;
 
 // The server making an authentication request to the client. This is in response
@@ -49,95 +50,95 @@ pub const AuthenticationRequest = union(enum) {
 
 const t = proto.testing;
 test "AuthenticationRequest: invalid" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
     {
         // empty
-        try t.expectError(error.NoMoreData, AuthenticationRequest.parse(buf.string()));
+        try t.expectError(error.NoMoreData, AuthenticationRequest.parse(&.{}));
     }
 
     {
         // less than minimum length
-        try buf.write("123");
-        try t.expectError(error.NoMoreData, AuthenticationRequest.parse(buf.string()));
+        try w.writeAll("123");
+        try t.expectError(error.NoMoreData, AuthenticationRequest.parse(w.buffered()));
     }
 
     {
         // unknown auth type
-        buf.reset();
-        try buf.writeIntBig(u32, 99);
-        try t.expectError(error.AuthNotSupported, AuthenticationRequest.parse(buf.string()));
+        _ = w.consumeAll();
+        try w.writeInt(u32, 99, .big);
+        try t.expectError(error.AuthNotSupported, AuthenticationRequest.parse(w.buffered()));
     }
 }
 
 test "AuthenticationRequest: ok" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
-    try buf.writeIntBig(u32, 0);
-    const request = try AuthenticationRequest.parse(buf.string());
+    try w.writeInt(u32, 0, .big);
+    const request = try AuthenticationRequest.parse(w.buffered());
     try t.expectEqual({}, request.ok);
 }
 
 test "AuthenticationRequest: password" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
-    try buf.writeIntBig(u32, 3);
-    const request = try AuthenticationRequest.parse(buf.string());
+    try w.writeInt(u32, 3, .big);
+    const request = try AuthenticationRequest.parse(w.buffered());
     try t.expectEqual({}, request.password);
 }
 
 test "AuthenticationRequest: md5" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
-    try buf.writeIntBig(u32, 5);
-    try buf.write("s@Lt");
-    const request = try AuthenticationRequest.parse(buf.string());
+    try w.writeInt(u32, 5, .big);
+    try w.writeAll("s@Lt");
+    const request = try AuthenticationRequest.parse(w.buffered());
     try t.expectString("s@Lt", request.md5);
 }
 
 test "AuthenticationRequest: sasl with 1 mechanism" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
     {
-        try buf.writeIntBig(u32, 10);
-        try buf.write("SCRAM-SHA-256");
-        try buf.writeByte(0);
+        try w.writeInt(u32, 10, .big);
+        try w.writeAll("SCRAM-SHA-256");
+        try w.writeByte(0);
 
-        const request = try AuthenticationRequest.parse(buf.string());
+        const request = try AuthenticationRequest.parse(w.buffered());
         try t.expectEqual(true, request.sasl.scram_sha_256);
         try t.expectEqual(false, request.sasl.scram_sha_256_plus);
     }
 
     {
-        buf.reset();
-        try buf.writeIntBig(u32, 10);
-        try buf.write("SCRAM-SHA-256-PLUS");
-        try buf.writeByte(0);
+        _ = w.consumeAll();
+        try w.writeInt(u32, 10, .big);
+        try w.writeAll("SCRAM-SHA-256-PLUS");
+        try w.writeByte(0);
 
-        const request = try AuthenticationRequest.parse(buf.string());
+        const request = try AuthenticationRequest.parse(w.buffered());
         try t.expectEqual(false, request.sasl.scram_sha_256);
         try t.expectEqual(true, request.sasl.scram_sha_256_plus);
     }
 }
 
 test "AuthenticationRequest: sasl with multiple including unknown" {
-    var buf = try proto.Buffer.init(t.allocator, 128);
-    defer buf.deinit();
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
 
-    try buf.writeIntBig(u32, 10);
-    try buf.write("SCRAM-SHA-256-PLUS");
-    try buf.writeByte(0);
-    try buf.write("SCRAM-SHA-256");
-    try buf.writeByte(0);
-    try buf.write("SCRAM-MD5");
-    try buf.writeByte(0);
+    try w.writeInt(u32, 10, .big);
+    try w.writeAll("SCRAM-SHA-256-PLUS");
+    try w.writeByte(0);
+    try w.writeAll("SCRAM-SHA-256");
+    try w.writeByte(0);
+    try w.writeAll("SCRAM-MD5");
+    try w.writeByte(0);
 
-    const request = try AuthenticationRequest.parse(buf.string());
+    const request = try AuthenticationRequest.parse(w.buffered());
     try t.expectEqual(true, request.sasl.scram_sha_256);
     try t.expectEqual(true, request.sasl.scram_sha_256_plus);
 }
