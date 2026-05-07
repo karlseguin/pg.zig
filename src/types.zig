@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const buffer = @import("buffer");
 
 const Io = std.Io;
 

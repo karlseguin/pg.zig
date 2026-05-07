@@ -112,6 +112,8 @@ pub const OpensslStream = struct {
             SSLWriteFailed,
         };
 
+        const splat_buffer_size = 64;
+
         pub fn init(stream: OpensslStream, io: Io, buffer: []u8) Writer {
             return .{
                 .io = io,
@@ -125,50 +127,65 @@ pub const OpensslStream = struct {
             };
         }
 
+        fn sslWrite(w: *Writer, data: []const u8) Io.Writer.Error!usize {
+            std.debug.assert(data.len > 0);
+
+            const result = openssl.SSL_write(w.stream.ssl, data.ptr, @intCast(data.len));
+            if (result <= 0) {
+                w.stream.valid = false;
+                w.err = error.SSLWriteFailed;
+                return error.WriteFailed;
+            }
+
+            return data.len;
+        }
+
         fn drain(io_w: *Io.Writer, data: []const []const u8, splat: usize) Io.Writer.Error!usize {
             const w: *Writer = @alignCast(@fieldParentPtr("interface", io_w));
 
-            const buffered = io_w.buffered();
-
-            var result: i32 = undefined;
-            const ssl = w.stream.ssl;
-
-            if (buffered.len > 0) {
-                result = openssl.SSL_write(ssl, buffered.ptr, @intCast(buffered.len));
-                if (result <= 0) {
-                    w.stream.valid = false;
-                    w.err = error.SSLWriteFailed;
-                    return error.WriteFailed;
-                }
-                _ = io_w.consumeAll();
+            if (io_w.end > 0) {
+                _ = try w.sslWrite(io_w.buffer[0..io_w.end]);
+                io_w.end = 0;
             }
 
             var n: usize = 0;
             for (data[0 .. data.len - 1]) |buf| {
                 if (buf.len == 0) continue;
-                result = openssl.SSL_write(ssl, buf.ptr, @intCast(buf.len));
-                if (result <= 0) {
-                    w.stream.valid = false;
-                    w.err = error.SSLWriteFailed;
-                    return error.WriteFailed;
-                }
-                n += buf.len;
+                n += try w.sslWrite(buf);
             }
 
             const pattern = data[data.len - 1];
-            if (pattern.len > 0 and splat > 0) {
-                for (0..splat) |_| {
-                    result = openssl.SSL_write(ssl, pattern.ptr, @intCast(pattern.len));
-                    if (result <= 0) {
-                        w.stream.valid = false;
-                        w.err = error.SSLWriteFailed;
-                        return error.WriteFailed;
-                    }
-                    n += pattern.len;
-                }
+            var splat_backup_buffer: [splat_buffer_size]u8 = undefined;
+
+            switch (splat) {
+                0 => {},
+                1 => {
+                    if (pattern.len > 0)
+                        n += try w.sslWrite(pattern);
+                },
+                else => switch (pattern.len) {
+                    0 => {},
+                    1 => {
+                        const splat_buffer = &splat_backup_buffer;
+                        const memset_len = @min(splat_buffer.len, splat);
+                        const buf = splat_buffer[0..memset_len];
+                        @memset(buf, pattern[0]);
+                        n += try w.sslWrite(buf);
+                        var remaining_splat = splat - buf.len;
+                        while (remaining_splat > splat_buffer.len) {
+                            std.debug.assert(buf.len == splat_buffer.len);
+                            n += try w.sslWrite(splat_buffer);
+                            remaining_splat -= splat_buffer.len;
+                        }
+                        n += try w.sslWrite(splat_buffer[0..@min(remaining_splat, splat_buffer.len)]);
+                    },
+                    else => for (0..splat) |_| {
+                        n += try w.sslWrite(pattern);
+                    },
+                },
             }
 
-            return io_w.consume(n);
+            return n;
         }
     };
 
