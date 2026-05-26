@@ -130,9 +130,11 @@ const PlainStream = struct {
     socket: posix.socket_t,
 
     pub fn connect(allocator: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
+        const host = opts.host orelse DEFAULT_HOST;
+        const is_unix = host.len > 0 and host[0] == '/';
+
         const socket = blk: {
-            const host = opts.host orelse DEFAULT_HOST;
-            if (host.len > 0 and host[0] == '/') {
+            if (is_unix) {
                 if (comptime std.net.has_unix_sockets == false or std.posix.AF == void) {
                     return error.UnixPathNotSupported;
                 }
@@ -142,6 +144,10 @@ const PlainStream = struct {
             break :blk (try std.net.tcpConnectToHost(allocator, host, port)).handle;
         };
         errdefer posix.close(socket);
+
+        if (is_unix == false) {
+            try setKeepalive(socket, opts);
+        }
 
         return .{
             .socket = socket,
@@ -160,6 +166,45 @@ const PlainStream = struct {
         return readSocket(self.socket, buf);
     }
 };
+
+fn setKeepalive(handle: posix.socket_t, opts: Conn.Opts) !void {
+    if (opts.keepalive == false) {
+        return;
+    }
+
+    const on: c_int = 1;
+    try posix.setsockopt(handle, posix.SOL.SOCKET, posix.SO.KEEPALIVE, std.mem.asBytes(&on));
+
+    const TCP = posix.TCP;
+    const level = posix.IPPROTO.TCP;
+
+    if (opts.keepalive_idle) |idle| {
+        const optname: ?u32 = comptime if (@hasDecl(TCP, "KEEPIDLE"))
+            TCP.KEEPIDLE
+        else if (@hasDecl(TCP, "KEEPALIVE"))
+            TCP.KEEPALIVE
+        else
+            null;
+        if (optname) |name| {
+            const v: c_int = @intCast(idle);
+            posix.setsockopt(handle, level, name, std.mem.asBytes(&v)) catch {};
+        }
+    }
+
+    if (opts.keepalive_interval) |intvl| {
+        if (comptime @hasDecl(TCP, "KEEPINTVL")) {
+            const v: c_int = @intCast(intvl);
+            posix.setsockopt(handle, level, TCP.KEEPINTVL, std.mem.asBytes(&v)) catch {};
+        }
+    }
+
+    if (opts.keepalive_count) |cnt| {
+        if (comptime @hasDecl(TCP, "KEEPCNT")) {
+            const v: c_int = @intCast(cnt);
+            posix.setsockopt(handle, level, TCP.KEEPCNT, std.mem.asBytes(&v)) catch {};
+        }
+    }
+}
 
 fn readSocket(socket: posix.socket_t, buf: []u8) !usize {
     const stream: std.net.Stream = .{ .handle = socket };
