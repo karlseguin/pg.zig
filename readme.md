@@ -112,6 +112,10 @@ Opens a connection, or returns an error. Prefer creating connections through the
 * `write_buffer` - Size of the write buffer, used when sending messages to the server. Will temporarily allocate more space as needed. If you're writing large SQL or have large parameters (e.g. long text values), making this larger might improve performance a little. Defaults to `2048`, cannot be less than `128`.
 * `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Defaults to `4096`.
 * `result_state_size` - Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. Defaults to `32`. 
+* `keepalive` - Enables `SO_KEEPALIVE` on the socket. This is recommended (and on by default) so that idle pooled connections silently dropped by a NAT/conntrack/load-balancer are detected by the kernel rather than only surfacing on the next query. Ignored for unix-socket connections. Defaults to `true`.
+* `keepalive_idle` - Seconds a connection must be idle before the first keepalive probe is sent (`TCP_KEEPIDLE`/`TCP_KEEPALIVE`). Set to `null` to leave it at the OS default. Defaults to `30`.
+* `keepalive_interval` - Seconds between keepalive probes (`TCP_KEEPINTVL`). Set to `null` to leave it at the OS default. Defaults to `10`.
+* `keepalive_count` - Number of unanswered probes before the connection is considered dead (`TCP_KEEPCNT`). Set to `null` to leave it at the OS default. Defaults to `3`. The three timer options are best-effort and silently ignored on platforms that don't expose them.
 
 ### deinit(conn: \*Conn) void
 Closes the connection and releases its resources. This method should not be used when the connection comes from the pool.
