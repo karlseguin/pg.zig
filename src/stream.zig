@@ -138,9 +138,11 @@ const PlainStream = struct {
     stream: Io.net.Stream,
 
     pub fn connect(io: Io, _: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
+        const host = opts.host orelse DEFAULT_HOST;
+        const is_unix = host.len > 0 and host[0] == '/';
+
         const stream = try blk: {
-            const host = opts.host orelse DEFAULT_HOST;
-            if (host.len > 0 and host[0] == '/') {
+            if (is_unix) {
                 if (comptime Io.net.has_unix_sockets == false or std.posix.AF == void) {
                     return error.UnixPathNotSupported;
                 }
@@ -152,6 +154,10 @@ const PlainStream = struct {
             break :blk hostname.connect(io, port, .{ .mode = .stream });
         };
         errdefer stream.close(io);
+
+        if (is_unix == false) {
+            try setKeepalive(stream.socket.handle, opts);
+        }
 
         return .{
             .io = io,
@@ -176,6 +182,45 @@ const PlainStream = struct {
         return readStream(self.stream, self.io, buf);
     }
 };
+
+fn setKeepalive(handle: posix.socket_t, opts: Conn.Opts) !void {
+    if (opts.keepalive == false) {
+        return;
+    }
+
+    const on: c_int = 1;
+    try posix.setsockopt(handle, posix.SOL.SOCKET, posix.SO.KEEPALIVE, std.mem.asBytes(&on));
+
+    const TCP = posix.TCP;
+    const level = posix.IPPROTO.TCP;
+
+    if (opts.keepalive_idle) |idle| {
+        const optname: ?u32 = comptime if (@hasDecl(TCP, "KEEPIDLE"))
+            TCP.KEEPIDLE
+        else if (@hasDecl(TCP, "KEEPALIVE"))
+            TCP.KEEPALIVE
+        else
+            null;
+        if (optname) |name| {
+            const v: c_int = @intCast(idle);
+            posix.setsockopt(handle, level, name, std.mem.asBytes(&v)) catch {};
+        }
+    }
+
+    if (opts.keepalive_interval) |intvl| {
+        if (comptime @hasDecl(TCP, "KEEPINTVL")) {
+            const v: c_int = @intCast(intvl);
+            posix.setsockopt(handle, level, TCP.KEEPINTVL, std.mem.asBytes(&v)) catch {};
+        }
+    }
+
+    if (opts.keepalive_count) |cnt| {
+        if (comptime @hasDecl(TCP, "KEEPCNT")) {
+            const v: c_int = @intCast(cnt);
+            posix.setsockopt(handle, level, TCP.KEEPCNT, std.mem.asBytes(&v)) catch {};
+        }
+    }
+}
 
 const ShutdownHow = enum { recv, send, both };
 fn sockShutdown(sock: posix.socket_t, how: ShutdownHow) !void {

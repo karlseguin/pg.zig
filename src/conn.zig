@@ -87,6 +87,12 @@ pub const Conn = struct {
         tls: TLS = .off,
         _hostz: ?[:0]const u8 = null,
 
+        // tcp keepalive settings (null timer = OS default)
+        keepalive: bool = true,
+        keepalive_idle: ?u32 = 30,
+        keepalive_interval: ?u32 = 10,
+        keepalive_count: ?u32 = 3,
+
         pub const TLS = union(enum) {
             off: void,
             require: void,
