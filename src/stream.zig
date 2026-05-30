@@ -171,7 +171,7 @@ const PlainStream = struct {
 
     pub fn shutdown(self: *const PlainStream, how: ShutdownHow) !void {
         const sock = self.stream.socket.handle;
-        sockShutdown(sock, how);
+        return sockShutdown(sock, how);
     }
 
     pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
