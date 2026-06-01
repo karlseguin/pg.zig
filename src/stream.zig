@@ -187,9 +187,8 @@ fn setKeepalive(handle: posix.socket_t, opts: Conn.Opts) !void {
     if (opts.keepalive == false) {
         return;
     }
-
     const on: c_int = 1;
-    try posix.setsockopt(handle, posix.SOL.SOCKET, posix.SO.KEEPALIVE, std.mem.asBytes(&on));
+    try setsockopt(handle, posix.SOL.SOCKET, posix.SO.KEEPALIVE, std.mem.asBytes(&on));
 
     const TCP = posix.TCP;
     const level = posix.IPPROTO.TCP;
@@ -203,30 +202,60 @@ fn setKeepalive(handle: posix.socket_t, opts: Conn.Opts) !void {
             null;
         if (optname) |name| {
             const v: c_int = @intCast(idle);
-            posix.setsockopt(handle, level, name, std.mem.asBytes(&v)) catch {};
+            setsockopt(handle, level, name, std.mem.asBytes(&v)) catch {};
         }
     }
 
     if (opts.keepalive_interval) |intvl| {
         if (comptime @hasDecl(TCP, "KEEPINTVL")) {
             const v: c_int = @intCast(intvl);
-            posix.setsockopt(handle, level, TCP.KEEPINTVL, std.mem.asBytes(&v)) catch {};
+            setsockopt(handle, level, TCP.KEEPINTVL, std.mem.asBytes(&v)) catch {};
         }
     }
 
     if (opts.keepalive_count) |cnt| {
         if (comptime @hasDecl(TCP, "KEEPCNT")) {
             const v: c_int = @intCast(cnt);
-            posix.setsockopt(handle, level, TCP.KEEPCNT, std.mem.asBytes(&v)) catch {};
+            setsockopt(handle, level, TCP.KEEPCNT, std.mem.asBytes(&v)) catch {};
+        }
+    }
+}
+
+fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !void {
+    if (@import("builtin").os.tag != .windows) {
+        return posix.setsockopt(fd, level, optname, opt);
+    }
+
+    const SO = posix.SO;
+    const SOL = posix.SOL;
+    const timeval = posix.timeval;
+
+    var ms_buf: u32 = 0;
+    var opt_ptr: [*]const u8 = opt.ptr;
+    var opt_len: i32 = @intCast(opt.len);
+    if (level == SOL.SOCKET and (optname == SO.RCVTIMEO or optname == SO.SNDTIMEO) and opt.len == @sizeOf(timeval)) {
+        const tv: *const timeval = @ptrCast(@alignCast(opt.ptr));
+        const total_ms = @as(i64, tv.sec) * 1000 + @divTrunc(@as(i64, tv.usec), 1000);
+        ms_buf = if (total_ms < 0) 0 else @intCast(@min(total_ms, std.math.maxInt(u32)));
+        opt_ptr = @ptrCast(&ms_buf);
+        opt_len = @sizeOf(u32);
+    }
+    const rc = windows.ws2_32.setsockopt(fd, level, @intCast(optname), opt_ptr, opt_len);
+    if (rc == windows.ws2_32.SOCKET_ERROR) {
+        switch (windows.ws2_32.WSAGetLastError()) {
+            .WSANOTINITIALISED => unreachable,
+            .WSAENETDOWN => return error.NetworkSubsystemFailed,
+            .WSAEFAULT => unreachable,
+            .WSAENOTSOCK => return error.FileDescriptorNotASocket,
+            .WSAEINVAL => return error.SocketNotBound,
+            else => |err| return windows.unexpectedWSAError(err),
         }
     }
 }
 
 const ShutdownHow = enum { recv, send, both };
 fn sockShutdown(sock: posix.socket_t, how: ShutdownHow) !void {
-    const native_os = @import("builtin").os.tag;
-    if (native_os == .windows) {
-        const windows = std.os.windows;
+    if (comptime @import("builtin").os.tag == .windows) {
         const result = windows.ws2_32.shutdown(sock, switch (how) {
             .recv => windows.ws2_32.SD_RECEIVE,
             .send => windows.ws2_32.SD_SEND,
@@ -282,3 +311,5 @@ fn isHostName(host: []const u8) bool {
     }
     return std.mem.findNone(u8, host, "0123456789.") != null;
 }
+
+const windows = @import("windows.zig");
