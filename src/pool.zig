@@ -11,6 +11,7 @@ const Listener = @import("listener.zig").Listener;
 
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Io = std.Io;
 
@@ -26,7 +27,8 @@ pub const Pool = struct {
     _cond: Io.Condition,
     _ssl_ctx: ?*lib.SSLCtx,
     _reconnector: Reconnector,
-    _arena: std.heap.ArenaAllocator,
+    // not to be used outside of init
+    _arena: ArenaAllocator,
 
     pub const Opts = struct {
         size: u16 = 10,
@@ -45,29 +47,50 @@ pub const Pool = struct {
 
     pub fn initUri(io: Io, allocator: Allocator, uri: std.Uri, opts: Opts) !*Pool {
         var po = try lib.parseOpts(uri, allocator);
+        // po.opts references memory owned by po.arena (or by `uri`). init dupes
+        // everything it needs into the pool's own arena, so this temporary arena
+        // can be freed as soon as init returns.
         defer po.deinit();
         po.opts.size = opts.size;
         po.opts.timeout = opts.timeout;
-        return Pool.init(io, allocator, po.opts);
+        return init(io, allocator, po.opts);
     }
 
     pub fn init(io: Io, allocator: Allocator, opts: Opts) !*Pool {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        const aa = arena.allocator();
+        var arena = ArenaAllocator.init(allocator);
         errdefer arena.deinit();
 
+        const aa = arena.allocator();
         const pool = try aa.create(Pool);
         const size = opts.size;
         const conns = try aa.alloc(*Conn, size);
 
+        // Copy every caller-provided string into our arena so the pool owns them
+        // outright. Callers (including initUri) don't need to keep `opts`'s strings
+        // alive past this call.
         var opts_copy = opts;
+        opts_copy.auth.username = try aa.dupe(u8, opts.auth.username);
+        if (opts.auth.password) |v| opts_copy.auth.password = try aa.dupe(u8, v);
+        if (opts.auth.database) |v| opts_copy.auth.database = try aa.dupe(u8, v);
+        if (opts.auth.application_name) |v| opts_copy.auth.application_name = try aa.dupe(u8, v);
+        if (opts.connect.host) |v| opts_copy.connect.host = try aa.dupe(u8, v);
+        // Note: auth.startup_parameters (a StringHashMap) is not deep-copied; it is
+        // currently unused, but if it ever gets wired up it must be owned here too.
+
         var ssl_ctx: ?*SSLCtx = null;
         if (comptime lib.has_openssl) {
             switch (opts.connect.tls) {
                 .off => {},
                 else => |tls_config| {
-                    if (opts.connect.host) |h| {
+                    if (opts_copy.connect.host) |h| {
                         opts_copy.connect._hostz = try aa.dupeZ(u8, h);
+                    }
+                    // the cert path is re-read on every (re)connect, so own it too
+                    switch (tls_config) {
+                        .verify_full => |path| if (path) |p| {
+                            opts_copy.connect.tls = .{ .verify_full = try aa.dupe(u8, p) };
+                        },
+                        else => {},
                     }
                     ssl_ctx = try lib.initializeSSLContext(tls_config);
                 },
@@ -559,10 +582,60 @@ test "Pool: Row error" {
     try t.expectEqual(1, pool._available);
 }
 
+test "Pool: init owns its connection strings" {
+    // Heap-allocate the auth strings and free them right after init to prove the
+    // pool kept its own copies and doesn't depend on the caller's `opts`.
+    const username = try t.allocator.dupe(u8, "postgres");
+    const password = try t.allocator.dupe(u8, "postgres");
+    const database = try t.allocator.dupe(u8, "postgres");
+    const host = try t.allocator.dupe(u8, "127.0.0.1");
+
+    var pool = try Pool.init(t.io, t.allocator, .{
+        .size = 2,
+        .auth = .{ .username = username, .password = password, .database = database },
+        .connect = .{ .host = host },
+    });
+    defer pool.deinit();
+
+    t.allocator.free(username);
+    t.allocator.free(password);
+    t.allocator.free(database);
+    t.allocator.free(host);
+
+    try forceReconnect(pool);
+}
+
+test "Pool: initUri owns its connection strings" {
+    // Heap-allocate the URI string and free it right after init to prove the pool
+    // doesn't retain pointers into it. %73 == 's': decodes to "postgres" while also
+    // forcing Uri to allocate a decoded copy into the parse arena.
+    const uri_str = try t.allocator.dupe(u8, "postgresql://postgre%73:postgres@127.0.0.1:5432/postgres");
+    const uri = try std.Uri.parse(uri_str);
+
+    var pool = try Pool.initUri(t.io, t.allocator, uri, .{ .size = 2 });
+    defer pool.deinit();
+
+    t.allocator.free(uri_str);
+
+    try forceReconnect(pool);
+}
+
 fn testPool(p: *Pool) void {
     for (0..500) |i| {
         const conn = p.acquire() catch unreachable;
         _ = conn.exec("insert into pool_test (id) values ($1)", .{i}) catch unreachable;
         conn.release();
     }
+}
+
+// forces release() to discard the connection and open a fresh one, exercising
+// reconnect with the pool's stored auth strings.
+fn forceReconnect(pool: *Pool) !void {
+    const c1 = try pool.acquire();
+    c1._state = .query;
+    pool.release(c1);
+
+    const c2 = try pool.acquire();
+    defer pool.release(c2);
+    _ = try c2.exec("select 1", .{});
 }

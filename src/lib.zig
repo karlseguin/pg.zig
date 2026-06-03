@@ -178,9 +178,6 @@ pub fn parseOpts(uri: std.Uri, allocator: std.mem.Allocator) !ParsedOpts {
     const username = if (uri.user) |user| try user.toRawMaybeAlloc(aa) else "postgres";
     const password = if (uri.password) |password| try password.toRawMaybeAlloc(aa) else null;
 
-    // don't use `aa` after this point, we're about to copy `arena` and any usage
-    // of `aa` will leak
-
     return .{ .arena = arena, .opts = .{
         .size = 0,
         .timeout = 0,
