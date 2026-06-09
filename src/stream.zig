@@ -243,7 +243,7 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
     const rc = windows.ws2_32.setsockopt(fd, level, @intCast(optname), opt_ptr, opt_len);
     if (rc == windows.ws2_32.SOCKET_ERROR) {
         switch (windows.ws2_32.WSAGetLastError()) {
-            .WSANOTINITIALISED => unreachable,
+            .WSANOTINITIALISED => return error.WinsockNotInitialized,
             .WSAENETDOWN => return error.NetworkSubsystemFailed,
             .WSAEFAULT => unreachable,
             .WSAENOTSOCK => return error.FileDescriptorNotASocket,
@@ -269,7 +269,7 @@ fn sockShutdown(sock: posix.socket_t, how: ShutdownHow) !void {
             .WSAENETDOWN => return error.NetworkSubsystemFailed,
             .WSAENOTCONN => return error.SocketNotConnected,
             .WSAENOTSOCK => unreachable,
-            .WSANOTINITIALISED => unreachable,
+            .WSANOTINITIALISED => return error.WinsockNotInitialized,
             else => |err| return windows.unexpectedWSAError(err),
         };
     } else {
