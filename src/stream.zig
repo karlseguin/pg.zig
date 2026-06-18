@@ -193,9 +193,6 @@ fn setKeepalive(handle: posix.socket_t, opts: Conn.Opts) !void {
 
     const TCP = posix.TCP;
     const level = posix.IPPROTO.TCP;
-    
-    // temporary check, how do we set TCP. options without WinSock?
-    if (@import("builtin").os.tag == .windows) return;
 
     if (opts.keepalive_idle) |idle| {
         const optname: ?u32 = comptime if (@hasDecl(TCP, "KEEPIDLE"))
@@ -252,7 +249,7 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
         .optval = opt_ptr,
         .optlen = @intCast(opt_len),
     });
-    
+
     var iosb: std.os.windows.IO_STATUS_BLOCK = undefined;
     switch (std.os.windows.ntdll.NtDeviceIoControlFile(
         fd,
@@ -270,6 +267,9 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
         .PENDING => unreachable, // unrecoverable: wrong asynchronous flag
         .CANCELLED => return error.Canceled,
         .INSUFFICIENT_RESOURCES => return error.SystemResources,
+        .NOT_SUPPORTED => {
+            // TODO: handle properly
+        },
         else => |status| return std.os.windows.unexpectedStatus(status),
     }
 }
