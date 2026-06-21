@@ -266,9 +266,6 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
         .SUCCESS => return,
         .CANCELLED => return error.Canceled,
         .INSUFFICIENT_RESOURCES => return error.SystemResources,
-        .NOT_SUPPORTED => {
-            // TODO: handle properly
-        },
         else => |status| return std.os.windows.unexpectedStatus(status),
     }
 }
@@ -276,22 +273,33 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
 const ShutdownHow = enum { recv, send, both };
 fn sockShutdown(sock: posix.socket_t, how: ShutdownHow) !void {
     if (comptime @import("builtin").os.tag == .windows) {
-        const result = windows.ws2_32.shutdown(sock, switch (how) {
-            .recv => windows.ws2_32.SD_RECEIVE,
-            .send => windows.ws2_32.SD_SEND,
-            .both => windows.ws2_32.SD_BOTH,
+        const in: []const u8 = @ptrCast(&std.os.windows.AFD.PARTIAL_DISCONNECT_INFO{
+            .DisconnectMode = switch (how) {
+                .recv => .{ .RECEIVE = true },
+                .send => .{ .SEND = true },
+                .both => .{ .RECEIVE = true, .SEND = true },
+            },
+            .Timeout = -1,
         });
-        if (0 != result) switch (windows.ws2_32.WSAGetLastError()) {
-            .WSAECONNABORTED => return error.ConnectionAborted,
-            .WSAECONNRESET => return error.ConnectionResetByPeer,
-            .WSAEINPROGRESS => return error.BlockingOperationInProgress,
-            .WSAEINVAL => unreachable,
-            .WSAENETDOWN => return error.NetworkSubsystemFailed,
-            .WSAENOTCONN => return error.SocketNotConnected,
-            .WSAENOTSOCK => unreachable,
-            .WSANOTINITIALISED => return error.WinsockNotInitialized,
-            else => |err| return windows.unexpectedWSAError(err),
-        };
+
+        var iosb: std.os.windows.IO_STATUS_BLOCK = undefined;
+        switch (std.os.windows.ntdll.NtDeviceIoControlFile(
+            sock,
+            null, // event
+            null, // APC routine
+            null, // APC context
+            &iosb,
+            std.os.windows.IOCTL.AFD.PARTIAL_DISCONNECT,
+            if (in.len > 0) in.ptr else null,
+            @intCast(in.len),
+            null,
+            0,
+        )) {
+            .SUCCESS => return,
+            .CANCELLED => return error.Canceled,
+            .INSUFFICIENT_RESOURCES => return error.SystemResources,
+            else => |status| return std.os.windows.unexpectedStatus(status),
+        }
     } else {
         const rc = posix.system.shutdown(sock, switch (how) {
             .recv => posix.system.SHUT.RD,
