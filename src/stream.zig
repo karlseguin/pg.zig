@@ -264,7 +264,6 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
         0,
     )) {
         .SUCCESS => return,
-        .PENDING => unreachable, // unrecoverable: wrong asynchronous flag
         .CANCELLED => return error.Canceled,
         .INSUFFICIENT_RESOURCES => return error.SystemResources,
         .NOT_SUPPORTED => {
