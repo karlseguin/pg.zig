@@ -244,7 +244,7 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
 
     const in: []const u8 = @ptrCast(&std.os.windows.AFD.SOCKOPT_INFO{
         .mode = .set,
-        .level = std.os.windows.ws2_32.SOL.SOCKET,
+        .level = level,
         .optname = optname,
         .optval = opt_ptr,
         .optlen = @intCast(opt_len),
