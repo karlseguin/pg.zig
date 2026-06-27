@@ -435,6 +435,12 @@ pub const Conn = struct {
         return self.execIgnoringState("rollback");
     }
 
+    pub fn tryRollback(self: *Conn) !void {
+        if (self._state != .idle) {
+            try self.rollback();
+        }
+    }
+
     pub fn execIgnoringState(self: *Conn, sql: []const u8) !void {
         var buf = &self._buf;
         buf.reset();
