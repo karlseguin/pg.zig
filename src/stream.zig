@@ -321,15 +321,30 @@ fn readStream(stream: Io.net.Stream, io: Io, buf: []u8) !usize {
     var vecs: [1][]u8 = .{buf};
     var reader = stream.reader(io, &.{});
     const r = &reader.interface;
-    return try r.readVec(&vecs);
+    return r.readVec(&vecs) catch |err| switch (err) {
+        error.ReadFailed => return reader.err orelse err,
+        else => return err,
+    };
 }
 
 fn writeStream(stream: Io.net.Stream, io: Io, data: []const u8) !void {
     var buf: [1024]u8 = undefined;
     var writer = stream.writer(io, &buf);
     const w = &writer.interface;
-    try w.writeAll(data);
-    try w.flush();
+    w.writeAll(data) catch |err| switch (err) {
+        error.WriteFailed => return writer.err orelse err,
+    };
+    w.flush() catch |err| switch (err) {
+        error.WriteFailed => return writer.err orelse err,
+    };
+}
+
+// Sends a best-effort Terminate ('X') message, shielded from cancellation so
+// teardown can't be interrupted.
+pub fn sendTerminate(stream: *Stream, io: Io) void {
+    const prev = io.swapCancelProtection(.blocked);
+    defer _ = io.swapCancelProtection(prev);
+    stream.writeAll(&.{ 'X', 0, 0, 0, 4 }) catch {};
 }
 
 fn isHostName(host: []const u8) bool {

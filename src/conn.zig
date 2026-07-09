@@ -198,8 +198,7 @@ pub const Conn = struct {
         allocator.free(self._param_oids);
         self._result_state.deinit(allocator);
 
-        // try to send a Terminate to the DB
-        self.write(&.{ 'X', 0, 0, 0, 4 }) catch {};
+        lib.sendTerminate(&self._stream, self._io);
         lib.freeSSLContext(self._ssl_ctx);
         self._stream.close();
 
@@ -401,9 +400,7 @@ pub const Conn = struct {
         var affected: ?i64 = null;
         while (true) {
             const msg = self.read() catch |err| {
-                if (err == error.PG) {
-                    self.readyForQuery() catch {};
-                }
+                if (err == error.PG) try self.recoverFromError();
                 return err;
             };
             switch (msg.type) {
@@ -456,9 +453,7 @@ pub const Conn = struct {
         try self.write(buf.string());
         while (true) {
             const msg = self.read() catch |err| {
-                if (state != .fail and err == error.PG) {
-                    self.readyForQuery() catch {};
-                }
+                if (state != .fail and err == error.PG) try self.recoverFromError();
                 return err;
             };
             switch (msg.type) {
@@ -563,6 +558,14 @@ pub const Conn = struct {
         if (msg.type != 'Z') {
             return self.unexpectedDBMessage();
         }
+    }
+
+    // Drain the trailing ReadyForQuery after a server error so the connection
+    // stays usable. Best-effort, but never swallow a cancellation.
+    pub fn recoverFromError(self: *Conn) error{Canceled}!void {
+        self.readyForQuery() catch |err| {
+            if (err == error.Canceled) return error.Canceled;
+        };
     }
 };
 
@@ -1953,6 +1956,31 @@ test "Conn: TLS verify-full" {
         var conn = try t.connect(.{ .tls = Conn.Opts.TLS{ .verify_full = "tests/root.crt" }, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
         defer conn.deinit();
     }
+}
+
+test "Conn: query is cancelable" {
+    const S = struct {
+        fn sleepQuery(c: *Conn) !void {
+            var result = try c.query("select pg_sleep(3)", .{});
+            result.deinit();
+        }
+    };
+
+    var conn = try t.connect(.{});
+    defer conn.deinit();
+
+    // Run the query concurrently, let it reach its blocking read, then cancel.
+    var future = try t.io.concurrent(S.sleepQuery, .{&conn});
+    try t.io.sleep(.fromMilliseconds(50), .awake);
+
+    const start = std.Io.Clock.Timestamp.now(t.io, .awake);
+    const result = future.cancel(t.io);
+    const elapsed_ms = start.untilNow(t.io).raw.toMilliseconds();
+
+    try t.expectError(error.Canceled, result);
+    try t.expectEqual(true, elapsed_ms < 1500); // prompt, not blocked until pg_sleep ends
+    try t.expectEqual(Conn.State.fail, conn._state);
+    try t.expectError(error.ConnectionBusy, conn.exec("select 1", .{}));
 }
 
 test "PG: cached query" {

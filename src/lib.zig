@@ -14,6 +14,7 @@ pub const Conn = @import("conn.zig").Conn;
 pub const Stmt = @import("stmt.zig").Stmt;
 pub const Pool = @import("pool.zig").Pool;
 pub const Stream = @import("stream.zig").Stream;
+pub const sendTerminate = @import("stream.zig").sendTerminate;
 pub const metrics = @import("metrics.zig");
 pub const has_openssl = build_config.openssl;
 pub const SSLCtx = if (has_openssl) openssl.SSL_CTX else void;

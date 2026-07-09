@@ -60,7 +60,9 @@ pub const Result = struct {
     // and returning an error union in deinit is a pain for the caller.
     pub fn drain(self: *Result) !void {
         var conn = self._conn;
-        if (conn._state == .idle) {
+        // Only an in-flight query has anything to drain; reading in any other
+        // state (e.g. a poisoned connection) would block.
+        if (conn._state != .query) {
             return;
         }
 

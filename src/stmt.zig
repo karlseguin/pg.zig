@@ -167,7 +167,7 @@ pub const Stmt = struct {
             // If Parse fails, then the server won't reply to our other messages
             // (i.e. Describe) and it'l immediately send a ReadyForQuery.
             const msg = conn.read() catch |err| {
-                conn.readyForQuery() catch {};
+                if (err == error.PG) try conn.recoverFromError();
                 return err;
             };
 
@@ -341,7 +341,7 @@ pub const Stmt = struct {
 
         {
             const msg = conn.read() catch |err| {
-                conn.readyForQuery() catch {};
+                if (err == error.PG) try conn.recoverFromError();
                 return err;
             };
             if (msg.type != '2') {

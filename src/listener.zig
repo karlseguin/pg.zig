@@ -71,8 +71,7 @@ pub const Listener = struct {
             return;
         }
 
-        // try to send a Terminate to the DB
-        self._stream.writeAll(&.{ 'X', 0, 0, 0, 4 }) catch {};
+        lib.sendTerminate(&self._stream, self._io);
         return self._stream.shutdown(.both);
     }
 
