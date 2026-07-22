@@ -103,8 +103,8 @@ const TLSStream = struct {
         self.stream.close(self.io);
     }
 
-    pub fn shutdown(self: *const Stream, how: ShutdownHow) !void {
-        return sockShutdown(self.stream.socket.handle, how);
+    pub fn shutdown(self: *const Stream, how: Io.net.ShutdownHow) !void {
+        return self.stream.shutdown(self.io, how);
     }
 
     pub fn writeAll(self: *Stream, data: []const u8) !void {
@@ -170,9 +170,8 @@ const PlainStream = struct {
         self.stream.close(self.io);
     }
 
-    pub fn shutdown(self: *const PlainStream, how: ShutdownHow) !void {
-        const sock = self.stream.socket.handle;
-        return sockShutdown(sock, how);
+    pub fn shutdown(self: *const PlainStream, how: Io.net.ShutdownHow) !void {
+        return self.stream.shutdown(self.io, how);
     }
 
     pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
@@ -270,53 +269,6 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
     }
 }
 
-const ShutdownHow = enum { recv, send, both };
-fn sockShutdown(sock: posix.socket_t, how: ShutdownHow) !void {
-    if (comptime @import("builtin").os.tag == .windows) {
-        const in: []const u8 = @ptrCast(&std.os.windows.AFD.PARTIAL_DISCONNECT_INFO{
-            .DisconnectMode = switch (how) {
-                .recv => .{ .RECEIVE = true },
-                .send => .{ .SEND = true },
-                .both => .{ .RECEIVE = true, .SEND = true },
-            },
-            .Timeout = -1,
-        });
-
-        var iosb: std.os.windows.IO_STATUS_BLOCK = undefined;
-        switch (std.os.windows.ntdll.NtDeviceIoControlFile(
-            sock,
-            null, // event
-            null, // APC routine
-            null, // APC context
-            &iosb,
-            std.os.windows.IOCTL.AFD.PARTIAL_DISCONNECT,
-            if (in.len > 0) in.ptr else null,
-            @intCast(in.len),
-            null,
-            0,
-        )) {
-            .SUCCESS => return,
-            .CANCELLED => return error.Canceled,
-            .INSUFFICIENT_RESOURCES => return error.SystemResources,
-            else => |status| return std.os.windows.unexpectedStatus(status),
-        }
-    } else {
-        const rc = posix.system.shutdown(sock, switch (how) {
-            .recv => posix.system.SHUT.RD,
-            .send => posix.system.SHUT.WR,
-            .both => posix.system.SHUT.RDWR,
-        });
-        switch (posix.errno(rc)) {
-            .SUCCESS => return,
-            .BADF => unreachable,
-            .INVAL => unreachable,
-            .NOTCONN => return error.SocketNotConnected,
-            .NOTSOCK => unreachable,
-            .NOBUFS => return error.SystemResources,
-            else => return error.Unexpected,
-        }
-    }
-}
 fn readStream(stream: Io.net.Stream, io: Io, buf: []u8) !usize {
     var vecs: [1][]u8 = .{buf};
     var reader = stream.reader(io, &.{});
