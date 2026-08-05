@@ -161,19 +161,48 @@ pub const Numeric = struct {
 
         // max size per base-10000 digit
         if (self.number_of_digits == 0) {
-            return l + 2; // 0.0  but we already added the decimal place
+            l += 1;
+            // if we have something like 0.000::numeric -> should add '.' and zeros
+            if (self.scale > 0) {
+                l += 1 + self.scale;
+            }
+            return l;
         }
 
-        l += self.number_of_digits * 4;
-        // there's no integer in the number, but our string output will have
-        // a leading 0  (so it'll be 0.123 instead of just .123)
-        if (self.weight < 0) {
+        var frac_digits: usize = 0;
+
+        // Example 1.
+        // 12345678.9012 -> weight = 1 (1234*10000^1 + 5678*10000^0 + 9012*10000^-1), number_of_digits = 3 {1234, 5678, 9012}
+        // Example 2.
+        // 100000000000 -> weight = 2 (1000*10000^2 + 0*10000^1 + 0*10000^0), number_of_digits = 1 {1000} (needs 2 tail zero groups)
+        // Example 3.
+        // 0.000000000001 -> weight = -3 (0*10000^-1 + 0*10000^-2 + 1*10000^-3) , number_of_digits = 1 {1} (needs 2 leading zero groups)
+        if (self.weight >= 0) {
+            const int_groups_count: usize = @intCast(self.weight + 1);
+            // for Example 1: (1+1) * 4 = 8 -> 12345678.9012 integer part contains 8 digits
+            // for Example 2: (2+1) * 4 = 12 -> 100000000000
+            l += int_groups_count * 4;
+
+            if (self.number_of_digits > int_groups_count) {
+                // for Example 1: 3 > 2 -> (3-2) * 4 = 4 -> 9012 fraction part contains 4 digits
+                frac_digits = (self.number_of_digits - int_groups_count) * 4;
+            }
+        } else {
+            // there's no integer in the number, but our string output will have
+            // a leading 0  (so it'll be 0.123 instead of just .123)
             l += 1;
+            frac_digits = self.number_of_digits * 4;
 
             if (self.weight < -1) {
                 const missing_groups: usize = @intCast(-1 - self.weight);
-                l += missing_groups * 4;
+                // for Example 3: (-1 - (-3)) * 4 = 8 -> 00000000 (8 missing fraction zeros)
+                frac_digits += missing_groups * 4;
             }
+        }
+
+        // only allocate for fraction if scale > 0
+        if (self.scale > 0) {
+            l += 1 + @max(frac_digits, @as(usize, self.scale));
         }
 
         return l;
@@ -207,16 +236,27 @@ pub const Numeric = struct {
         }
 
         if (number_of_digits == 0) {
-            const end = pos + 3;
-            @memcpy(buf[pos..end], "0.0");
-            return buf[0..end];
+            buf[pos] = '0';
+            pos += 1;
+
+            // if we have something like 0.000::numeric -> should print 0.000
+            // otherwise, without fractin, e.g. 0::numeric -> should print 0
+            if (self.scale > 0) {
+                buf[pos] = '.';
+                pos += 1;
+                @memset(buf[pos .. pos + self.scale], '0');
+                pos += self.scale;
+            }
+            return buf[0..pos];
         }
 
         // do the integer part first
         if (weight < 0) {
+            // if number is less than 1 -> always print 0 as integer part
             buf[pos] = '0';
             pos += 1;
         } else {
+            var is_first_group = true;
             while (weight >= 0) {
                 if (digits.len == 0) {
                     const end = pos + 4;
@@ -224,55 +264,86 @@ pub const Numeric = struct {
                     pos = end;
                 } else {
                     const t = std.mem.readInt(i16, digits[0..2], .big);
+                    if (!is_first_group) {
+                        // internal groups should contains 4 digits,
+                        // otherwise we could get from 10005 -> 15 because of "1" + "5",
+                        // not of "1" + "0005"
+                        if (t < 10) {
+                            buf[pos + 2] = '0';
+                            buf[pos + 1] = '0';
+                            buf[pos] = '0';
+                            pos += 3;
+                        } else if (t < 100) {
+                            buf[pos + 1] = '0';
+                            buf[pos] = '0';
+                            pos += 2;
+                        } else if (t < 1000) {
+                            buf[pos] = '0';
+                            pos += 1;
+                        }
+                    }
                     pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{t})).len;
                     digits = digits[2..];
+                    is_first_group = false;
                 }
                 weight -= 1;
             }
         }
 
-        buf[pos] = '.';
-        pos += 1;
-
         // now the fraction
-        if (digits.len == 0) {
-            buf[pos] = '0';
+        // only when postgres asked, e.g. select 0.00::numeric -> scale = 2
+        // if something like select 0::numeric, skipping fraction
+        if (self.scale > 0) {
+            buf[pos] = '.';
             pos += 1;
-        } else {
-            while (weight < -1) {
-                @memcpy(buf[pos .. pos + 4], "0000");
-                pos += 4;
-                weight += 1;
-            }
 
-            while (digits.len > 0) {
-                const t = std.mem.readInt(i16, digits[0..2], .big);
-                if (t < 10) {
-                    buf[pos + 2] = '0';
-                    buf[pos + 1] = '0';
-                    buf[pos] = '0';
-                    pos += 3;
-                } else if (t < 100) {
-                    buf[pos + 1] = '0';
-                    buf[pos] = '0';
-                    pos += 2;
-                } else if (t < 1000) {
-                    buf[pos] = '0';
-                    pos += 1;
+            if (digits.len == 0) {
+                // if we have no fraction, but received from postgres to fill with zeros
+                // e.g. select 0.00::numeric
+                @memset(buf[pos .. pos + self.scale], '0');
+                pos += self.scale;
+            } else {
+                const frac_start = pos;
+
+                // filling leading zeros after dot
+                while (weight < -1) {
+                    @memcpy(buf[pos .. pos + 4], "0000");
+                    pos += 4;
+                    weight += 1;
                 }
-                pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{t})).len;
-                digits = digits[2..];
+
+                while (digits.len > 0) {
+                    const t = std.mem.readInt(i16, digits[0..2], .big);
+                    if (t < 10) {
+                        buf[pos + 2] = '0';
+                        buf[pos + 1] = '0';
+                        buf[pos] = '0';
+                        pos += 3;
+                    } else if (t < 100) {
+                        buf[pos + 1] = '0';
+                        buf[pos] = '0';
+                        pos += 2;
+                    } else if (t < 1000) {
+                        buf[pos] = '0';
+                        pos += 1;
+                    }
+                    pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{t})).len;
+                    digits = digits[2..];
+                }
+
+                const current_frac_len = pos - frac_start;
+                if (current_frac_len > self.scale) {
+                    // truncating
+                    pos -= (current_frac_len - self.scale);
+                } else if (current_frac_len < self.scale) {
+                    // padding with zeros
+                    const missing = self.scale - current_frac_len;
+                    @memset(buf[pos .. pos + missing], '0');
+                    pos += missing;
+                }
             }
         }
 
-        // we wrote the fraction in 4-digit groups, but our scale (aka display scale)
-        // might indicate that we should have less precision. For example, we might
-        // have written 0.1230, but the scale might be 3, in which case we should
-        // have written 0.123.
-        const display_scale = @mod(self.scale, 4);
-        if (display_scale > 0) {
-            pos -= 4 - display_scale;
-        }
         return buf[0..pos];
     }
 };

@@ -1469,7 +1469,8 @@ test "PG: numeric" {
             \\ select 'nan'::numeric, '+Inf'::numeric, '-Inf'::numeric,
             \\ 0::numeric, 0.0::numeric, -0.00009::numeric, -999999.888880::numeric,
             \\ 0.000008, 999999.888807::numeric, 123456.78901234::numeric(14, 8),
-            \\ 0.0000000000000000000000000001::numeric
+            \\ 0.0000000000000000000000000001::numeric, 1000000000000000000000000000::numeric,
+            \\ 1.0::numeric, 10005.00::numeric
         , .{})).?;
         defer row.deinit() catch {};
 
@@ -1484,6 +1485,9 @@ test "PG: numeric" {
         try t.expectEqual(999999.888807, row.get(f64, 8));
         try t.expectEqual(123456.78901234, row.get(f64, 9));
         try expectNumeric(row.get(types.Numeric, 10), "0.0000000000000000000000000001");
+        try expectNumeric(row.get(types.Numeric, 11), "1000000000000000000000000000");
+        try expectNumeric(row.get(types.Numeric, 12), "1.0");
+        try expectNumeric(row.get(types.Numeric, 13), "10005.00");
     }
 
     {
@@ -1533,10 +1537,10 @@ test "PG: numeric" {
         try expectNumeric(row.get(types.Numeric, 15), "1234567.9876543");
         try expectNumeric(row.get(types.Numeric, 16), "12345678.98765432");
         try expectNumeric(row.get(types.Numeric, 17), "123456789.987654321");
-        try expectNumeric(row.get(types.Numeric, 18), "0.0");
-        try expectNumeric(row.get(types.Numeric, 19), "1.0");
-        try expectNumeric(row.get(types.Numeric, 20), "0.0");
-        try expectNumeric(row.get(types.Numeric, 21), "1.0");
+        try expectNumeric(row.get(types.Numeric, 18), "0");
+        try expectNumeric(row.get(types.Numeric, 19), "1");
+        try expectNumeric(row.get(types.Numeric, 20), "0");
+        try expectNumeric(row.get(types.Numeric, 21), "1");
         try expectNumeric(row.get(types.Numeric, 22), "999999999.9999999");
         try expectNumeric(row.get(types.Numeric, 23), "999999999.9999999");
         try expectNumeric(row.get(types.Numeric, 24), "-999999999.9999999");
