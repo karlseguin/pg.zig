@@ -1468,7 +1468,8 @@ test "PG: numeric" {
         var row = (try c.rowUnsafe(
             \\ select 'nan'::numeric, '+Inf'::numeric, '-Inf'::numeric,
             \\ 0::numeric, 0.0::numeric, -0.00009::numeric, -999999.888880::numeric,
-            \\ 0.000008, 999999.888807::numeric, 123456.78901234::numeric(14, 8)
+            \\ 0.000008, 999999.888807::numeric, 123456.78901234::numeric(14, 8),
+            \\ 0.0000000000000000000000000001::numeric
         , .{})).?;
         defer row.deinit() catch {};
 
@@ -1482,6 +1483,7 @@ test "PG: numeric" {
         try t.expectEqual(0.000008, row.get(f64, 7));
         try t.expectEqual(999999.888807, row.get(f64, 8));
         try t.expectEqual(123456.78901234, row.get(f64, 9));
+        try expectNumeric(row.get(types.Numeric, 10), "0.0000000000000000000000000001");
     }
 
     {

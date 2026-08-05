@@ -169,6 +169,11 @@ pub const Numeric = struct {
         // a leading 0  (so it'll be 0.123 instead of just .123)
         if (self.weight < 0) {
             l += 1;
+
+            if (self.weight < -1) {
+                const missing_groups: usize = @intCast(-1 - self.weight);
+                l += missing_groups * 4;
+            }
         }
 
         return l;
@@ -234,6 +239,12 @@ pub const Numeric = struct {
             buf[pos] = '0';
             pos += 1;
         } else {
+            while (weight < -1) {
+                @memcpy(buf[pos .. pos + 4], "0000");
+                pos += 4;
+                weight += 1;
+            }
+
             while (digits.len > 0) {
                 const t = std.mem.readInt(i16, digits[0..2], .big);
                 if (t < 10) {
