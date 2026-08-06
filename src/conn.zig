@@ -916,7 +916,7 @@ test "PG: type support" {
         try t.expectEqual(1234.567, row.get(f64, 21));
         const arr = try row.iterator(types.Numeric, 22).alloc(aa);
         try t.expectEqual(5, arr.len);
-        try expectNumeric(arr[0], "0.0");
+        try expectNumeric(arr[0], "0");
         try expectNumeric(arr[1], "-1.1");
         try expectNumeric(arr[2], "nan");
         try expectNumeric(arr[3], "inf");

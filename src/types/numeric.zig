@@ -149,8 +149,7 @@ pub const Numeric = struct {
     }
 
     pub fn estimatedStringLen(self: Numeric) usize {
-        // for the decimal point
-        var l: usize = 1;
+        var l: usize = 0;
         switch (self.sign) {
             .nan => return 3,
             .inf => return 3,
@@ -159,7 +158,6 @@ pub const Numeric = struct {
             .positive => {},
         }
 
-        // max size per base-10000 digit
         if (self.number_of_digits == 0) {
             l += 1;
             // if we have something like 0.000::numeric -> should add '.' and zeros
@@ -178,7 +176,7 @@ pub const Numeric = struct {
         // Example 3.
         // 0.000000000001 -> weight = -3 (0*10000^-1 + 0*10000^-2 + 1*10000^-3) , number_of_digits = 1 {1} (needs 2 leading zero groups)
         if (self.weight >= 0) {
-            const int_groups_count: usize = @intCast(self.weight + 1);
+            const int_groups_count = @as(usize, @intCast(self.weight)) + 1;
             // for Example 1: (1+1) * 4 = 8 -> 12345678.9012 integer part contains 8 digits
             // for Example 2: (2+1) * 4 = 12 -> 100000000000
             l += int_groups_count * 4;
@@ -240,7 +238,7 @@ pub const Numeric = struct {
             pos += 1;
 
             // if we have something like 0.000::numeric -> should print 0.000
-            // otherwise, without fractin, e.g. 0::numeric -> should print 0
+            // otherwise, without fraction, e.g. 0::numeric -> should print 0
             if (self.scale > 0) {
                 buf[pos] = '.';
                 pos += 1;
@@ -265,9 +263,9 @@ pub const Numeric = struct {
                 } else {
                     const t = std.mem.readInt(i16, digits[0..2], .big);
                     if (!is_first_group) {
-                        // internal groups should contains 4 digits,
+                        // internal groups should contain 4 digits,
                         // otherwise we could get from 10005 -> 15 because of "1" + "5",
-                        // not of "1" + "0005"
+                        // instead of "1" + "0005"
                         if (t < 10) {
                             buf[pos + 2] = '0';
                             buf[pos + 1] = '0';
