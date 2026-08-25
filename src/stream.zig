@@ -183,6 +183,26 @@ const PlainStream = struct {
     }
 };
 
+const TCP = switch (builtin.os.tag) {
+    // Zig doesn't expose these /shrug
+    .freebsd, .dragonfly => struct {
+        pub const KEEPIDLE = 256;
+        pub const KEEPINTVL = 512;
+        pub const KEEPCNT = 1024;
+    },
+    .netbsd => struct {
+        pub const KEEPIDLE = 3;
+        pub const KEEPINTVL = 5;
+        pub const KEEPCNT = 6;
+    },
+    .illumos => struct {
+        pub const KEEPIDLE = 0x22;
+        pub const KEEPCNT = 0x23;
+        pub const KEEPINTVL = 0x24;
+    },
+    else => if (posix.TCP == void) struct {} else posix.TCP,
+};
+
 fn setKeepalive(handle: posix.socket_t, opts: Conn.Opts) !void {
     if (opts.keepalive == false) {
         return;
@@ -190,7 +210,6 @@ fn setKeepalive(handle: posix.socket_t, opts: Conn.Opts) !void {
     const on: c_int = 1;
     try setsockopt(handle, posix.SOL.SOCKET, posix.SO.KEEPALIVE, std.mem.asBytes(&on));
 
-    const TCP = posix.TCP;
     const level = posix.IPPROTO.TCP;
 
     if (opts.keepalive_idle) |idle| {
