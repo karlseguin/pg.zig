@@ -84,6 +84,7 @@ pub fn build(b: *std.Build) !void {
                     .{ .name = "openssl", .module = t.mod },
                 },
             }),
+            .use_llvm = true,
             .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
         });
         if (openssl_lib_path) |p|

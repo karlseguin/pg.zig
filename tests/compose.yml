@@ -12,14 +12,22 @@ services:
     volumes:
       - "./root.crt:/etc/postgresql/root.crt:ro"
       - "./server.crt:/etc/postgresql/server.crt:ro"
-      - "./server.key:/etc/postgresql/server.key:ro"
+      - "./server.key:/etc/postgresql/server.key.host:ro"
       - "./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro"
       - "./postgresql.conf:/etc/postgresql/postgresql.conf:ro"
       - "./init_ssl.sql:/docker-entrypoint-initdb.d/init_ssl.sql:ro"
+    # Postgres requires the private key to be owned by the database user (or
+    # root). On Linux, a bind-mounted file keeps the host owner's uid, so copy
+    # it inside the container (the entrypoint runs as root here) instead of
+    # requiring a chown on the host.
     command:
-      - "postgres"
-      - "-c"
-      - "config_file=/etc/postgresql/postgresql.conf"
-      - "-c"
-      - "hba_file=/etc/postgresql/pg_hba.conf"
+      - "bash"
+      - "-ec"
+      - |
+        cp /etc/postgresql/server.key.host /etc/postgresql/server.key
+        chown postgres:postgres /etc/postgresql/server.key
+        chmod 600 /etc/postgresql/server.key
+        exec docker-entrypoint.sh postgres \
+          -c config_file=/etc/postgresql/postgresql.conf \
+          -c hba_file=/etc/postgresql/pg_hba.conf
 

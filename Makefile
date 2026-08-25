@@ -4,9 +4,15 @@ F=
 t:
 	TEST_FILTER="${F}" zig build test --summary all -freference-trace
 
+# Refuse to start the container before the certs exist; otherwise docker
+# creates directories at the mount points and the container has to be
+# recreated after running `make ssl`.
 .PHONY: d
-d:
+d: tests/server.key
 	cd tests && docker compose up
+
+tests/server.key:
+	$(MAKE) ssl
 
 .PHONY: ssl
 ssl:
