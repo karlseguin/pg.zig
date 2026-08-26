@@ -275,7 +275,7 @@ pub const Pool = struct {
         var opts = opts_;
         opts.release_conn = true;
         var conn = try self.acquire();
-        errdefer self.release(conn);
+        // queryOpts will manage conn
         return conn.queryOpts(sql, values, opts);
     }
 
@@ -618,6 +618,39 @@ test "Pool: Row error" {
     try t.expectError(error.PG, pool.rowUnsafe("insert into all_types (id) values ($1)", .{200}));
 
     try t.expectEqual(1, pool._available);
+}
+
+test "Pool: connection is released on every query error path" {
+    // https://github.com/karlseguin/pg.zig/issues/130
+    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    // prepare (parse) fails
+    try t.expectError(error.PG, pool.row("select from does_not_exist_130", .{}));
+    try t.expectEqual(1, pool._available);
+    try t.expectError(error.PG, pool.query("select from does_not_exist_130", .{}));
+    try t.expectEqual(1, pool._available);
+    try t.expectError(error.PG, pool.rowUnsafe("select from does_not_exist_130", .{}));
+    try t.expectEqual(1, pool._available);
+
+    // wrong number of parameters
+    try t.expectError(error.WrongNumberOfParameters, pool.row("select $1::int", .{}));
+    try t.expectEqual(1, pool._available);
+    try t.expectError(error.WrongNumberOfParameters, pool.query("select $1::int", .{}));
+    try t.expectEqual(1, pool._available);
+
+    // execute fails (duplicate key)
+    _ = try pool.exec("insert into all_types (id) values ($1)", .{201});
+    try t.expectError(error.PG, pool.row("insert into all_types (id) values ($1)", .{201}));
+    try t.expectEqual(1, pool._available);
+    try t.expectError(error.PG, pool.query("insert into all_types (id) values ($1)", .{201}));
+    try t.expectEqual(1, pool._available);
+
+    // and the pool still works afterwards
+    var row = (try pool.row("select $1::int", .{130})) orelse unreachable;
+    defer row.deinit() catch {};
+    try t.expectEqual(130, row.get(i32, 0));
+    try t.expectEqual(0, pool._available);
 }
 
 test "Pool: init owns its connection strings" {
