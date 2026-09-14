@@ -118,82 +118,61 @@ pub fn setup() !void {
     , .{}) catch |err| try fail(c, err);
 }
 
-// Dummy net.Stream, lets us setup data to be read and capture data that is written.
+// In-memory stand-in for lib.Stream: bytes queued with add() are served through
+// an Io.Reader, split across reads however the buffer allows, so the reader
+// tests see the same fragmentation a socket would produce.
 pub const Stream = struct {
-    closed: bool,
+    interface: std.Io.Reader,
     _read_index: usize,
-    socket: c_int = 0,
     _to_read: std.ArrayList(u8),
-    _received: std.ArrayList(u8),
 
-    pub fn init() *Stream {
+    pub fn init(buffer_size: usize) *Stream {
         const s = allocator.create(Stream) catch unreachable;
         s.* = .{
-            .closed = false,
             ._read_index = 0,
             ._to_read = .empty,
-            ._received = .empty,
+            .interface = .{
+                .vtable = &.{ .stream = stream },
+                .buffer = allocator.alloc(u8, buffer_size) catch unreachable,
+                .seek = 0,
+                .end = 0,
+            },
         };
         return s;
     }
 
     pub fn deinit(self: *Stream) void {
+        allocator.free(self.interface.buffer);
         self._to_read.deinit(allocator);
-        self._received.deinit(allocator);
         allocator.destroy(self);
-    }
-
-    pub fn reset(self: *Stream) void {
-        self._read_index = 0;
-        self._to_read.clearRetainingCapacity();
-        self._received.clearRetainingCapacity();
-    }
-
-    pub fn received(self: *Stream) []const u8 {
-        return self._received.items;
     }
 
     pub fn add(self: *Stream, value: []const u8) void {
         self._to_read.appendSlice(allocator, value) catch unreachable;
     }
 
-    pub fn read(self: *Stream, buf: []u8) !usize {
-        std.debug.assert(!self.closed);
-
-        const read_index = self._read_index;
-        const items = self._to_read.items;
-
-        if (read_index == items.len) {
-            return 0;
-        }
-        if (buf.len == 0) {
-            return 0;
-        }
-
-        // let's fragment this message
-        const left_to_read = items.len - read_index;
-        const max_can_read = if (buf.len < left_to_read) buf.len else left_to_read;
-
-        const to_read = max_can_read;
-        var data = items[read_index..(read_index + to_read)];
-        if (data.len > buf.len) {
-            // we have more data than we have space in buf (our target)
-            // we'll give it when it can take
-            data = data[0..buf.len];
-        }
-        self._read_index = read_index + data.len;
-
-        @memcpy(buf[0..data.len], data);
-        return data.len;
+    pub fn reader(self: *Stream) *std.Io.Reader {
+        return &self.interface;
     }
 
-    // store messages that are written to the stream
-    pub fn writeAll(self: *Stream, data: []const u8) !void {
-        self._received.appendSlice(allocator, data) catch unreachable;
+    pub const ReadError = error{ReadFailed};
+
+    pub fn getReadError(_: *Stream) ReadError {
+        return error.ReadFailed;
     }
 
-    pub fn close(self: *Stream) void {
-        self.closed = true;
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *Stream = @fieldParentPtr("interface", r);
+        const pending = self._to_read.items[self._read_index..];
+        if (pending.len == 0) {
+            return error.EndOfStream;
+        }
+        const dest = limit.slice(try w.writableSliceGreedy(1));
+        const n = @min(dest.len, pending.len);
+        @memcpy(dest[0..n], pending[0..n]);
+        self._read_index += n;
+        w.advance(n);
+        return n;
     }
 };
 

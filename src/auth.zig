@@ -20,11 +20,7 @@ const Opts = lib.Conn.AuthOpts;
 // a normal zig error on any other error
 pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
     try reader.startFlow(null, opts.timeout);
-
-    // ignore errors on endFlow, because it's troublesome to handle, and only
-    // something really bad (like OOM) can happen, and that'll surface again
-    // as soon as the app tries to use the connection.
-    defer reader.endFlow() catch {};
+    defer reader.endFlow();
 
     {
         // write our startup message

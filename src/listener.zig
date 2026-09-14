@@ -37,13 +37,13 @@ pub const Listener = struct {
     _io: Io,
 
     pub fn open(io: Io, allocator: Allocator, opts: Conn.Opts) !Listener {
-        var stream = try Stream.connect(io, allocator, opts, null);
+        var stream = try Stream.connect(io, allocator, opts);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
         errdefer buf.deinit();
 
-        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
+        const reader = Reader.init(allocator, stream);
         errdefer reader.deinit();
 
         return .{

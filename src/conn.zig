@@ -6,14 +6,12 @@ const proto = lib.proto;
 const types = lib.types;
 const Pool = lib.Pool;
 const Stmt = lib.Stmt;
-const SSLCtx = lib.SSLCtx;
 const Reader = lib.Reader;
 const Result = lib.Result;
 const Stream = lib.Stream;
 const Timeout = lib.Timeout;
 const QueryRow = lib.QueryRow;
 const QueryRowUnsafe = lib.QueryRowUnsafe;
-const has_openssl = lib.has_openssl;
 
 const os = std.os;
 const Allocator = std.mem.Allocator;
@@ -21,10 +19,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const Io = std.Io;
 
 pub const Conn = struct {
-    // If we own the ssl context (which only happens if the connection is
-    // created directly and NOT through a pool), then we have to free it
-    _ssl_ctx: ?*SSLCtx,
-
     // If we get a postgreSQL error, this will be set.
     err: ?proto.Error,
 
@@ -85,7 +79,6 @@ pub const Conn = struct {
         read_buffer: ?u16 = null,
         result_state_size: u16 = 32,
         tls: TLS = .off,
-        _hostz: ?[:0]const u8 = null,
 
         // tcp keepalive settings (null timer = OS default)
         keepalive: bool = true,
@@ -140,30 +133,13 @@ pub const Conn = struct {
     }
 
     pub fn open(io: Io, allocator: Allocator, opts: Opts) !Conn {
-        var ssl_ctx: ?*SSLCtx = null;
-        switch (opts.tls) {
-            .off => {},
-            else => |tls_config| {
-                if (comptime lib.has_openssl == false) {
-                    return error.OpenSSLNotConfigured;
-                }
-                ssl_ctx = try lib.initializeSSLContext(tls_config);
-            },
-        }
-        errdefer lib.freeSSLContext(ssl_ctx);
-        var conn = try openWithContext(io, allocator, opts, ssl_ctx);
-        conn._ssl_ctx = ssl_ctx;
-        return conn;
-    }
-
-    pub fn openWithContext(io: Io, allocator: Allocator, opts: Opts, ssl_ctx: ?*SSLCtx) !Conn {
-        var stream = try Stream.connect(io, allocator, opts, ssl_ctx);
+        var stream = try Stream.connect(io, allocator, opts);
         errdefer stream.close();
 
         const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));
         errdefer buf.deinit();
 
-        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
+        const reader = Reader.init(allocator, stream);
         errdefer reader.deinit();
 
         const result_state = try Result.State.init(allocator, opts.result_state_size);
@@ -175,7 +151,6 @@ pub const Conn = struct {
         return .{
             .err = null,
             ._buf = buf,
-            ._ssl_ctx = null,
             ._reader = reader,
             ._stream = stream,
             ._err_data = null,
@@ -199,7 +174,6 @@ pub const Conn = struct {
         self._result_state.deinit(allocator);
 
         lib.sendTerminate(&self._stream, self._io);
-        lib.freeSSLContext(self._ssl_ctx);
         self._stream.close();
 
         var it = self._prepared_statements.valueIterator();
@@ -372,12 +346,7 @@ pub const Conn = struct {
 
         if (values.len == 0) {
             try self._reader.startFlow(opts.allocator, opts.timeout);
-            defer self._reader.endFlow() catch {
-                // this can only fail in extreme conditions (OOM) and it will only impact
-                // the next query (and if the app is using the pool, the pool will try to
-                // recover from this anyways)
-                self._state = .fail;
-            };
+            defer self._reader.endFlow();
             const simple_query = proto.Query{ .sql = sql };
             try simple_query.write(buf);
             // no longer idle, we're now in a query
@@ -478,8 +447,14 @@ pub const Conn = struct {
     // Should not be called directly
     pub fn peekForError(self: *Conn) !void {
         const data = (try self._reader.peekForError()) orelse return;
+        // data is only valid until the next read, so copy it before draining
+        // the trailing ReadyForQuery
+        switch (self.setErr(data)) {
+            error.PG => {},
+            error.OutOfMemory => return error.OutOfMemory,
+        }
         try self.readyForQuery();
-        return self.setErr(data);
+        return error.PG;
     }
 
     // Should not be called directly

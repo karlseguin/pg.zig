@@ -110,7 +110,7 @@ Opens a connection, or returns an error. Prefer creating connections through the
 * `host` - Defaults to `"127.0.0.1"`
 * `port` - Defaults to `5432`
 * `write_buffer` - Size of the write buffer, used when sending messages to the server. Will temporarily allocate more space as needed. If you're writing large SQL or have large parameters (e.g. long text values), making this larger might improve performance a little. Defaults to `2048`, cannot be less than `128`.
-* `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Defaults to `4096`.
+* `read_buffer` - Size of the read buffer, used when reading data from the server. Messages larger than this are temporarily allocated as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Defaults to `4096`, cannot be less than `128`.
 * `result_state_size` - Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. Defaults to `32`. 
 * `keepalive` - Enables `SO_KEEPALIVE` on the socket. This is recommended (and on by default) so that idle pooled connections silently dropped by a NAT/conntrack/load-balancer are detected by the kernel rather than only surfacing on the next query. Ignored for unix-socket connections. Defaults to `true`.
 * `keepalive_idle` - Seconds a connection must be idle before the first keepalive probe is sent (`TCP_KEEPIDLE`/`TCP_KEEPALIVE`). Set to `null` to leave it at the OS default. Defaults to `30`.
@@ -644,35 +644,27 @@ The metrics are:
 * `pg_alloc_reader` - counts the number of bytes allocated while reading messages from PostgreSQL. This generally happens as a result of large result (e.g. selecting large text fields). Controlled by the `read_buffer` configuration option.
 
 ## TLS (Experimental)
-TLS is supported via openssl. When loading the module, you must enable openssl by including at least 1 openssl setting:
+TLS is supported via the pure-Zig [tls.zig](https://github.com/ianic/tls.zig) library. There is nothing to enable at build time.
+
+Set the connection's `tls` option to either `.require` or `.{ .verify_full = null }`:
+
+* `.require` - encrypt the connection but do not verify the server's certificate.
+* `.{ .verify_full = null }` - verify the server's certificate chain against the system trust store.
+* `.{ .verify_full = "/path/to/root.crt" }` - verify against a custom root certificate.
+
+For `verify_full`, the connection's `host` is used for SNI and certificate hostname verification when it is a hostname; for an IP address the hostname check is skipped and only the certificate chain is verified.
 
 ```zig
-const pg_module = b.dependency("pg", .{
-  .target = target,
-  .optimize = optimize,
-  .openssl_lib_name = @as([]const u8, "ssl"),
-  .openssl_lib_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/lib"},
-  .openssl_include_path = std.Build.LazyPath{.cwd_relative = "/path/to/openssl/include"},
-}).module("pg")
-```
-
-When not specified, the system defaults are use for the library and include paths. These should only be set if openssl is installed in a non-default location. In most cases specifying `.openssl_lib_name = "ssl"` or, for some systems `.openssl_lib_name = "openssl"` should be enough.
-
-Set the connection's `tls` option to either `.required` or `.{verify_full = null}`. When using a custom root certificate, specify the path: `.{verify_full = "/path/to/root.crt"}`.
-
-```zig
-var pool = try pg.Pool.init(allocator, .{
-  .connect = .{ .port = 5432, .host = "ip_or_hostname", .tls = .{.verify_full = null}},
+var pool = try pg.Pool.init(io, allocator, .{
+  .connect = .{ .port = 5432, .host = "ip_or_hostname", .tls = .{ .verify_full = null } },
   .auth = .{ .... },
   .size = 5,
 });
 
 // OR
 const uri = try std.Uri.parse("postgresql://user:password@hostname/DBNAME?sslmode=require");
-var pool = try pg.Pool.initUri(allocator, uri, 10, 5_000);
+var pool = try pg.Pool.initUri(io, allocator, uri, .{ .size = 10, .timeout = 5_000 });
 ```
-
-In your main file, you can define a global `pub const pg_stderr_tls = true;` to have pg.zig print possible TLS-related errors to stderr. Alternatively, if you get an error, you `pg.printSSLError();` to hopefully print an error message to stderr which can be included in a ticket. This can safely be called in a `catch` clause, and will display nothing if the error is NOT SSL-related. Note that using the global `pg_stderr_tls` is more likely to print useful information in the case of certification verification problems.
 
 ## Enabling Column Names by Default
 
