@@ -62,7 +62,8 @@ fn ReaderT(comptime T: type) type {
         // one row of a result needs it, the following rows probably do too.
         pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
             // TODO: per-query timeouts have not been implemented since the move
-            // to std.Io
+            // to std.Io. https://codeberg.org/ziglang/zig/pulls/35325 adds a
+            // timeout to Io.net.Stream.Reader/Writer, which is what this needs.
             _ = timeout_ms;
             self.allocator = allocator orelse self.default_allocator;
         }
