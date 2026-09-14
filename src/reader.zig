@@ -67,7 +67,7 @@ fn ReaderT(comptime T: type) type {
             self.allocator = allocator orelse self.default_allocator;
         }
 
-        pub fn endFlow(self: *Self) !void {
+        pub fn endFlow(self: *Self) void {
             self.freeSpill();
             self.allocator = self.default_allocator;
         }
@@ -104,9 +104,8 @@ fn ReaderT(comptime T: type) type {
         }
 
         fn spillBuffer(self: *Self, len: usize) Allocator.Error![]u8 {
-            const allocator = self.allocator;
-            const owner = self.spill_allocator;
-            if (self.spill.len < len or allocator.ptr != owner.ptr or allocator.vtable != owner.vtable) {
+            if (self.spill.len < len) {
+                const allocator = self.allocator;
                 self.freeSpill();
                 self.spill = try allocator.alloc(u8, len);
                 self.spill_allocator = allocator;
@@ -315,7 +314,7 @@ test "Reader: fuzz" {
             const allocator: ?Allocator = if (random.uintAtMost(usize, 1) == 1) arena.allocator() else null;
 
             try reader.startFlow(allocator, null);
-            defer reader.endFlow() catch unreachable;
+            defer reader.endFlow();
 
             {
                 const msg = try reader.next();
@@ -505,7 +504,7 @@ test "Reader: start/endFlow reuses the spill" {
     const msg3 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5 }, msg3.data);
     try t.expectEqual(11, reader.spill.len);
-    try reader.endFlow();
+    reader.endFlow();
     try t.expectEqual(0, reader.spill.len);
 }
 
@@ -532,7 +531,7 @@ test "Reader: start/endFlow then a small message" {
 
     const msg3 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5 }, msg3.data);
-    try reader.endFlow();
+    reader.endFlow();
 
     const msg4 = try reader.next();
     try t.expectSlice(u8, &.{255}, msg4.data);
@@ -567,7 +566,7 @@ test "Reader: start/endFlow then a large message" {
 
     const msg4 = try reader.next();
     try t.expectSlice(u8, "z" ** 5000, msg4.data);
-    try reader.endFlow();
+    reader.endFlow();
 
     const msg5 = try reader.next();
     try t.expectSlice(u8, &.{ 255, 250, 245, 240, 235, 230, 225 }, msg5.data);
@@ -597,15 +596,15 @@ test "Reader: start/endFlow with flow-specific allocator" {
 
     const msg3 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5 }, msg3.data);
-    try reader.endFlow();
+    reader.endFlow();
 
     const msg4 = try reader.next();
     try t.expectSlice(u8, &.{ 255, 250, 245, 240, 235, 230, 225 }, msg4.data);
 }
 
 test "Reader: spill outlives a flow switch" {
-    // a spill from outside a flow must not be reused (or freed) by a flow that
-    // uses a different allocator
+    // a spill from outside a flow may be reused by a flow with a different
+    // allocator, but must still be freed by the allocator that created it
     defer t.reset();
     var s = t.Stream.init(7);
     defer s.deinit();
@@ -622,7 +621,7 @@ test "Reader: spill outlives a flow switch" {
     try reader.startFlow(t.arena.allocator(), null);
     const msg2 = try reader.next();
     try t.expectSlice(u8, &.{ 5, 6, 7, 8 }, msg2.data);
-    try reader.endFlow();
+    reader.endFlow();
 }
 
 test "Reader: startFlow with a spill into deinit" {

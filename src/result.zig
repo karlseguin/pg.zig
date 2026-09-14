@@ -36,12 +36,7 @@ pub const Result = struct {
             value.data = &[_]u8{};
         }
 
-        self._conn._reader.endFlow() catch {
-            // this can only fail in extreme conditions (OOM) and it will only impact
-            // the next query (and if the app is using the pool, the pool will try to
-            // recover from this anyways)
-            self._conn._state = .fail;
-        };
+        self._conn._reader.endFlow();
 
         if (self._release_conn) {
             self._conn.release();

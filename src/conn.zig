@@ -346,12 +346,7 @@ pub const Conn = struct {
 
         if (values.len == 0) {
             try self._reader.startFlow(opts.allocator, opts.timeout);
-            defer self._reader.endFlow() catch {
-                // this can only fail in extreme conditions (OOM) and it will only impact
-                // the next query (and if the app is using the pool, the pool will try to
-                // recover from this anyways)
-                self._state = .fail;
-            };
+            defer self._reader.endFlow();
             const simple_query = proto.Query{ .sql = sql };
             try simple_query.write(buf);
             // no longer idle, we're now in a query
