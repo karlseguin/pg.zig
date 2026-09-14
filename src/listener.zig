@@ -43,7 +43,7 @@ pub const Listener = struct {
         const buf = try Buffer.init(allocator, opts.write_buffer orelse 2048);
         errdefer buf.deinit();
 
-        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
+        const reader = Reader.init(allocator, stream);
         errdefer reader.deinit();
 
         return .{

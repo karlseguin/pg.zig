@@ -1,307 +1,152 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const builtin = @import("builtin");
 
-const posix = std.posix;
-const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
 // to everyone else, this is our reader
 pub const Reader = ReaderT(lib.Stream);
-
-const zero_timeval = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 0 });
-
-// generic just for testing within this file
-fn ReaderT(comptime T: type) type {
-    return struct {
-        // Whether or not we've put a timeout on the request. This helps avoid
-        // system calls when no timeout is set.
-        has_timeout: bool,
-
-        // Provided when the reader was allocated (which is the allocator given
-        // when the connection/pool was created). Owns `static` and unless a query-
-        // specific allocator is provided, will be used for any dynamic allocations.
-        default_allocator: Allocator,
-
-        // Current active allocator. This will normally reference `default_allocator`
-        // but a query can provide a specific allocator to use for the processing
-        // of said query. (via startFlow)
-        allocator: Allocator,
-
-        // Exists for the lifetime of the reader, but normally references this, but
-        // for messages that don't fit, we'll allocate memory dynamically and
-        // eventually revert back to buf.
-        static: []u8,
-
-        // buffer to read into
-        buf: []u8,
-
-        // start within buf of the next message
-        start: usize = 0,
-
-        // position in buf that we have valid data up to
-        pos: usize = 0,
-
-        stream: T,
-
-        const Self = @This();
-
-        pub fn init(allocator: Allocator, size: usize, stream: T) !Self {
-            const static = try allocator.alloc(u8, size);
-            return .{
-                .buf = static,
-                .stream = stream,
-                .static = static,
-                .has_timeout = false,
-                .allocator = allocator,
-                .default_allocator = allocator,
-            };
-        }
-
-        pub fn deinit(self: Self) void {
-            if (self.static.ptr != self.buf.ptr) {
-                self.allocator.free(self.buf);
-            }
-            self.default_allocator.free(self.static);
-        }
-
-        // Between a call to startFlow and endFlow, the reader can re-use any
-        // dynamic buffer it creates. The idea beind this is that if reading 1 row
-        // requires more than static.len other rows within the same result might
-        // as well.
-        pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
-            // FIX: set timeout
-            if (timeout_ms) |ms| {
-                _ = ms; // autofix
-                // const timeval = std.mem.toBytes(posix.timeval{
-                //     .sec = @intCast(@divTrunc(ms, 1000)),
-                //     .usec = @intCast(@mod(ms, 1000) * 1000),
-                // });
-                // try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
-                self.has_timeout = true;
-            } else if (self.has_timeout) {
-                // try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
-                self.has_timeout = false;
-            }
-
-            self.allocator = allocator orelse self.default_allocator;
-        }
-
-        pub fn endFlow(self: *Self) !void {
-            const buf = self.buf;
-            const allocator = self.allocator;
-
-            self.allocator = self.default_allocator;
-            if (self.static.ptr == buf.ptr) {
-                // we never created a dynamic buffer
-                return;
-            }
-
-            // even if the following fails, we want to free this
-            defer allocator.free(buf);
-
-            // Normally, when an "flow" ends, we expect our read buffer to be empty.
-            // This is true because data from PG is normally only sent in response
-            // to a request. If we've ended our "flow", then we should have read
-            // everything from PG. But PG can occasionally send data on its own.
-            // So it's possible that we over-read and now our dynamic buffer has
-            // data unrelated to this flow.
-            const pos = self.pos;
-            const start = self.start;
-            const extra = pos - start;
-
-            var new_buf: []u8 = undefined;
-            if (extra > self.static.len) {
-                // This is unusual. Not only did we overread, but we've overread so
-                // much that we can't use our static buffer.
-
-                const default_allocator = self.default_allocator;
-                if (allocator.ptr == default_allocator.ptr) {
-                    // The dynamic buffer was allocated with our default allocator, so
-                    // we can keep it as-is
-                    return;
-                }
-
-                // This is the worst. We have extra data in our dynamically buffer AND
-                // we have a query-specific allocator. This data _cannot_ remain
-                // where it is (because we have no guarantee that the allocator is valid
-                // beyond this query).
-                // So we'll copy it to a new buffer using our default allocator.
-                new_buf = try default_allocator.dupe(u8, self.buf[start..pos]);
-            } else {
-                // We either have no extra data, or we have extra data, but it fits in
-                // our static buffer. Either way, we're reverting self.buf to self.static;
-                new_buf = self.static;
-                if (extra > 0) {
-                    // We read extra data, copy this into our static buffer
-                    @memcpy(new_buf[0..extra], self.buf[start..pos]);
-                }
-            }
-
-            self.pos = extra;
-            self.start = 0;
-            self.buf = new_buf;
-        }
-
-        // If you execute "select * from invalid_table", PostgreSQL will return
-        // an error early in the process of preparing the statement - as part
-        // of parsing the statement, it knows that "invalid_table" isn't a valid table.
-
-        // But if you execute "create table already_exists", the error is is only
-        // returned once you try to read the result.
-        //
-        // This difference results in an inconsistent api: some error are returned
-        // immediately by conn.query() and some errors are only returned when
-        // result.next() is first called.
-        //
-        // Here we attempt to fix this by eagerly reading the next message. If it's
-        // an error, we return it. If it isn't an error, we put it back for the next
-        // successful read.
-        pub fn peekForError(self: *Self) !?[]const u8 {
-            const message = self.buffered(self.pos, true) orelse try self.read(true);
-            return if (message.type == 'E') message.data else null;
-        }
-
-        pub fn next(self: *Self) !Message {
-            return self.buffered(self.pos, false) orelse self.read(false);
-        }
-
-        fn read(self: *Self, error_peek: bool) !Message {
-            var stream = self.stream;
-            // const spare = buf.len - pos; // how much space we have left in our buffer
-
-            // Every PG message has 1 type byte followed by a 4 byte length prefix.
-            // Since the length prefix includes itself (but not the type byte) the
-            // minimum possible length is 4. We use 0 to denote "unknown".
-            var buf = self.buf;
-            var pos = self.pos;
-            var message_length: usize = 0;
-
-            while (true) {
-                if (message_length == 0) {
-                    // we don't yet know the length of this message
-
-                    const start = self.start;
-
-                    // how much of the next message we have
-                    const current_length = pos - start;
-
-                    // we have enough data to figure the message length
-                    if (current_length > 4) {
-                        // + 1 for the type byte
-                        message_length = std.mem.readInt(u32, buf[start + 1 .. start + 5][0..4], .big) + 1;
-
-                        if (message_length > buf.len) {
-                            var new_buf: []u8 = undefined;
-                            const allocator = self.allocator;
-
-                            if (buf.ptr == self.static.ptr) {
-                                //currently using our static buffer, we need to allocate a larger one
-                                new_buf = try allocator.alloc(u8, message_length);
-                                @memcpy(new_buf[0..current_length], buf[start..pos]);
-                                lib.metrics.allocReader(message_length);
-                            } else {
-                                // currently using a dynamically allocated buffer, we'll
-                                // grow or allocate a larger one (which is what realloc does)
-                                new_buf = try allocator.realloc(buf, message_length);
-                                if (start > 0) {
-                                    std.mem.copyForwards(u8, new_buf[0..current_length], new_buf[start..pos]);
-                                }
-                                lib.metrics.allocReader(message_length - current_length);
-                            }
-
-                            self.start = 0;
-                            pos = current_length;
-                            buf = new_buf;
-                            self.buf = new_buf;
-                        } else if (message_length > buf.len - start) {
-                            // our buffer is big enough, but not from where we're currently starting
-                            std.mem.copyForwards(u8, buf[0..current_length], buf[start..pos]);
-                            pos = current_length;
-                            self.start = 0;
-                        }
-                    } else if (buf.len - start < 5) {
-                        // we don't even have enough space to read the 5 byte header
-                        std.mem.copyForwards(u8, buf[0..current_length], buf[start..pos]);
-                        pos = current_length;
-                        self.start = 0;
-                    }
-                }
-
-                const n = try stream.read(buf[pos..]);
-                if (n == 0) {
-                    return error.Closed;
-                }
-                pos += n;
-                if (self.buffered(pos, error_peek)) |msg| {
-                    return msg;
-                }
-            }
-        }
-
-        // checks and consume if we already have a message buffered
-        fn buffered(self: *Self, pos: usize, error_peek: bool) ?Message {
-            const start = self.start;
-            const available = pos - start;
-
-            // we always need at least 5 bytes, 1 for the type and 4 for the length
-            if (available < 5) {
-                return null;
-            }
-            const buf = self.buf;
-
-            const len_end = start + 5;
-            const len = std.mem.readInt(u32, buf[start + 1 .. len_end][0..4], .big);
-
-            // +1 because the first byte, the message type, isn't included in the length
-            if (available < len + 1) {
-                return null;
-            }
-
-            // -4 because the len includes the 4 byte length header itself
-            const end = len_end + len - 4;
-
-            const message_type = buf[start];
-
-            if (error_peek == false or message_type == 'E') {
-                // how much extra data we already have
-                const extra = pos - end;
-                if (extra == 0) {
-                    // we have no more data in the buffer, reset everything to the start
-                    // so that we have the full buffer for future messages
-                    self.pos = 0;
-                    self.start = 0;
-                } else {
-                    self.pos = pos;
-                    self.start = end;
-                }
-            } else {
-                self.pos = pos;
-            }
-
-            return .{
-                .type = message_type,
-                .data = buf[len_end..end],
-            };
-        }
-    };
-}
 
 pub const Message = struct {
     type: u8,
     data: []const u8,
 };
 
-const t = lib.testing;
-test "Reader: next" {
-    const R = ReaderT(*t.Stream);
-    var s = t.Stream.init();
-    defer s.deinit();
+// Frames PostgreSQL messages out of a std.Io.Reader. Every message is a type
+// byte followed by a big-endian u32 length that counts itself but not the type
+// byte. Messages that fit the source's buffer are returned as slices into it;
+// larger ones are read into a spill allocation. Either way, `Message.data` is
+// only valid until the next call.
+//
+// T is lib.Stream in production and an in-memory stand-in in tests. It must
+// provide `reader() *std.Io.Reader`, a `ReadError` set, and
+// `getReadError() ReadError`, which recovers the concrete error behind
+// error.ReadFailed.
+fn ReaderT(comptime T: type) type {
+    return struct {
+        const Source = switch (@typeInfo(T)) {
+            .pointer => |p| p.child,
+            else => T,
+        };
+        pub const Error = Source.ReadError || error{ Closed, InvalidMessageLength, OutOfMemory };
 
+        stream: T,
+
+        // The connection's allocator. Used for spills outside of a flow.
+        default_allocator: Allocator,
+
+        // Current allocator; startFlow can swap in a query-specific one.
+        allocator: Allocator,
+
+        // Holds a message too large for the source's buffer. Reused for the rest
+        // of the flow and freed at endFlow (or deinit) by spill_allocator, the
+        // allocator that created it.
+        spill: []u8 = &.{},
+        spill_allocator: Allocator,
+
+        const Self = @This();
+
+        pub fn init(allocator: Allocator, stream: T) Self {
+            return .{
+                .stream = stream,
+                .allocator = allocator,
+                .default_allocator = allocator,
+                .spill_allocator = allocator,
+            };
+        }
+
+        pub fn deinit(self: Self) void {
+            self.spill_allocator.free(self.spill);
+        }
+
+        // Between startFlow and endFlow the spill buffer is kept and reused: if
+        // one row of a result needs it, the following rows probably do too.
+        pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
+            // TODO: per-query timeouts have not been implemented since the move
+            // to std.Io
+            _ = timeout_ms;
+            self.allocator = allocator orelse self.default_allocator;
+        }
+
+        pub fn endFlow(self: *Self) !void {
+            self.freeSpill();
+            self.allocator = self.default_allocator;
+        }
+
+        pub fn next(self: *Self) Error!Message {
+            const r = self.stream.reader();
+            const header = r.peekArray(5) catch |err| return self.mapError(err);
+            const len = try messageLength(header);
+
+            const bytes = if (len <= r.buffer.len)
+                r.take(len) catch |err| return self.mapError(err)
+            else blk: {
+                const dest = try self.spillBuffer(len);
+                r.readSliceAll(dest) catch |err| return self.mapError(err);
+                break :blk dest;
+            };
+            return .{ .type = bytes[0], .data = bytes[5..] };
+        }
+
+        // Some errors (e.g. an unknown table) are reported by PostgreSQL right
+        // after Parse, others (e.g. a duplicate key) only once the result is
+        // read. To surface both from query() rather than from the first
+        // result.next(), this waits for the next message's header and, only if
+        // it is an ErrorResponse, consumes and returns it. Anything else is left
+        // for next().
+        pub fn peekForError(self: *Self) Error!?[]const u8 {
+            const r = self.stream.reader();
+            const header = r.peekArray(5) catch |err| return self.mapError(err);
+            if (header[0] != 'E') {
+                return null;
+            }
+            const msg = try self.next();
+            return msg.data;
+        }
+
+        fn spillBuffer(self: *Self, len: usize) Allocator.Error![]u8 {
+            const allocator = self.allocator;
+            const owner = self.spill_allocator;
+            if (self.spill.len < len or allocator.ptr != owner.ptr or allocator.vtable != owner.vtable) {
+                self.freeSpill();
+                self.spill = try allocator.alloc(u8, len);
+                self.spill_allocator = allocator;
+                lib.metrics.allocReader(len);
+            }
+            return self.spill[0..len];
+        }
+
+        fn freeSpill(self: *Self) void {
+            self.spill_allocator.free(self.spill);
+            self.spill = &.{};
+        }
+
+        fn mapError(self: *Self, err: std.Io.Reader.Error) Error {
+            return switch (err) {
+                error.EndOfStream => error.Closed,
+                error.ReadFailed => self.stream.getReadError(),
+            };
+        }
+    };
+}
+
+// total on-the-wire length, including the type byte
+fn messageLength(header: *const [5]u8) error{InvalidMessageLength}!usize {
+    const len = std.mem.readInt(u32, header[1..5], .big);
+    if (len < 4) {
+        return error.InvalidMessageLength;
+    }
+    return std.math.add(usize, len, 1) catch error.InvalidMessageLength;
+}
+
+const t = lib.testing;
+const R = ReaderT(*t.Stream);
+
+test "Reader: next" {
     {
-        s.reset();
+        var s = t.Stream.init(10);
+        defer s.deinit();
         s.add(&[_]u8{ 8, 0, 0, 0, 4 });
-        var reader = R.init(t.allocator, 10, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
         const msg = try reader.next();
         try t.expectEqual(8, msg.type);
@@ -309,9 +154,10 @@ test "Reader: next" {
     }
 
     {
-        s.reset();
+        var s = t.Stream.init(10);
+        defer s.deinit();
         s.add(&[_]u8{ 1, 0, 0, 0, 5, 2 });
-        var reader = R.init(t.allocator, 10, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
         const msg = try reader.next();
         try t.expectEqual(1, msg.type);
@@ -319,22 +165,22 @@ test "Reader: next" {
     }
 
     {
-        s.reset();
+        var s = t.Stream.init(10);
+        defer s.deinit();
         s.add(&[_]u8{ 1, 0, 0, 0, 9, 1, 2, 3, 4, 19 });
-        var reader = R.init(t.allocator, 10, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
         const msg = try reader.next();
         try t.expectEqual(1, msg.type);
         try t.expectSlice(u8, &[_]u8{ 1, 2, 3, 4, 19 }, msg.data);
-        // optimization, resets pos to 0 since we read an exact message
-        try t.expectEqual(0, reader.pos);
     }
 
     {
         // partial 2nd message, but closed without all the data
-        s.reset();
+        var s = t.Stream.init(10);
+        defer s.deinit();
         s.add(&[_]u8{ 1, 0, 0, 0, 9, 1, 2, 3, 4, 19, 2 });
-        var reader = R.init(t.allocator, 10, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
         const msg = try reader.next();
         try t.expectEqual(1, msg.type);
@@ -344,9 +190,10 @@ test "Reader: next" {
 
     {
         // 2 full messages, 2nd message has no data
-        s.reset();
+        var s = t.Stream.init(20);
+        defer s.deinit();
         s.add(&[_]u8{ 99, 0, 0, 0, 6, 200, 201, 2, 0, 0, 0, 4 });
-        var reader = R.init(t.allocator, 20, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         const msg1 = try reader.next();
@@ -360,9 +207,10 @@ test "Reader: next" {
 
     {
         // 2 full messages, 2nd message has data
-        s.reset();
+        var s = t.Stream.init(20);
+        defer s.deinit();
         s.add(&[_]u8{ 99, 0, 0, 0, 6, 200, 201, 3, 0, 0, 0, 7, 1, 8, 2 });
-        var reader = R.init(t.allocator, 20, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         const msg1 = try reader.next();
@@ -376,9 +224,10 @@ test "Reader: next" {
 
     {
         // 2 full messages, split across packets
-        s.reset();
+        var s = t.Stream.init(20);
+        defer s.deinit();
         s.add(&[_]u8{ 91, 0, 0, 0, 6, 200, 22, 4, 0, 0, 0, 5 });
-        var reader = R.init(t.allocator, 20, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         const msg1 = try reader.next();
@@ -393,9 +242,10 @@ test "Reader: next" {
 
     {
         // not enough room in buffer for header of 2nd message
-        s.reset();
+        var s = t.Stream.init(8);
+        defer s.deinit();
         s.add(&[_]u8{ 17, 0, 0, 0, 4, 5 });
-        var reader = R.init(t.allocator, 8, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         const msg1 = try reader.next();
@@ -409,10 +259,11 @@ test "Reader: next" {
     }
 
     {
-        // not enough room in buffer for header of 2nd message across multiple callss
-        s.reset();
+        // not enough room in buffer for header of 2nd message across multiple calls
+        var s = t.Stream.init(8);
+        defer s.deinit();
         s.add(&[_]u8{ 17, 0, 0, 0, 5, 1, 200 });
-        var reader = R.init(t.allocator, 8, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         const msg1 = try reader.next();
@@ -428,19 +279,26 @@ test "Reader: next" {
     }
 }
 
+test "Reader: invalid message length" {
+    var s = t.Stream.init(10);
+    defer s.deinit();
+    s.add(&[_]u8{ 1, 0, 0, 0, 3 });
+    var reader = R.init(t.allocator, s);
+    defer reader.deinit();
+    try t.expectError(error.InvalidMessageLength, reader.next());
+}
+
 // simulates message fragmentations
 test "Reader: fuzz" {
-    const R = ReaderT(*t.Stream);
-
     var r = t.getRandom();
     const random = r.random();
 
     const messages = [_]u8{ 1, 0, 0, 0, 4, 2, 0, 0, 0, 5, 1, 3, 0, 0, 0, 6, 1, 2, 4, 0, 0, 0, 24, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 5, 0, 0, 0, 8, 1, 2, 3, 4, 6, 0, 0, 0, 9, 1, 2, 3, 4, 5, 7, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6, 8, 0, 0, 0, 11, 1, 2, 3, 4, 5, 6, 7, 9, 0, 0, 0, 25, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21 };
 
     for (0..400) |_| {
-        var s = t.Stream.init();
+        var s = t.Stream.init(12);
         defer s.deinit();
-        var reader = R.init(t.allocator, 12, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         for (0..4) |_| {
@@ -517,15 +375,13 @@ test "Reader: fuzz" {
     }
 }
 
-test "Reader: dynamic" {
-    const R = ReaderT(*t.Stream);
-    var s = t.Stream.init();
-    defer s.deinit();
-
+test "Reader: spill" {
     {
-        //  message bigger than static buffer
+        //  message bigger than buffer
+        var s = t.Stream.init(10);
+        defer s.deinit();
         s.add(&[_]u8{ 200, 0, 0, 0, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-        var reader = R.init(t.allocator, 10, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
         const msg = try reader.next();
         try t.expectEqual(200, msg.type);
@@ -533,9 +389,11 @@ test "Reader: dynamic" {
     }
 
     {
-        //  2nd message bigger than static buffer
+        //  2nd message bigger than buffer
+        var s = t.Stream.init(10);
+        defer s.deinit();
         s.add(&[_]u8{ 199, 0, 0, 0, 6, 9, 8, 200, 0, 0, 0, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-        var reader = R.init(t.allocator, 10, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         const msg1 = try reader.next();
@@ -548,9 +406,11 @@ test "Reader: dynamic" {
     }
 
     {
-        // middle message bigger than static
+        // middle message bigger than buffer
+        var s = t.Stream.init(10);
+        defer s.deinit();
         s.add(&[_]u8{ 199, 0, 0, 0, 6, 9, 8, 200, 0, 0, 0, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 198, 0, 0, 0, 5, 1 });
-        var reader = R.init(t.allocator, 10, s) catch unreachable;
+        var reader = R.init(t.allocator, s);
         defer reader.deinit();
 
         const msg1 = try reader.next();
@@ -567,53 +427,100 @@ test "Reader: dynamic" {
     }
 }
 
-test "Reader: start/endFlow basic" {
-    const R = ReaderT(*t.Stream);
-    var s = t.Stream.init();
-    defer s.deinit();
+test "Reader: peekForError" {
+    {
+        // buffered, not an error: left in place for next()
+        var s = t.Stream.init(20);
+        defer s.deinit();
+        s.add(&[_]u8{ 'T', 0, 0, 0, 6, 1, 2, 'E', 0, 0, 0, 5, 9 });
+        var reader = R.init(t.allocator, s);
+        defer reader.deinit();
 
-    // 1st message is bigge than static
-    s.add(&[_]u8{ 1, 0, 0, 0, 8, 1, 2, 3, 4 });
+        try t.expectEqual(null, try reader.peekForError());
+        const msg1 = try reader.next();
+        try t.expectEqual('T', msg1.type);
+        try t.expectSlice(u8, &.{ 1, 2 }, msg1.data);
 
-    // 2nd message is bigger than first
-    s.add(&[_]u8{ 2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6 });
+        // buffered error: consumed
+        const err = (try reader.peekForError()).?;
+        try t.expectSlice(u8, &.{9}, err);
+        try t.expectError(error.Closed, reader.next());
+    }
 
-    // 3rd message is smaller than 2nd (should re-use previous buffer)
-    s.add(&[_]u8{ 3, 0, 0, 0, 9, 1, 2, 3, 4, 5 });
+    {
+        // bigger than the buffer, not an error: only the header is read
+        var s = t.Stream.init(8);
+        defer s.deinit();
+        s.add(&[_]u8{ 'D', 0, 0, 0, 12, 1, 2, 3, 4, 5, 6, 7, 8 });
+        var reader = R.init(t.allocator, s);
+        defer reader.deinit();
 
-    var reader = R.init(t.allocator, 5, s) catch unreachable;
-    defer reader.deinit();
+        try t.expectEqual(null, try reader.peekForError());
+        const msg = try reader.next();
+        try t.expectEqual('D', msg.type);
+        try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, msg.data);
+    }
 
-    try reader.startFlow(null, null);
-    const msg1 = try reader.next();
-    try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
+    {
+        // bigger than the buffer, error: spilled and returned
+        var s = t.Stream.init(8);
+        defer s.deinit();
+        s.add(&[_]u8{ 'E', 0, 0, 0, 12, 1, 2, 3, 4, 5, 6, 7, 8, 'Z', 0, 0, 0, 5, 'I' });
+        var reader = R.init(t.allocator, s);
+        defer reader.deinit();
 
-    const msg2 = try reader.next();
-    try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5, 6 }, msg2.data);
-
-    const msg3 = try reader.next();
-    try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5 }, msg3.data);
-    reader.endFlow() catch unreachable;
+        const err = (try reader.peekForError()).?;
+        try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, err);
+        const msg = try reader.next();
+        try t.expectEqual('Z', msg.type);
+        try t.expectSlice(u8, &.{'I'}, msg.data);
+    }
 }
 
-test "Reader: start/endFlow overread into static" {
-    const R = ReaderT(*t.Stream);
-    var s = t.Stream.init();
+test "Reader: start/endFlow reuses the spill" {
+    var s = t.Stream.init(5);
     defer s.deinit();
 
-    // 1st message is bigge than static
+    // 1st message is bigger than the buffer
     s.add(&[_]u8{ 1, 0, 0, 0, 8, 1, 2, 3, 4 });
 
     // 2nd message is bigger than first
     s.add(&[_]u8{ 2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6 });
 
-    // 3rd message is smaller than 2nd (should re-use previous buffer)
+    // 3rd message is smaller than 2nd (should re-use previous spill)
     s.add(&[_]u8{ 3, 0, 0, 0, 9, 1, 2, 3, 4, 5 });
 
-    // 4th message is overread and fits in static
+    var reader = R.init(t.allocator, s);
+    defer reader.deinit();
+
+    try reader.startFlow(null, null);
+    const msg1 = try reader.next();
+    try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
+    try t.expectEqual(9, reader.spill.len);
+
+    const msg2 = try reader.next();
+    try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5, 6 }, msg2.data);
+    try t.expectEqual(11, reader.spill.len);
+
+    const msg3 = try reader.next();
+    try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5 }, msg3.data);
+    try t.expectEqual(11, reader.spill.len);
+    try reader.endFlow();
+    try t.expectEqual(0, reader.spill.len);
+}
+
+test "Reader: start/endFlow then a small message" {
+    var s = t.Stream.init(7);
+    defer s.deinit();
+
+    s.add(&[_]u8{ 1, 0, 0, 0, 8, 1, 2, 3, 4 });
+    s.add(&[_]u8{ 2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6 });
+    s.add(&[_]u8{ 3, 0, 0, 0, 9, 1, 2, 3, 4, 5 });
+
+    // 4th message fits in the buffer
     s.add(&[_]u8{ 3, 0, 0, 0, 5, 255 });
 
-    var reader = R.init(t.allocator, 7, s) catch unreachable;
+    var reader = R.init(t.allocator, s);
     defer reader.deinit();
 
     try reader.startFlow(null, null);
@@ -625,33 +532,27 @@ test "Reader: start/endFlow overread into static" {
 
     const msg3 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5 }, msg3.data);
-    reader.endFlow() catch unreachable;
+    try reader.endFlow();
 
     const msg4 = try reader.next();
     try t.expectSlice(u8, &.{255}, msg4.data);
 }
 
-test "Reader: start/endFlow large overread" {
-    const R = ReaderT(*t.Stream);
-    var s = t.Stream.init();
+test "Reader: start/endFlow then a large message" {
+    var s = t.Stream.init(7);
     defer s.deinit();
 
-    // 1st message is bigger than static
     s.add(&[_]u8{ 1, 0, 0, 0, 8, 1, 2, 3, 4 });
-
-    // 2nd message is bigger than first
     s.add(&[_]u8{ 2, 0, 0, 0, 18, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 });
-
-    // 3rd message is smaller than 2nd (should re-use previous buffer)
     s.add(&[_]u8{ 3, 0, 0, 0, 9, 1, 2, 3, 4, 5 });
 
     // 4rd message is huge
     s.add(&[_]u8{ 4, 0, 0, 19, 140 } ++ "z" ** 5000);
 
-    // 5th message is overread and does not fit into static
+    // 5th message is read outside of the flow and does not fit the buffer
     s.add(&[_]u8{ 5, 0, 0, 0, 11, 255, 250, 245, 240, 235, 230, 225 });
 
-    var reader = R.init(t.allocator, 7, s) catch unreachable;
+    var reader = R.init(t.allocator, s);
     defer reader.deinit();
 
     try reader.startFlow(null, null);
@@ -666,31 +567,25 @@ test "Reader: start/endFlow large overread" {
 
     const msg4 = try reader.next();
     try t.expectSlice(u8, "z" ** 5000, msg4.data);
-    reader.endFlow() catch unreachable;
+    try reader.endFlow();
 
     const msg5 = try reader.next();
     try t.expectSlice(u8, &.{ 255, 250, 245, 240, 235, 230, 225 }, msg5.data);
 }
 
-test "Reader: start/endFlow large overread with flow-specific allocator" {
+test "Reader: start/endFlow with flow-specific allocator" {
     defer t.reset();
-    const R = ReaderT(*t.Stream);
-    var s = t.Stream.init();
+    var s = t.Stream.init(7);
     defer s.deinit();
 
-    // 1st message is bigger than static
     s.add(&[_]u8{ 1, 0, 0, 0, 8, 1, 2, 3, 4 });
-
-    // 2nd message is bigger than first
     s.add(&[_]u8{ 2, 0, 0, 0, 10, 1, 2, 3, 4, 5, 6 });
-
-    // 3rd message is smaller than 2nd (should re-use previous buffer)
     s.add(&[_]u8{ 3, 0, 0, 0, 9, 1, 2, 3, 4, 5 });
 
-    // 4th message is overread and does not fit into static
+    // 4th message is read outside of the flow and does not fit the buffer
     s.add(&[_]u8{ 3, 0, 0, 0, 11, 255, 250, 245, 240, 235, 230, 225 });
 
-    var reader = R.init(t.allocator, 7, s) catch unreachable;
+    var reader = R.init(t.allocator, s);
     defer reader.deinit();
 
     try reader.startFlow(t.arena.allocator(), null);
@@ -702,25 +597,45 @@ test "Reader: start/endFlow large overread with flow-specific allocator" {
 
     const msg3 = try reader.next();
     try t.expectSlice(u8, &.{ 1, 2, 3, 4, 5 }, msg3.data);
-    reader.endFlow() catch unreachable;
+    try reader.endFlow();
 
     const msg4 = try reader.next();
     try t.expectSlice(u8, &.{ 255, 250, 245, 240, 235, 230, 225 }, msg4.data);
 }
 
-test "Reader: startFlow with dynamic allocation into deinit " {
+test "Reader: spill outlives a flow switch" {
+    // a spill from outside a flow must not be reused (or freed) by a flow that
+    // uses a different allocator
+    defer t.reset();
+    var s = t.Stream.init(7);
+    defer s.deinit();
+
+    s.add(&[_]u8{ 1, 0, 0, 0, 8, 1, 2, 3, 4 });
+    s.add(&[_]u8{ 2, 0, 0, 0, 8, 5, 6, 7, 8 });
+
+    var reader = R.init(t.allocator, s);
+    defer reader.deinit();
+
+    const msg1 = try reader.next();
+    try t.expectSlice(u8, &.{ 1, 2, 3, 4 }, msg1.data);
+
+    try reader.startFlow(t.arena.allocator(), null);
+    const msg2 = try reader.next();
+    try t.expectSlice(u8, &.{ 5, 6, 7, 8 }, msg2.data);
+    try reader.endFlow();
+}
+
+test "Reader: startFlow with a spill into deinit" {
     // This can happen on an error case, where we start a flow, but an error
     // happens during processing, causing conn.deinit() to be called (say, when
     // it's released back into the pool in an error state).
     defer t.reset();
-    const R = ReaderT(*t.Stream);
-    var s = t.Stream.init();
+    var s = t.Stream.init(7);
     defer s.deinit();
 
-    // 1st message is bigger than static
     s.add(&[_]u8{ 1, 0, 0, 0, 8, 1, 2, 3, 4 });
 
-    var reader = R.init(t.allocator, 7, s) catch unreachable;
+    var reader = R.init(t.allocator, s);
     defer reader.deinit();
 
     try reader.startFlow(t.arena.allocator(), null);

@@ -139,7 +139,7 @@ pub const Conn = struct {
         const buf = try Buffer.init(allocator, @max(opts.write_buffer orelse 2048, 128));
         errdefer buf.deinit();
 
-        const reader = try Reader.init(allocator, opts.read_buffer orelse 4096, stream);
+        const reader = Reader.init(allocator, stream);
         errdefer reader.deinit();
 
         const result_state = try Result.State.init(allocator, opts.result_state_size);
@@ -452,8 +452,14 @@ pub const Conn = struct {
     // Should not be called directly
     pub fn peekForError(self: *Conn) !void {
         const data = (try self._reader.peekForError()) orelse return;
+        // data is only valid until the next read, so copy it before draining
+        // the trailing ReadyForQuery
+        switch (self.setErr(data)) {
+            error.PG => {},
+            error.OutOfMemory => return error.OutOfMemory,
+        }
         try self.readyForQuery();
-        return self.setErr(data);
+        return error.PG;
     }
 
     // Should not be called directly
