@@ -281,6 +281,10 @@ pub const Stmt = struct {
     }
 
     pub fn bind(self: *Stmt, value: anytype) !void {
+        if (std.meta.hasFn(@TypeOf(value), "bind")) {
+            return value.bind(self);
+        }
+
         const name = self.name;
 
         const param_index = self.param_index;
