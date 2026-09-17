@@ -5,8 +5,11 @@ t:
 	TEST_FILTER="${F}" zig build test --summary all -freference-trace
 
 .PHONY: d
-d:
+d: tests/server.key
 	cd tests && docker compose up
+
+tests/server.key:
+	$(MAKE) ssl
 
 .PHONY: ssl
 ssl:
