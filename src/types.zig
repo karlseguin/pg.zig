@@ -1296,6 +1296,11 @@ pub fn oidToString(oid: i32) []const u8 {
 // The oid is what PG is expecting. In some cases, we'll use that to figure
 // out what to do.
 pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
+    if (comptime hasToPgzParam(T)) {
+        const v = value.toPgzParam();
+        return bindValue(@TypeOf(v), oid, v, buf, format_pos);
+    }
+
     switch (@typeInfo(T)) {
         .null => {
             // type can stay 0 (text)
@@ -1400,6 +1405,13 @@ pub fn bindValue(comptime T: type, oid: i32, value: anytype, buf: *buffer.Buffer
         .@"enum", .enum_literal => return String.encode(@tagName(value), buf, format_pos),
         else => compileHaltBindError(T),
     }
+}
+
+fn hasToPgzParam(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr| ptr.size == .one and std.meta.hasFn(ptr.child, "toPgzParam"),
+        else => std.meta.hasFn(T, "toPgzParam"),
+    };
 }
 
 fn bindSlice(oid: i32, value: anytype, buf: *buffer.Buffer, format_pos: usize) !void {
