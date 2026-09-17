@@ -219,6 +219,13 @@ pub const Conn = struct {
     }
 
     pub fn auth(self: *Conn, opts: AuthOpts) !void {
+        try self._reader.startFlow(null, opts.timeout);
+        // endFlow may free the buffer raw_pg_err points into, so it must run
+        // after setErr has copied it; a return expression is evaluated before
+        // the defers. Its only failure is OOM, which will surface again on the
+        // next use of the connection.
+        defer self._reader.endFlow() catch {};
+
         if (try lib.auth.auth(self._io, &self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
@@ -582,6 +589,16 @@ test "Conn: auth unknown user" {
     defer conn.deinit();
     try t.expectError(error.PG, conn.auth(.{ .username = "does_not_exist" }));
     try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "user \"does_not_exist\"") != null);
+}
+
+test "Conn: auth error larger than the read buffer" {
+    // The ErrorResponse doesn't fit the reader's buffer, so it lands in a spill
+    // that endFlow frees; conn.err must have been copied out before that.
+    var conn = try Conn.open(t.io, t.allocator, .{ .read_buffer = 128 });
+    defer conn.deinit();
+    const username = "does_not_exist_" ++ "x" ** 100;
+    try t.expectError(error.PG, conn.auth(.{ .username = username }));
+    try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "user \"does_not_exist_") != null);
 }
 
 test "Conn: auth cleartext password" {
