@@ -554,6 +554,22 @@ For reading, you can use `[]u8` to get the raw binary encoded data and parse it 
 
 For writing, wrap your raw encoded data in `pg.Binary{.data = ....}`.
 
+### Binding Custom Types
+A struct, union or enum can control how it's bound by defining a `toPgzParam` method. This method returns a value that pg.zig already knows how to bind:
+
+```zig
+const Str = struct {
+  str: []const u8,
+  data: u32,
+
+  pub fn toPgzParam(self: *const Str) []const u8 {
+    return self.str;
+  }
+};
+
+_ = try conn.exec("insert into names (name) values ($1)", .{str});
+```
+
 ## Listen / Notify
 You can create a `pg.Listener` either from an existing `Pool` or directly.
 

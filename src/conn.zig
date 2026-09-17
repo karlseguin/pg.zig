@@ -1761,6 +1761,111 @@ test "PG: binary wrapper" {
     try t.expectString(data.data, row.get([]const u8, 0));
 }
 
+test "PG: bind custom types" {
+    const Str = struct {
+        str: []const u8,
+        data: u32,
+
+        pub fn toPgzParam(self: *const @This()) []const u8 {
+            return self.str;
+        }
+    };
+
+    const UserId = struct {
+        id: i64,
+
+        pub fn toPgzParam(self: @This()) i64 {
+            return self.id;
+        }
+    };
+
+    // converts into another custom type
+    const Wrapper = struct {
+        inner: Str,
+
+        pub fn toPgzParam(self: @This()) Str {
+            return self.inner;
+        }
+    };
+
+    const Color = enum {
+        red,
+        blue,
+
+        pub fn toPgzParam(self: @This()) i32 {
+            return switch (self) {
+                .red => 1,
+                .blue => 2,
+            };
+        }
+    };
+
+    const Value = union(enum) {
+        int: i32,
+        text: []const u8,
+
+        pub fn toPgzParam(self: @This()) []const u8 {
+            return switch (self) {
+                .int => "int",
+                .text => |v| v,
+            };
+        }
+    };
+
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    const str = Str{ .str = "over 9000", .data = 9001 };
+    const null_str: ?Str = null;
+
+    {
+        // value, pointer, optional, and null
+        var row = (try c.rowUnsafe("select $1::text, $2::text, $3::text, $4::text", .{ str, &str, @as(?Str, str), null_str })).?;
+        defer row.deinit() catch {};
+        try t.expectString("over 9000", row.get([]const u8, 0));
+        try t.expectString("over 9000", row.get([]const u8, 1));
+        try t.expectString("over 9000", row.get([]const u8, 2));
+        try t.expectEqual(null, row.get(?[]const u8, 3));
+    }
+
+    {
+        // non-string, nested, enum and union
+        var row = (try c.rowUnsafe("select $1::bigint, $2::int, $3::text, $4::int, $5::text, $6::text", .{
+            UserId{ .id = 9223372036854775807 },
+            UserId{ .id = -32 }, // goes through the usual int coercion
+            Wrapper{ .inner = str },
+            Color.blue,
+            Value{ .int = 3 },
+            Value{ .text = "hello" },
+        })).?;
+        defer row.deinit() catch {};
+        try t.expectEqual(9223372036854775807, row.get(i64, 0));
+        try t.expectEqual(-32, row.get(i32, 1));
+        try t.expectString("over 9000", row.get([]const u8, 2));
+        try t.expectEqual(2, row.get(i32, 3));
+        try t.expectString("int", row.get([]const u8, 4));
+        try t.expectString("hello", row.get([]const u8, 5));
+    }
+
+    {
+        // the converted value is still subject to the normal bind rules
+        try t.expectError(error.IntWontFit, c.row("select $1::int", .{UserId{ .id = 9223372036854775807 }}));
+    }
+
+    {
+        // directly via stmt.bind
+        var stmt = try c.prepare("select $1::text");
+        errdefer stmt.deinit();
+        try stmt.bind(str);
+
+        var result = try stmt.execute();
+        defer result.deinit();
+        const row = (try result.next()).?;
+        try t.expectString("over 9000", try row.get([]const u8, 0));
+        try result.drain();
+    }
+}
+
 test "PG: isUnique" {
     defer t.reset();
 
