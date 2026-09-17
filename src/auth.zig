@@ -15,17 +15,13 @@ const Opts = lib.Conn.AuthOpts;
 // null on success
 // a []const on a PG error
 //   - can be be passed to  proto.Error.parse(owned)
-//   - is only valid until the next call to reader.read()
+//   - is only valid until the next call to reader.next() or reader.endFlow()
 //     (we expect our caller to clone the value)
 // a normal zig error on any other error
+//
+// The caller owns the reader flow: it must run startFlow before and endFlow
+// after it has copied a returned error.
 pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) !?[]const u8 {
-    try reader.startFlow(null, opts.timeout);
-
-    // ignore errors on endFlow, because it's troublesome to handle, and only
-    // something really bad (like OOM) can happen, and that'll surface again
-    // as soon as the app tries to use the connection.
-    defer reader.endFlow() catch {};
-
     {
         // write our startup message
         const startup_message = proto.StartupMessage{

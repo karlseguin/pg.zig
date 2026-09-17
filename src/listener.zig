@@ -76,6 +76,12 @@ pub const Listener = struct {
     }
 
     pub fn auth(self: *Listener, opts: Conn.AuthOpts) !void {
+        try self._reader.startFlow(null, opts.timeout);
+        // endFlow may free the buffer raw_pg_err points into, so it must run
+        // after setErr has copied it; a return expression is evaluated before
+        // the defers.
+        defer self._reader.endFlow() catch {};
+
         if (try lib.auth.auth(self._io, &self._stream, &self._buf, &self._reader, opts)) |raw_pg_err| {
             return self.setErr(raw_pg_err);
         }
