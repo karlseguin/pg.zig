@@ -278,8 +278,6 @@ pub const Conn = struct {
                 errdefer stmt.deinit();
 
                 try self._reader.startFlow(stmt.arena.allocator(), opts.timeout);
-                // Send a "SYNC" command
-                try self.write(&.{ 'S', 0, 0, 0, 4 });
                 stmt.buf.reset();
                 try stmt.prepareForBind(@intCast(describe.param_oids.len));
             }
