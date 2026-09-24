@@ -73,8 +73,15 @@ pub const Pool = struct {
         if (opts.auth.database) |v| opts_copy.auth.database = try aa.dupe(u8, v);
         if (opts.auth.application_name) |v| opts_copy.auth.application_name = try aa.dupe(u8, v);
         if (opts.connect.host) |v| opts_copy.connect.host = try aa.dupe(u8, v);
-        // Note: auth.startup_parameters (a StringHashMap) is not deep-copied; it is
-        // currently unused, but if it ever gets wired up it must be owned here too.
+        if (opts.auth.startup_parameters) |params| {
+            var owned = std.StringHashMap([]const u8).init(aa);
+            try owned.ensureTotalCapacity(params.count());
+            var it = params.iterator();
+            while (it.next()) |kv| {
+                owned.putAssumeCapacity(try aa.dupe(u8, kv.key_ptr.*), try aa.dupe(u8, kv.value_ptr.*));
+            }
+            opts_copy.auth.startup_parameters = owned;
+        }
 
         var ssl_ctx: ?*SSLCtx = null;
         if (comptime lib.has_openssl) {
@@ -674,6 +681,33 @@ test "Pool: init owns its connection strings" {
     t.allocator.free(host);
 
     try forceReconnect(pool);
+}
+
+test "Pool: init owns its startup parameters" {
+    // Build the map on the heap and free it right after init; a reconnect has to
+    // send the parameters from the pool's own copy.
+    var params = std.StringHashMap([]const u8).init(t.allocator);
+    const key = try t.allocator.dupe(u8, "statement_timeout");
+    const value = try t.allocator.dupe(u8, "4321ms");
+    try params.put(key, value);
+
+    var pool = try Pool.init(t.io, t.allocator, .{
+        .size = 1,
+        .auth = .{ .username = "postgres", .password = "postgres", .database = "postgres", .startup_parameters = params },
+    });
+    defer pool.deinit();
+
+    params.deinit();
+    t.allocator.free(key);
+    t.allocator.free(value);
+
+    try forceReconnect(pool);
+
+    const c = try pool.acquire();
+    defer pool.release(c);
+    var row = (try c.rowUnsafe("show statement_timeout", .{})) orelse unreachable;
+    defer row.deinit() catch {};
+    try t.expectString("4321ms", row.get([]const u8, 0));
 }
 
 test "Pool: initUri owns its connection strings" {

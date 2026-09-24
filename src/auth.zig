@@ -28,6 +28,7 @@ pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) 
             .username = opts.username,
             .application_name = opts.application_name,
             .database = opts.database orelse opts.username,
+            .params = opts.startup_parameters,
         };
 
         buf.resetRetainingCapacity();
