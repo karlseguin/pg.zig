@@ -242,6 +242,8 @@ pub const Stmt = struct {
             }
         }
 
+        // Consume the ReadyForQuery from our Sync
+        try conn.readyForQuery();
         return self.prepareForBind(param_count);
     }
 
@@ -249,8 +251,6 @@ pub const Stmt = struct {
     // to check "is this the first call to bind" each time, we make it the caller's
     // responsibility to "prepareForBind" upfront.
     pub fn prepareForBind(self: *Stmt, param_count: u16) !void {
-        try self.conn.readyForQuery();
-
         var buf = self.buf;
         buf.resetRetainingCapacity();
 
