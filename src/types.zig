@@ -1587,6 +1587,9 @@ pub fn decodeScalar(comptime fail_mode: lib.FailMode, comptime T: type, data: []
         else => switch (@typeInfo(T)) {
             .@"enum" => {
                 const str = Bytea.decode(data, oid);
+                if (comptime fail_mode == .safe) {
+                    return std.meta.stringToEnum(T, str) orelse error.InvalidType;
+                }
                 return std.meta.stringToEnum(T, str).?;
             },
             else => @compileError("cannot decode value of type " ++ @typeName(T)),

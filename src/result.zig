@@ -669,6 +669,13 @@ pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
             const l = std.mem.readInt(i32, data[12..16][0..4], .big);
             // const lower_bound = std.mem.readInt(i32, data[16..20][0..4], .big);
 
+            // next() cannot fail, so a label the enum does not have has to be
+            // found here, by one pass over the elements. Only enum arrays in
+            // the safe mode pay for it.
+            if (comptime fail_mode == .safe and @typeInfo(TT) == .@"enum") {
+                try checkEnumLabels(TT, data[20..], @intCast(l));
+            }
+
             return .{
                 .is_null = false,
                 ._len = @intCast(l),
@@ -747,6 +754,22 @@ pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
             }
         }
     };
+}
+
+fn checkEnumLabels(comptime E: type, items: []const u8, count: usize) lib.TypeError!void {
+    var pos: usize = 0;
+    for (0..count) |_| {
+        const len_end = pos + 4;
+        const item_len = std.mem.readInt(i32, items[pos..len_end][0..4], .big);
+        if (item_len == -1) {
+            pos = len_end;
+            continue;
+        }
+        pos = len_end + @as(usize, @intCast(item_len));
+        if (std.meta.stringToEnum(E, items[len_end..pos]) == null) {
+            return error.InvalidType;
+        }
+    }
 }
 
 fn EnumDecoder(comptime T: type) type {
@@ -1295,6 +1318,36 @@ test "Result: text[] alloc dupes" {
 
     try t.expectStringSlice(&.{ "Leto", "Test" }, arr1);
     try t.expectStringSlice(&.{ "Ghanima", "Goku" }, arr2);
+}
+
+test "Result: an enum label the enum does not have is an error" {
+    const Mood = enum { sad, ok };
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    {
+        var result = try c.query("select 'meh'::text, 'ok'::text", .{});
+        defer result.deinit();
+        defer result.drain() catch unreachable;
+
+        const row = (try result.next()).?;
+        try t.expectError(error.InvalidType, row.get(Mood, 0));
+        try t.expectEqual(Mood.ok, try row.get(Mood, 1));
+    }
+
+    {
+        var result = try c.query("select array['sad', 'meh']::text[], array['sad', null, 'ok']::text[]", .{});
+        defer result.deinit();
+        defer result.drain() catch unreachable;
+
+        const row = (try result.next()).?;
+        try t.expectError(error.InvalidType, row.iterator(Mood, 0));
+
+        // a NULL element is not a label, and is not checked as one
+        const all = try (try row.iterator(?Mood, 1)).alloc(t.allocator);
+        defer t.allocator.free(all);
+        try t.expectSlice(?Mood, &.{ .sad, null, .ok }, all);
+    }
 }
 
 test "Result: UUID" {
