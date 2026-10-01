@@ -669,10 +669,18 @@ pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
             // minimum size for 1 empty array
             lib.assert(data.len >= 20);
             const dimensions = std.mem.readInt(i32, data[0..4], .big);
-            lib.assert(dimensions == 1);
-
             const has_nulls = std.mem.readInt(i32, data[4..8][0..4], .big);
-            lib.assert(has_nulls == 0 or @typeInfo(T) == .optional);
+
+            // The column's type says nothing about either: an int4[] holds
+            // arrays of any number of dimensions, and any array may hold a
+            // NULL. That is the data being wrong for T, not the program.
+            if (comptime fail_mode == .safe) {
+                if (dimensions != 1) return error.InvalidType;
+                if (has_nulls != 0 and @typeInfo(T) != .optional) return error.UnexpectedNull;
+            } else {
+                lib.assert(dimensions == 1);
+                lib.assert(has_nulls == 0 or @typeInfo(T) == .optional);
+            }
 
             // const oid = std.mem.readInt(i32, data[8..12][0..4], .big);
             const l = std.mem.readInt(i32, data[12..16][0..4], .big);
@@ -713,6 +721,11 @@ pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
             // TODO: for fixed length types, we don't need to decode the length
             const len_end = pos + 4;
             const value_len = std.mem.readInt(i32, data[pos..len_end][0..4], .big);
+
+            if ((comptime @typeInfo(T) == .optional) and value_len == -1) {
+                self._pos = len_end;
+                return @as(T, null);
+            }
 
             const data_end = len_end + @as(usize, @intCast(value_len));
             lib.assert(data.len >= data_end);
@@ -1300,6 +1313,43 @@ test "Result: float[]" {
     const v2 = try row.iterator(f64, 1).alloc(t.allocator);
     defer t.allocator.free(v2);
     try t.expectSlice(f64, &.{ -888585.123322, 0.001 }, v2);
+}
+
+test "Result: iterator over an array it cannot read" {
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    {
+        // PostgreSQL stores a two dimensional array in an int4[] column
+        var result = try c.query("select array[[1, 2], [3, 4]]::int4[]", .{});
+        defer result.deinit();
+        defer result.drain() catch unreachable;
+
+        const row = (try result.next()).?;
+        try t.expectError(error.InvalidType, row.iterator(i32, 0));
+    }
+
+    {
+        // and any array may hold a NULL
+        var result = try c.query("select array[1, null, 3]::int4[]", .{});
+        defer result.deinit();
+        defer result.drain() catch unreachable;
+
+        const row = (try result.next()).?;
+        try t.expectError(error.UnexpectedNull, row.iterator(i32, 0));
+
+        // which an optional element type reads, by next() and by alloc()
+        var it = try row.iterator(?i32, 0);
+        try t.expectEqual(1, it.next());
+        const null_element: ?i32 = null;
+        try t.expectEqual(null_element, it.next());
+        try t.expectEqual(3, it.next());
+        try t.expectEqual(null, it.next());
+
+        const all = try (try row.iterator(?i32, 0)).alloc(t.allocator);
+        defer t.allocator.free(all);
+        try t.expectSlice(?i32, &.{ 1, null, 3 }, all);
+    }
 }
 
 test "Result: bool[]" {
