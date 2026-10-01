@@ -219,6 +219,11 @@ pub const Pool = struct {
             self._allocator.destroy(conn);
 
             conn_to_add = newConnection(self, true) catch |err1| {
+                // release can't return the error, and a cancellation is only
+                // reported once, so hand it back to the task for its next
+                // cancelation point
+                if (err1 == error.Canceled) io.recancel();
+
                 // we failed to create the connection, track it as missing and let
                 // the background reconnector try
                 self._mutex.lockUncancelable(io);

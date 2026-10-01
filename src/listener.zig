@@ -71,6 +71,13 @@ pub const Listener = struct {
             return;
         }
 
+        // Shielded from cancellation: `closed` is already set, so a canceled
+        // shutdown would never be retried and a next() blocked in another task
+        // would never wake up. It also keeps deinit, which ignores stop's
+        // errors, from swallowing a cancellation.
+        const prev = self._io.swapCancelProtection(.blocked);
+        defer _ = self._io.swapCancelProtection(prev);
+
         lib.sendTerminate(&self._stream, self._io);
         return self._stream.shutdown(.both);
     }
