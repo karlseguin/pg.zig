@@ -587,11 +587,15 @@ pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
                     };
                     break :blk &types.Int32.decodeKnown;
                 },
-                i64 => switch (oid) {
-                    types.TimestampArray.oid.decimal => &types.Timestamp.decodeKnown,
-                    types.TimestampTzArray.oid.decimal => &types.Timestamp.decodeKnown,
-                    types.Int64Array.oid.decimal => &types.Int64.decodeKnown,
-                    else => std.debug.panic("{d} oid cannot target i64 iterator", .{oid}),
+                i64 => blk: {
+                    lib.verifyDecodeType(fail_mode, []i64, &.{ types.Int64Array.oid.decimal, types.TimestampArray.oid.decimal, types.TimestampTzArray.oid.decimal }, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
+                    break :blk switch (oid) {
+                        types.TimestampArray.oid.decimal, types.TimestampTzArray.oid.decimal => &types.Timestamp.decodeKnown,
+                        else => &types.Int64.decodeKnown,
+                    };
                 },
                 f32 => blk: {
                     lib.verifyDecodeType(fail_mode, []f32, &.{types.Float32Array.oid.decimal}, oid) catch |err| {
@@ -600,10 +604,15 @@ pub fn IteratorT(comptime fail_mode: lib.FailMode, comptime T: type) type {
                     };
                     break :blk &types.Float32.decodeKnown;
                 },
-                f64 => switch (oid) {
-                    types.Float64Array.oid.decimal => &types.Float64.decodeKnown,
-                    types.NumericArray.oid.decimal => &types.Numeric.decodeKnownToFloat,
-                    else => std.debug.panic("{d} oid cannot target f64 iterator", .{oid}),
+                f64 => blk: {
+                    lib.verifyDecodeType(fail_mode, []f64, &.{ types.Float64Array.oid.decimal, types.NumericArray.oid.decimal }, oid) catch |err| {
+                        if (comptime fail_mode == .unsafe) unreachable;
+                        return err;
+                    };
+                    break :blk switch (oid) {
+                        types.NumericArray.oid.decimal => &types.Numeric.decodeKnownToFloat,
+                        else => &types.Float64.decodeKnown,
+                    };
                 },
                 bool => blk: {
                     lib.verifyDecodeType(fail_mode, []bool, &.{types.BoolArray.oid.decimal}, oid) catch |err| {
@@ -1194,6 +1203,40 @@ test "Result: int[]" {
     const v3 = try row.iterator(i64, 2).alloc(t.allocator);
     defer t.allocator.free(v3);
     try t.expectSlice(i64, &.{ 944949338498392, -2 }, v3);
+}
+
+test "Result: iterator of the wrong type is an error" {
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    {
+        var result = try c.query("select array[1, 2]::int4[], array['a', 'b']::text[]", .{});
+        defer result.deinit();
+        defer result.drain() catch unreachable;
+
+        const row = (try result.next()).?;
+        try t.expectError(error.InvalidType, row.iterator(i64, 0));
+        try t.expectError(error.InvalidType, row.iterator(f64, 0));
+        try t.expectError(error.InvalidType, row.iterator(i64, 1));
+        try t.expectError(error.InvalidType, row.iterator(f64, 1));
+    }
+
+    {
+        // the types that are accepted are still accepted
+        var result = try c.query("select array[1]::int8[], array[1.5]::float8[], array[2.5]::numeric[], array['2000-01-01']::timestamptz[]", .{});
+        defer result.deinit();
+        defer result.drain() catch unreachable;
+
+        const row = (try result.next()).?;
+        var ints = try row.iterator(i64, 0);
+        try t.expectEqual(1, ints.next());
+        var floats = try row.iterator(f64, 1);
+        try t.expectEqual(1.5, floats.next());
+        var numerics = try row.iterator(f64, 2);
+        try t.expectEqual(2.5, numerics.next());
+        var timestamps = try row.iterator(i64, 3);
+        try t.expectEqual(946_684_800_000_000, timestamps.next());
+    }
 }
 
 test "Result: float[]" {
