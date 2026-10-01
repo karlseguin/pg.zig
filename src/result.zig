@@ -912,6 +912,50 @@ test "Result: floats" {
     }
 }
 
+test "Result: timestamp infinity" {
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    var result = try c.query(
+        \\ select 'infinity'::timestamptz, '-infinity'::timestamptz,
+        \\        'infinity'::timestamp, '-infinity'::timestamp,
+        \\        '2000-01-01 00:00:00+00'::timestamptz,
+        \\        array['infinity'::timestamptz, '-infinity', '2000-01-01 00:00:01+00']
+    , .{});
+    defer result.deinit();
+    defer result.drain() catch unreachable;
+
+    const row = (try result.next()).?;
+    try t.expectEqual(std.math.maxInt(i64), try row.get(i64, 0));
+    try t.expectEqual(std.math.minInt(i64), try row.get(i64, 1));
+    try t.expectEqual(std.math.maxInt(i64), try row.get(i64, 2));
+    try t.expectEqual(std.math.minInt(i64), try row.get(i64, 3));
+    try t.expectEqual(946_684_800_000_000, try row.get(i64, 4));
+
+    var it = try row.iterator(i64, 5);
+    try t.expectEqual(std.math.maxInt(i64), it.next());
+    try t.expectEqual(std.math.minInt(i64), it.next());
+    try t.expectEqual(946_684_801_000_000, it.next());
+    try t.expectEqual(null, it.next());
+}
+
+test "Result: timestamp infinity round trip" {
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    var result = try c.query(
+        "select $1::timestamptz::text, $2::timestamptz::text, $3::timestamptz[]::text",
+        .{ std.math.maxInt(i64), std.math.minInt(i64), [_]i64{ std.math.maxInt(i64), std.math.minInt(i64), 946_684_801_000_000 } },
+    );
+    defer result.deinit();
+    defer result.drain() catch unreachable;
+
+    const row = (try result.next()).?;
+    try t.expectString("infinity", try row.get([]u8, 0));
+    try t.expectString("-infinity", try row.get([]u8, 1));
+    try t.expectString("{infinity,-infinity,\"2000-01-01 00:00:01+00\"}", try row.get([]u8, 2));
+}
+
 test "Result: bool" {
     var c = try t.connect(.{});
     defer c.deinit();
