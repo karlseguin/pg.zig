@@ -269,6 +269,9 @@ When `.map = .name`, the query must be executed with the  `{.column_names = true
 
 Slice fields can either be mapped to a `pg.Iterator(T)` or a slice. When mapped to a `slice`, an allocator MUST be provided. When mapping to an array of strings (i.e. [][]const u8), the values are duped, and thus both the values and the slice itself must be freed. When mapping to a slice of primitives (i.e. []i32) the slice must be freed. When mapping to an `pg.Iterator(T)` with a custom allocator (`.{.allocator = allocator}`), the iterator must be freed by calling `iteartor.deinit(allocator)`. Whether you're mapping to an `pg.Iterator(T)` or a slice, I Strongly suggest you use an ArenaAllocator.
 
+#### JSON/JSONB
+If a JSON/JSONB column will map to a `field: T` using `std.json.parseFromSliceLeaky`. An `allocator` _must_ be given and the `allocator` _must_ be an arena. For cases where the allocator is not an arena, declare the field as `std.json.Parsed(T)` (which exposes a `value: T` and a `deinit` method)
+
 ## QueryRow
 A `QueryRow` is returned from a call to `conn.row` or `conn.rowOpts` and wraps both a `Result` and a `Row.` It exposes the same methods as `Row` as well as `deinit`, which must be called once the `QueryRow` is no longer needed. This is a rare case where `deinit()` can fail. In most cases, you can simply throw away the error (because failure is extremely rare and, if the connection came from a pool, it should repair itself).
 

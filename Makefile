@@ -2,7 +2,7 @@ F=
 
 .PHONY: t
 t:
-	TEST_FILTER="${F}" zig build test --summary all -freference-trace
+	TEST_FILTER="${F}" zig build test -freference-trace
 
 # Refuse to start the container before the certs exist; otherwise docker
 # creates directories at the mount points and the container has to be

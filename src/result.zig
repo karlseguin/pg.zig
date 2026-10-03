@@ -361,8 +361,8 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
             }
 
             return switch (opts.map) {
+                .name => self.toUsingName(T, allocator),
                 .ordinal => self.toUsingOrdinal(T, allocator),
-                .name => return self.toUsingName(T, allocator),
             };
         }
 
@@ -393,6 +393,11 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
                 return error.FieldColumnMismatch;
             };
 
+            if (comptime isJsonStruct(T)) {
+                try lib.verifyDecodeType(fail_mode, T, &.{ types.JSON.oid.decimal, types.JSONB.oid.decimal }, self.oids[column_index]);
+                return self.mapJson(T, column_index, allocator orelse return error.AllocatorRequiredForJsonMapping);
+            }
+
             if (comptime isSlice(T)) |S| {
                 const slice = blk: {
                     if (@typeInfo(T) == .optional) {
@@ -411,6 +416,28 @@ pub fn RowT(comptime fail_mode: lib.FailMode) type {
             const a = allocator orelse return value;
             return mapValue(T, if (comptime fail_mode == .safe) try value else value, a);
         }
+
+        fn mapJson(self: *const Self, comptime T: type, column_index: usize, allocator: Allocator) !T {
+            const value = self.values[column_index];
+            if (@typeInfo(T) == .optional) {
+                if (value.is_null) {
+                    return null;
+                }
+                return try self.mapJson(@typeInfo(T).optional.child, column_index, allocator);
+            }
+
+            try lib.verifyNotNull(fail_mode, T, value.is_null);
+
+            const json = if (self.oids[column_index] == types.JSONB.oid.decimal) types.JSONB.decodeKnown(value.data) else value.data;
+
+            // The input is the row's buffer, which won't outlive the row, so
+            // strings must always be copied.
+            const parse_opts = std.json.ParseOptions{ .allocate = .alloc_always };
+            if (comptime @hasField(T, "value") and T == std.json.Parsed(@FieldType(T, "value"))) {
+                return std.json.parseFromSlice(@FieldType(T, "value"), allocator, json, parse_opts);
+            }
+            return std.json.parseFromSliceLeaky(T, allocator, json, parse_opts);
+        }
     };
 }
 
@@ -425,6 +452,16 @@ fn isSlice(comptime T: type) ?type {
         .optional => |opt| return isSlice(opt.child),
         else => return null,
     }
+}
+
+// A struct (or optional struct) without its own fromPgzRow, which we'll parse
+// from a JSON or JSONB column.
+fn isJsonStruct(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .optional => |opt| isJsonStruct(opt.child),
+        .@"struct" => T != types.Numeric and T != types.Cidr and !@hasDecl(T, "fromPgzRow"),
+        else => false,
+    };
 }
 
 fn mapValue(comptime T: type, value: T, allocator: Allocator) !T {
@@ -1772,6 +1809,92 @@ test "Row.to: name no map" {
         try t.expectEqual(false, user.active);
         try t.expectString("ghanima", user.name);
         try t.expectString("n1", user.note.?);
+    }
+}
+
+test "Row.to: json" {
+    const Stats = struct { power: u32, name: []const u8 };
+
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    {
+        // json and jsonb, leaky
+        const User = struct {
+            id: i32,
+            a: Stats,
+            b: Stats,
+        };
+        var arena = std.heap.ArenaAllocator.init(t.allocator);
+        defer arena.deinit();
+
+        var row = (try c.rowOpts("select 3 as id, '{\"power\": 9001, \"name\": \"goku\"}'::json as a, '{\"power\": 8000, \"name\": \"vegeta\"}'::jsonb as b", .{}, .{ .column_names = true })).?;
+        defer row.deinit() catch {};
+
+        const user = try row.to(User, .{ .map = .name, .allocator = arena.allocator() });
+        try t.expectEqual(3, user.id);
+        try t.expectEqual(9001, user.a.power);
+        try t.expectString("goku", user.a.name);
+        try t.expectEqual(8000, user.b.power);
+        try t.expectString("vegeta", user.b.name);
+    }
+
+    {
+        // json.Parsed
+        const User = struct {
+            a: std.json.Parsed(Stats),
+            b: std.json.Parsed(Stats),
+        };
+
+        var row = (try c.row("select '{\"power\": 1, \"name\": \"krillin\"}'::json, '{\"power\": 2, \"name\": \"yamcha\"}'::jsonb", .{})).?;
+        defer row.deinit() catch {};
+
+        const user = try row.to(User, .{ .allocator = t.allocator });
+        defer user.a.deinit();
+        defer user.b.deinit();
+        try t.expectEqual(1, user.a.value.power);
+        try t.expectString("krillin", user.a.value.name);
+        try t.expectEqual(2, user.b.value.power);
+        try t.expectString("yamcha", user.b.value.name);
+    }
+
+    {
+        // optionals
+        const User = struct {
+            a: ?Stats,
+            b: ?std.json.Parsed(Stats),
+            c: ?Stats,
+            d: ?std.json.Parsed(Stats),
+        };
+        var arena = std.heap.ArenaAllocator.init(t.allocator);
+        defer arena.deinit();
+
+        var row = (try c.row("select null::json, null::jsonb, '{\"power\": 3, \"name\": \"gohan\"}'::jsonb, '{\"power\": 4, \"name\": \"piccolo\"}'::json", .{})).?;
+        defer row.deinit() catch {};
+
+        const user = try row.to(User, .{ .allocator = arena.allocator() });
+        try t.expectEqual(null, user.a);
+        try t.expectEqual(null, user.b);
+        try t.expectEqual(3, user.c.?.power);
+        try t.expectString("gohan", user.c.?.name);
+        try t.expectEqual(4, user.d.?.value.power);
+        try t.expectString("piccolo", user.d.?.value.name);
+    }
+
+    {
+        // allocator required
+        const User = struct { a: Stats };
+        var row = (try c.row("select '{\"power\": 1, \"name\": \"x\"}'::json", .{})).?;
+        defer row.deinit() catch {};
+        try t.expectError(error.AllocatorRequiredForJsonMapping, row.to(User, .{}));
+    }
+
+    {
+        // null into non-optional
+        const User = struct { a: Stats };
+        var row = (try c.row("select null::json", .{})).?;
+        defer row.deinit() catch {};
+        try t.expectError(error.UnexpectedNull, row.to(User, .{ .allocator = t.allocator }));
     }
 }
 
