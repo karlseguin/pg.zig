@@ -89,7 +89,7 @@ pub const Pool = struct {
                 .off => {},
                 else => |tls_config| {
                     if (opts_copy.connect.host) |h| {
-                        opts_copy.connect._hostz = try aa.dupeZ(u8, h);
+                        opts_copy.connect._hostz = try aa.dupeSentinel(u8, h, 0);
                     }
                     // the cert path is re-read on every (re)connect, so own it too
                     switch (tls_config) {

@@ -45,7 +45,7 @@ const TLSStream = struct {
                     var owned = false;
                     const h = opts._hostz orelse blk: {
                         owned = true;
-                        break :blk try allocator.dupeZ(u8, host);
+                        break :blk try allocator.dupeSentinel(u8, host, 0);
                     };
 
                     defer if (owned) {

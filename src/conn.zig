@@ -594,7 +594,7 @@ test "Conn: auth error larger than the read buffer" {
     // that endFlow frees; conn.err must have been copied out before that.
     var conn = try Conn.open(t.io, t.allocator, .{ .read_buffer = 128 });
     defer conn.deinit();
-    const username = "does_not_exist_" ++ "x" ** 100;
+    const username = "does_not_exist_" ++ @as([100]u8, @splat('x'));
     try t.expectError(error.PG, conn.auth(.{ .username = username }));
     try t.expectEqual(true, std.mem.find(u8, conn.err.?.message, "user \"does_not_exist_") != null);
 }
@@ -1894,19 +1894,19 @@ test "PG: large read" {
 
     {
         // want this to be larger than our read_buffer
-        var rows = try c.query("select $1::text", .{"!" ** 1000});
+        var rows = try c.query("select $1::text", .{@as([1000]u8, @splat('!'))});
         defer rows.deinit();
 
         const row = (try rows.nextUnsafe()).?;
-        try t.expectString("!" ** 1000, row.get([]u8, 0));
+        try t.expectString(&@as([1000]u8, @splat('!')), row.get([]u8, 0));
         try t.expectEqual(null, try rows.next());
     }
 
     {
         // with a row
-        var row = (try c.rowUnsafe("select $1::text", .{"z" ** 1000})).?;
+        var row = (try c.rowUnsafe("select $1::text", .{@as([1000]u8, @splat('z'))})).?;
         defer row.deinit() catch {};
-        try t.expectString("z" ** 1000, row.get([]u8, 0));
+        try t.expectString(&@as([1000]u8, @splat('z')), row.get([]u8, 0));
     }
 }
 
@@ -1914,11 +1914,11 @@ test "Conn: dynamic buffer freed on error" {
     var c = try t.connect(.{ .read_buffer = 100 });
     defer c.deinit();
 
-    var rows = try c.query("select $1::text", .{"!" ** 200});
+    var rows = try c.query("select $1::text", .{@as([200]u8, @splat('!'))});
     defer rows.deinit();
 
     const row = (try rows.nextUnsafe()).?;
-    try t.expectString("!" ** 200, row.get([]u8, 0));
+    try t.expectString(&@as([200]u8, @splat('!')), row.get([]u8, 0));
 
     // we end here, simulating the app returning an error. This causes
     // rows.deinit() and c.deinit() to be called prematurely (from
