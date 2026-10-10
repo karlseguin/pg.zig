@@ -3,4 +3,3 @@ zig-out/
 tests/server.key
 tests/server.crt
 zig-pkg
-.idea
