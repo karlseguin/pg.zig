@@ -13,8 +13,8 @@
             .hash = "metrics-0.0.0-W7G4eGWhAQC-C6tpIW3uxJp-vl6rLyfJvoqJRLzF1SuS",
         },
         .translate_c = .{
-            .url = "git+https://codeberg.org/ziglang/translate-c#zig-0.17.x",
-            .hash = "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5",
+            .url = "git+https://codeberg.org/ziglang/translate-c?ref=2.0.1#4f5ad374e50d1a98d3da79fa5d3bda9949103bf7",
+            .hash = "translate_c-2.0.1-Q_BUWmpOBwCIhy--up1q6cl3OlIQE86iJU8R-bZ01aPj",
         },
     },
 }
