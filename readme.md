@@ -57,16 +57,16 @@ while (try result.next()) |row| {
 ```
 
 ## Pool
-The pool keeps a configured number of database connection open. The `acquire()` method is used to retrieve a connection from the pool. The pool may start one background thread to attempt to reconnect disconnected connections (or connections which are in an invalid state).
+The pool holds up to `size` database connections. The `acquire()` method is used to retrieve a connection from the pool. When no idle connection is available and the pool holds fewer than `size` connections, `acquire()` opens a new one. A connection released in an invalid state (e.g. after an error mid-query) is closed, and a new one is opened the next time one is needed.
 
 ### init(io: std.Io, allocator: std.mem.allocator, opts: Opts) !\*Pool
 Initializes a connection pool. Pool options are:
 
-* `size` - Number of connections to maintain. Defaults to `10`.
+* `size` - Maximum number of connections. Defaults to `10`.
 * `auth`: - See [Conn.auth](#authopts-opts-void)
 * `connect`: - See the [Conn.open](#openallocator-stdmemallocator-opts-opts-conn).
 * `timeout`: - The amount of time, in milliseconds, to wait for a connection to be available when `acquire()` is called.
-* `connect_on_init_count`:  - The # of connections in the pool to eagerly connect during `init`. Defaults to `null` which will initiliaze all connections (`size`). The background reconnector is used to setup the remaining (`size - connect_on_init_count`) connections. This can be set to `0`, to prevent `init` from failing except in extreme cases (i.e. OOM), but that will hide any configuration/connection issue until the first query is executed.
+* `connect_on_init_count`:  - The # of connections in the pool to eagerly connect during `init`. Defaults to `null` which will initiliaze all connections (`size`). The remaining (`size - connect_on_init_count`) connections are opened on demand by `acquire()`. This can be set to `0`, to prevent `init` from failing except in extreme cases (i.e. OOM), but that will hide any configuration/connection issue until the first query is executed.
 
 ### initUri(io: std.Io, allocator: std.mem.Allocator, uri: std.Uri, opts: Opts) !\*Pool
 Initializes a connection pool using a std.Uri. When using this function, the `auth` and `connect` fields of `opts` should **not** be set, as these will automatically set based on the provided `uri`.
@@ -78,7 +78,7 @@ defer pool.deinit();
 ```
 
 ### acquire() !\*Conn
-Returns a [\*Conn](#conn) for the connection pool. Returns an `error.Timeout` if the connection cannot be acquired (i.e. if the pool remains empty) for the  `timeout` configuration passed to `init`.
+Returns a [\*Conn](#conn) for the connection pool. If a new connection has to be opened and that fails, the error is returned. Returns an `error.Timeout` if the connection cannot be acquired (i.e. if all `size` connections remain in use) for the  `timeout` configuration passed to `init`.
 
 
 ```zig

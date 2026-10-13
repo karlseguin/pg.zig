@@ -18,14 +18,16 @@ pub const Pool = struct {
     _io: Io,
     _opts: Opts,
     _timeout: u64,
+    // idle connections; _conns[0.._available] are ready to be acquired
     _conns: []*Conn,
     _available: usize,
-    _missing: usize,
+    // connections that are open or being opened, idle or in use; never more
+    // than _conns.len
+    _open: usize,
     _allocator: Allocator,
     _mutex: Io.Mutex,
     _cond: Io.Condition,
     _ssl_ctx: ?*lib.SSLCtx,
-    _reconnector: Reconnector,
     // not to be used outside of init
     _arena: ArenaAllocator,
 
@@ -113,10 +115,9 @@ pub const Pool = struct {
             ._arena = arena,
             ._opts = opts_copy,
             ._ssl_ctx = ssl_ctx,
-            ._missing = 0,
+            ._open = connect_on_init_count,
             ._allocator = allocator,
             ._available = connect_on_init_count,
-            ._reconnector = Reconnector.init(pool),
             ._timeout = @as(u64, @intCast(opts.timeout)) * std.time.ns_per_ms,
         };
 
@@ -132,19 +133,10 @@ pub const Pool = struct {
             opened_connections += 1;
         }
 
-        errdefer pool._reconnector.stop();
-
-        const lazy_start_count = size - connect_on_init_count;
-        pool._missing = lazy_start_count;
-        for (0..lazy_start_count) |_| {
-            try pool._reconnector.reconnect();
-        }
-
         return pool;
     }
 
     pub fn deinit(self: *Pool) void {
-        self._reconnector.stop();
         const allocator = self._allocator;
         for (self._conns[0..self._available]) |conn| {
             conn.deinit();
@@ -157,56 +149,58 @@ pub const Pool = struct {
     pub fn acquire(self: *Pool) !*Conn {
         const conns = self._conns;
         const io = self._io;
-        const deadline = @as(i64, @intCast(self._timeout));
-        const start = std.Io.Timestamp.now(io, .awake);
+        const deadline: Io.Clock.Timestamp = .fromNow(io, .{
+            .raw = .fromNanoseconds(self._timeout),
+            .clock = .awake,
+        });
 
         try self._mutex.lock(io);
-        errdefer self._mutex.unlock(io);
+        // null: the pool is empty but below its size, and we reserved a slot
+        // for a new connection, which we open outside the lock
+        const idle: ?*Conn = blk: {
+            errdefer self._mutex.unlock(io);
 
-        const SelectResult = union(enum) { t: Io.Cancelable!void, c: Io.Cancelable!void };
-        var select_buf: [1]SelectResult = undefined;
+            var timed_out = false;
+            while (true) {
+                const available = self._available;
+                if (available > 0) {
+                    const index = available - 1;
+                    self._available = index;
+                    break :blk conns[index];
+                }
 
-        while (true) {
-            const available = self._available;
-            const missing = self._missing;
-
-            if (available == 0) {
-                // Check if pool is completely exhausted
-                const total_alive = self._conns.len - missing;
-                if (total_alive == 0) {
-                    return error.PoolExhausted;
+                if (self._open < conns.len) {
+                    self._open += 1;
+                    break :blk null;
                 }
 
                 lib.metrics.poolEmpty();
 
-                // Calculate remaining timeout
-                const now = std.Io.Timestamp.now(io, .awake);
-                const elapsed = start.durationTo(now).toNanoseconds();
-                if (elapsed >= deadline) {
+                // checked only after looking for a connection one more time
+                if (timed_out) {
                     return error.Timeout;
                 }
 
-                const remaining_ns = deadline - elapsed;
-
-                var select: Io.Select(SelectResult) = .init(io, &select_buf);
-                defer select.cancelDiscard();
-                try select.concurrent(.t, Io.sleep, .{ io, .fromNanoseconds(remaining_ns), .awake });
-                try select.concurrent(.c, Io.Condition.wait, .{ &self._cond, io, &self._mutex });
-
-                _ = try select.await();
-                continue;
+                self._cond.waitTimeout(io, &self._mutex, .{ .deadline = deadline }) catch |err| switch (err) {
+                    error.Timeout => timed_out = true,
+                    error.Canceled => |e| return e,
+                };
             }
+        };
+        self._mutex.unlock(io);
 
-            const index = available - 1;
-            const conn = conns[index];
-            self._available = index;
-            self._mutex.unlock(io);
-            return conn;
-        }
+        return idle orelse self.openConnection();
+    }
+
+    // Opens a connection for a slot that acquire already reserved in _open.
+    fn openConnection(self: *Pool) !*Conn {
+        return newConnection(self, false) catch |err| {
+            self.dropSlot();
+            return err;
+        };
     }
 
     pub fn release(self: *Pool, conn: *Conn) void {
-        var conn_to_add = conn;
         const io = self._io;
 
         if (conn._state != .idle) {
@@ -214,34 +208,29 @@ pub const Pool = struct {
             // conn should always be idle when being released. It's possible we can
             // recover from this (e.g. maybe we just need to read until we get a
             // ReadyForQuery), but we wouldn't want to block for too long. For now,
-            // we'll just replace the connection.
+            // we'll just close the connection; the next acquire that finds the
+            // pool empty opens a new one.
             conn.deinit();
             self._allocator.destroy(conn);
-
-            conn_to_add = newConnection(self, true) catch |err1| {
-                // release can't return the error, and a cancellation is only
-                // reported once, so hand it back to the task for its next
-                // cancelation point
-                if (err1 == error.Canceled) io.recancel();
-
-                // we failed to create the connection, track it as missing and let
-                // the background reconnector try
-                self._mutex.lockUncancelable(io);
-                self._missing += 1;
-                self._mutex.unlock(io);
-
-                self._reconnector.reconnect() catch |err2| {
-                    log.err("Re-opening connection failed ({}) and background reconnector failed to start ({})", .{ err1, err2 });
-                };
-                return;
-            };
+            self.dropSlot();
+            return;
         }
 
         var conns = self._conns;
         self._mutex.lockUncancelable(io);
         const available = self._available;
-        conns[available] = conn_to_add;
+        conns[available] = conn;
         self._available = available + 1;
+        self._mutex.unlock(io);
+        self._cond.signal(io);
+    }
+
+    // Gives up a slot in _open and wakes a waiter, which can now open a
+    // connection in its place.
+    fn dropSlot(self: *Pool) void {
+        const io = self._io;
+        self._mutex.lockUncancelable(io);
+        self._open -= 1;
         self._mutex.unlock(io);
         self._cond.signal(io);
     }
@@ -258,14 +247,14 @@ pub const Pool = struct {
         defer self._mutex.unlock(io);
 
         const available = self._available;
-        const missing = self._missing;
+        const open = self._open;
         const size = self._conns.len;
 
         return .{
             .size = size,
             .available = available,
-            .missing = missing,
-            .in_use = size - available - missing,
+            .missing = size - open,
+            .in_use = open - available,
         };
     }
 
@@ -311,99 +300,6 @@ pub const Pool = struct {
         opts.release_conn = true;
         var conn = try self.acquire();
         return conn.rowUnsafeOpts(sql, values, opts);
-    }
-};
-
-const Reconnector = struct {
-    // number of connections that the pool is missing, i.e. how many need to be
-    // reconnected
-    count: usize,
-
-    // when stop is called, this is set to true
-    stopped: bool,
-
-    // true while the reconnector task is running
-    running: bool,
-
-    pool: *Pool,
-    mutex: Io.Mutex,
-
-    // owns the reconnector task, if any
-    group: Io.Group,
-
-    fn init(pool: *Pool) Reconnector {
-        return .{
-            .pool = pool,
-            .count = 0,
-            .mutex = .init,
-            .group = .init,
-            .stopped = false,
-            .running = false,
-        };
-    }
-
-    fn run(self: *Reconnector) Io.Cancelable!void {
-        const pool = self.pool;
-        const io = pool._io;
-        const retry_delay: std.Io.Duration = .fromSeconds(2);
-
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-        defer self.running = false;
-
-        // the mutex is held whenever the loop condition is evaluated
-        while (self.stopped == false and self.count > 0) {
-            {
-                self.mutex.unlock(io);
-                defer self.mutex.lockUncancelable(io);
-
-                const conn = newConnection(pool, false) catch |err| {
-                    if (err == error.Canceled) return error.Canceled;
-                    try std.Io.sleep(io, retry_delay, .awake);
-                    continue;
-                };
-
-                // Decrement missing count when successfully recreated
-                pool._mutex.lockUncancelable(io);
-                std.debug.assert(pool._missing > 0);
-                pool._missing -= 1;
-                pool._mutex.unlock(io);
-
-                conn.release(); // inserts it into the pool
-            }
-            self.count -= 1;
-        }
-    }
-
-    fn stop(self: *Reconnector) void {
-        const io = self.pool._io;
-
-        self.mutex.lockUncancelable(io);
-        self.stopped = true;
-        self.mutex.unlock(io);
-
-        self.group.cancel(io);
-    }
-
-    fn reconnect(self: *Reconnector) !void {
-        const io = self.pool._io;
-
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-
-        if (self.stopped == true) {
-            return;
-        }
-
-        self.count += 1;
-        if (self.running == true) {
-            // the running task will pick up the new count
-            return;
-        }
-
-        // the task blocks on our mutex, so it can't clear `running` before we set it
-        try self.group.concurrent(io, Reconnector.run, .{self});
-        self.running = true;
     }
 };
 
@@ -473,7 +369,49 @@ test "Pool" {
     }
 }
 
-test "Pool: deinit while the reconnector is retrying" {
+test "Pool: grows on demand" {
+    var pool = try Pool.init(t.io, t.allocator, .{
+        .size = 3,
+        .auth = t.authOpts(.{}),
+        .connect_on_init_count = 1,
+    });
+    defer pool.deinit();
+
+    try expectStats(pool, .{ .size = 3, .available = 1, .missing = 2, .in_use = 0 });
+
+    const c1 = try pool.acquire();
+    try expectStats(pool, .{ .size = 3, .available = 0, .missing = 2, .in_use = 1 });
+
+    // the pool is empty, so this opens a new connection
+    const c2 = try pool.acquire();
+    try expectStats(pool, .{ .size = 3, .available = 0, .missing = 1, .in_use = 2 });
+
+    pool.release(c1);
+    pool.release(c2);
+    try expectStats(pool, .{ .size = 3, .available = 2, .missing = 1, .in_use = 0 });
+
+    // idle connections are reused before opening more
+    const c3 = try pool.acquire();
+    defer pool.release(c3);
+    try expectStats(pool, .{ .size = 3, .available = 1, .missing = 1, .in_use = 1 });
+}
+
+test "Pool: acquire times out when the pool is full" {
+    var pool = try Pool.init(t.io, t.allocator, .{
+        .size = 1,
+        .auth = t.authOpts(.{}),
+        .timeout = 50,
+    });
+    defer pool.deinit();
+
+    const c1 = try pool.acquire();
+    defer pool.release(c1);
+
+    try t.expectError(error.Timeout, pool.acquire());
+    try expectStats(pool, .{ .size = 1, .available = 0, .missing = 0, .in_use = 1 });
+}
+
+test "Pool: acquire returns the connect error and frees the slot" {
     const io = t.io;
 
     // bound but never listening, so connects are refused. Holding it for the
@@ -488,13 +426,94 @@ test "Pool: deinit while the reconnector is retrying" {
         .connect = .{ .port = socket.address.ip4.port, .host = "127.0.0.1" },
         .auth = t.authOpts(.{}),
     });
-    try std.Io.sleep(io, .fromNanoseconds(100 * std.time.ns_per_ms), .awake);
+    defer pool.deinit();
 
-    // deinit cancels the backoff rather than waiting the full 2s
+    // nothing happens in the background: the error goes to the caller, and the
+    // slot is free for the next attempt
+    try t.expectError(error.ConnectionRefused, pool.acquire());
+    try expectStats(pool, .{ .size = 1, .available = 0, .missing = 1, .in_use = 0 });
+    try t.expectError(error.ConnectionRefused, pool.acquire());
+    try expectStats(pool, .{ .size = 1, .available = 0, .missing = 1, .in_use = 0 });
+}
+
+test "Pool: a dirty connection is closed on release and replaced on demand" {
+    var pool = try Pool.init(t.io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    const c1 = try pool.acquire();
+    c1._state = .fail;
+    pool.release(c1);
+    try expectStats(pool, .{ .size = 1, .available = 0, .missing = 1, .in_use = 0 });
+
+    const c2 = try pool.acquire();
+    defer pool.release(c2);
+    try expectStats(pool, .{ .size = 1, .available = 0, .missing = 0, .in_use = 1 });
+    _ = try c2.exec("select 1", .{});
+}
+
+test "Pool: a waiter opens a connection when a dirty one is released" {
+    const io = t.io;
+
+    var pool = try Pool.init(io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    const c1 = try pool.acquire();
+
+    const S = struct {
+        fn run(p: *Pool) !void {
+            // waits for c1, which comes back dirty, so it opens its own
+            const c = try p.acquire();
+            defer p.release(c);
+            _ = try c.exec("select 1", .{});
+        }
+    };
+
+    var future = try io.concurrent(S.run, .{pool});
+    defer future.cancel(io) catch {};
+    try std.Io.sleep(io, .fromMilliseconds(100), .awake);
+
     const start = std.Io.Timestamp.now(io, .awake);
-    pool.deinit();
+    c1._state = .fail;
+    pool.release(c1);
+
+    // woken by the release, not by acquire's 10s timeout
+    try future.await(io);
     const elapsed = start.durationTo(std.Io.Timestamp.now(io, .awake)).toNanoseconds();
     try t.expectEqual(true, elapsed < std.time.ns_per_s);
+    try expectStats(pool, .{ .size = 1, .available = 1, .missing = 0, .in_use = 0 });
+}
+
+test "Pool: a canceled query doesn't reconnect in the canceled task" {
+    const io = t.io;
+
+    var pool = try Pool.init(io, t.allocator, .{ .size = 1, .auth = t.authOpts(.{}) });
+    defer pool.deinit();
+
+    // listening but never accepting: a reconnect to it would block in auth
+    const addr: Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+    var server = try addr.listen(io, .{});
+    defer server.deinit(io);
+    pool._opts.connect.port = server.socket.address.ip4.port;
+
+    const S = struct {
+        fn run(p: *Pool) !void {
+            _ = try p.exec("select pg_sleep(10)", .{});
+        }
+    };
+
+    var future = try io.concurrent(S.run, .{pool});
+    defer future.cancel(io) catch {};
+    try std.Io.sleep(io, .fromMilliseconds(100), .awake);
+
+    // the cancel lands on the query's read; release drops the connection
+    // instead of opening a replacement
+    const start = std.Io.Timestamp.now(io, .awake);
+    const result = future.cancel(io);
+    const elapsed = start.durationTo(std.Io.Timestamp.now(io, .awake)).toNanoseconds();
+
+    try t.expectError(error.Canceled, result);
+    try t.expectEqual(true, elapsed < std.time.ns_per_s);
+    try expectStats(pool, .{ .size = 1, .available = 0, .missing = 1, .in_use = 0 });
 }
 
 test "Pool: Release" {
@@ -738,8 +757,8 @@ fn testPool(p: *Pool) void {
     }
 }
 
-// forces release() to discard the connection and open a fresh one, exercising
-// reconnect with the pool's stored auth strings.
+// forces release() to discard the connection and acquire() to open a fresh one,
+// exercising reconnect with the pool's stored auth strings.
 fn forceReconnect(pool: *Pool) !void {
     const c1 = try pool.acquire();
     c1._state = .query;
@@ -748,4 +767,12 @@ fn forceReconnect(pool: *Pool) !void {
     const c2 = try pool.acquire();
     defer pool.release(c2);
     _ = try c2.exec("select 1", .{});
+}
+
+fn expectStats(pool: *Pool, expected: Pool.Stats) !void {
+    const actual = pool.stats();
+    try t.expectEqual(expected.size, actual.size);
+    try t.expectEqual(expected.available, actual.available);
+    try t.expectEqual(expected.missing, actual.missing);
+    try t.expectEqual(expected.in_use, actual.in_use);
 }
