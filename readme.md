@@ -142,7 +142,7 @@ Executes the query with arguments, returns [Result](#result). `deinit`, and poss
 ### queryOpts(sql: []const u8, args: anytype, opts: Conn.QueryOpts) !Result
 Same as `query` but takes options:
 
-- `timeout: ?u32` - This is not reliable and should probably not be used. Currently it simply puts a recv socket timeout. On timeout, the connection will likely no longer be valid (which the pool will detect and handle when the connection is released) and the underlying query will likely still execute. Defaults to `null`.
+- `timeout: ?u32` - Milliseconds that any single read from the server may wait. A read that waits longer fails with `error.Timeout`. The connection is then left mid-query and can't be reused (the pool closes it when it's released), and the query itself may still be running on the server. Defaults to `null` (no timeout).
 - `column_names: bool` - Whether or not the `result.column_names` should be populated. When true, this requires memory allocation (duping the column names). Defaults to `false` unless the `column_names` build option was set to true.
 - `allocator` - The allocator to use for any allocations needed when executing the query and reading the results. When `null` this will default to the connection's allocator. If you were executing a query in a web-request and each web-request had its own arena tied to the lifetime of the request, it might make sense to use that arena. Defaults to `null`.
 - `release_conn: bool` - Whether or not to call `conn.release()` when `result.deinit()` is called. Useful for writing a function that acquires a connection from a `Pool` and returns a `Result`. When `query` or `row` are called from a `Pool` this is forced to `true`. Otherwise, defaults to `false`. 
@@ -627,7 +627,7 @@ When calling `listen`, a timeout in milliseconds can be specified:
 try listener.listen("chan_1", .{});
 ```
 
-If multiple calls to `listen` are made, the last timeout will be used. If no message is received in `timeout` milliseconds, `next()` will return `null` and `listener.err.?.err == error.WouldBlock`.
+If multiple calls to `listen` are made, the last timeout will be used. If no message is received in `timeout` milliseconds, `next()` will return `null` and `listener.err.?.err == error.Timeout`. A timeout of `0` (the default) waits forever.
 
 ### Reconnects
 A listener will not automatically reconnect on error/disconnect. The pub/sub nature of LISTEN/NOTIFY mean that delivery is at-most-once and auto-reconnecting can hide that fact. Put the above code in a `while (true) {...}` loop.
