@@ -67,6 +67,8 @@ Initializes a connection pool. Pool options are:
 * `connect`: - See the [Conn.open](#openallocator-stdmemallocator-opts-opts-conn).
 * `timeout`: - The amount of time, in milliseconds, to wait for a connection to be available when `acquire()` is called.
 * `connect_on_init_count`:  - The # of connections in the pool to eagerly connect during `init`. Defaults to `null` which will initiliaze all connections (`size`). The remaining (`size - connect_on_init_count`) connections are opened on demand by `acquire()`. This can be set to `0`, to prevent `init` from failing except in extreme cases (i.e. OOM), but that will hide any configuration/connection issue until the first query is executed.
+* `max_lifetime` - Milliseconds, from when it was opened, after which a connection is closed instead of being reused: when it's released, or found idle by `acquire`. Useful behind a load balancer or a failover, so that connections don't stick to one server forever. Defaults to `null` (no limit).
+* `idle_timeout` - Milliseconds a connection may sit idle in the pool before it's closed. The pool has no background task: expired connections are closed (a few at a time) when the pool is next used, by `acquire` or `release`. Defaults to `null` (no limit).
 
 ### initUri(io: std.Io, allocator: std.mem.Allocator, uri: std.Uri, opts: Opts) !\*Pool
 Initializes a connection pool using a std.Uri. When using this function, the `auth` and `connect` fields of `opts` should **not** be set, as these will automatically set based on the provided `uri`.

@@ -37,6 +37,14 @@ pub const Pool = struct {
         connect: Conn.Opts = .{},
         timeout: u32 = 10 * std.time.ms_per_s,
         connect_on_init_count: ?u16 = null,
+
+        // Milliseconds, from when it was opened, after which a connection is
+        // closed instead of being reused. null for no limit.
+        max_lifetime: ?u32 = null,
+
+        // Milliseconds a connection may sit idle in the pool before it's
+        // closed. null for no limit.
+        idle_timeout: ?u32 = null,
     };
 
     pub const Stats = struct {
@@ -54,6 +62,8 @@ pub const Pool = struct {
         defer po.deinit();
         po.opts.size = opts.size;
         po.opts.timeout = opts.timeout;
+        po.opts.max_lifetime = opts.max_lifetime;
+        po.opts.idle_timeout = opts.idle_timeout;
         return init(io, allocator, po.opts);
     }
 
@@ -154,6 +164,13 @@ pub const Pool = struct {
             .clock = .awake,
         });
 
+        // Connections that outlived max_lifetime or idle_timeout, which we
+        // close once the lock is released. One more than takeExpired takes,
+        // for an expired connection at the top of the stack.
+        var expired_buf: [max_expired_per_call + 1]*Conn = undefined;
+        var expired_count: usize = 0;
+        defer self.closeExpired(expired_buf[0..expired_count]);
+
         try self._mutex.lock(io);
         // null: the pool is empty but below its size, and we reserved a slot
         // for a new connection, which we open outside the lock
@@ -162,11 +179,20 @@ pub const Pool = struct {
 
             var timed_out = false;
             while (true) {
+                expired_count += self.takeExpired(expired_buf[expired_count..max_expired_per_call]);
+
                 const available = self._available;
                 if (available > 0) {
                     const index = available - 1;
                     self._available = index;
-                    break :blk conns[index];
+                    const conn = conns[index];
+                    if (self.isExpired(conn, Io.Timestamp.now(io, .awake))) {
+                        // we keep its slot for the connection that replaces it
+                        expired_buf[expired_count] = conn;
+                        expired_count += 1;
+                        break :blk null;
+                    }
+                    break :blk conn;
                 }
 
                 if (self._open < conns.len) {
@@ -189,6 +215,10 @@ pub const Pool = struct {
         };
         self._mutex.unlock(io);
 
+        // close before opening, so we never hold more than `size` connections
+        self.closeExpired(expired_buf[0..expired_count]);
+        expired_count = 0;
+
         return idle orelse self.openConnection();
     }
 
@@ -202,8 +232,9 @@ pub const Pool = struct {
 
     pub fn release(self: *Pool, conn: *Conn) void {
         const io = self._io;
+        const now = Io.Timestamp.now(io, .awake);
 
-        if (conn._state != .idle) {
+        if (conn._state != .idle or self.pastLifetime(conn, now)) {
             lib.metrics.poolDirty();
             // conn should always be idle when being released. It's possible we can
             // recover from this (e.g. maybe we just need to read until we get a
@@ -216,13 +247,76 @@ pub const Pool = struct {
             return;
         }
 
+        conn._idle_since = now;
+
+        var expired_buf: [max_expired_per_call]*Conn = undefined;
+        var expired_count: usize = 0;
+        defer self.closeExpired(expired_buf[0..expired_count]);
+
         var conns = self._conns;
         self._mutex.lockUncancelable(io);
+        expired_count = self.takeExpired(&expired_buf);
         const available = self._available;
         conns[available] = conn;
         self._available = available + 1;
         self._mutex.unlock(io);
         self._cond.signal(io);
+    }
+
+    // How many expired connections acquire or release takes out of the pool
+    // per call, so that a call never closes many connections at once.
+    const max_expired_per_call = 4;
+
+    fn pastLifetime(self: *const Pool, conn: *const Conn, now: Io.Timestamp) bool {
+        const ms = self._opts.max_lifetime orelse return false;
+        return conn._opened_at.durationTo(now).toMilliseconds() >= ms;
+    }
+
+    fn isExpired(self: *const Pool, conn: *const Conn, now: Io.Timestamp) bool {
+        if (self.pastLifetime(conn, now)) {
+            return true;
+        }
+        const ms = self._opts.idle_timeout orelse return false;
+        return conn._idle_since.durationTo(now).toMilliseconds() >= ms;
+    }
+
+    // Must be called with the lock held. Moves expired connections out of
+    // the idle ones into `into` and gives up their slots. The idle stack is
+    // LIFO, so the connections idle the longest are at the bottom, and we
+    // only look there.
+    fn takeExpired(self: *Pool, into: []*Conn) usize {
+        if (self._opts.max_lifetime == null and self._opts.idle_timeout == null) {
+            return 0;
+        }
+        const now = Io.Timestamp.now(self._io, .awake);
+        const conns = self._conns;
+        var n: usize = 0;
+        while (n < into.len and self._available > 0) {
+            const conn = conns[0];
+            if (self.isExpired(conn, now) == false) {
+                break;
+            }
+            into[n] = conn;
+            n += 1;
+            const available = self._available - 1;
+            std.mem.copyForwards(*Conn, conns[0..available], conns[1 .. available + 1]);
+            self._available = available;
+            self._open -= 1;
+        }
+        return n;
+    }
+
+    // Closes connections taken by takeExpired, outside the lock. The slots
+    // they gave up may let a waiter open a new connection.
+    fn closeExpired(self: *Pool, expired: []const *Conn) void {
+        if (expired.len == 0) {
+            return;
+        }
+        for (expired) |conn| {
+            conn.deinit();
+            self._allocator.destroy(conn);
+        }
+        self._cond.broadcast(self._io);
     }
 
     // Gives up a slot in _open and wakes a waiter, which can now open a
@@ -331,6 +425,8 @@ fn newConnection(pool: *Pool, log_failure: bool) !*Conn {
         return err;
     };
     conn._pool = pool;
+    conn._opened_at = Io.Timestamp.now(io, .awake);
+    conn._idle_since = conn._opened_at;
     return conn;
 }
 
@@ -514,6 +610,64 @@ test "Pool: a canceled query doesn't reconnect in the canceled task" {
     try t.expectError(error.Canceled, result);
     try t.expectEqual(true, elapsed < std.time.ns_per_s);
     try expectStats(pool, .{ .size = 1, .available = 0, .missing = 1, .in_use = 0 });
+}
+
+test "Pool: max_lifetime" {
+    var pool = try Pool.init(t.io, t.allocator, .{
+        .size = 1,
+        .auth = t.authOpts(.{}),
+        .max_lifetime = 200,
+    });
+    defer pool.deinit();
+
+    // an expired idle connection is replaced on acquire
+    const pid1 = try backendPid(pool);
+    try t.io.sleep(.fromMilliseconds(250), .awake);
+    const pid2 = try backendPid(pool);
+    try t.expectEqual(false, pid1 == pid2);
+    try expectStats(pool, .{ .size = 1, .available = 1, .missing = 0, .in_use = 0 });
+
+    // an expired connection is closed on release, and its slot freed
+    const c = try pool.acquire();
+    try t.expectEqual(pid2, t.scalar(c, "select pg_backend_pid()"));
+    try t.io.sleep(.fromMilliseconds(250), .awake);
+    pool.release(c);
+    try expectStats(pool, .{ .size = 1, .available = 0, .missing = 1, .in_use = 0 });
+
+    const pid3 = try backendPid(pool);
+    try t.expectEqual(false, pid2 == pid3);
+}
+
+test "Pool: idle_timeout" {
+    var pool = try Pool.init(t.io, t.allocator, .{
+        .size = 3,
+        .auth = t.authOpts(.{}),
+        .idle_timeout = 200,
+    });
+    defer pool.deinit();
+    try expectStats(pool, .{ .size = 3, .available = 3, .missing = 0, .in_use = 0 });
+
+    // connections in use don't expire, and their idle time starts on release
+    const c1 = try pool.acquire();
+    const c2 = try pool.acquire();
+    try t.io.sleep(.fromMilliseconds(250), .awake);
+    pool.release(c1);
+    pool.release(c2);
+    // the one that stayed idle was closed by those releases
+    try expectStats(pool, .{ .size = 3, .available = 2, .missing = 1, .in_use = 0 });
+
+    // after the timeout, acquire closes them all and opens a fresh one
+    try t.io.sleep(.fromMilliseconds(250), .awake);
+    const c3 = try pool.acquire();
+    try t.expectEqual(false, c3 == c1 or c3 == c2);
+    try expectStats(pool, .{ .size = 3, .available = 0, .missing = 2, .in_use = 1 });
+    pool.release(c3);
+}
+
+fn backendPid(pool: *Pool) !i32 {
+    const c = try pool.acquire();
+    defer pool.release(c);
+    return t.scalar(c, "select pg_backend_pid()");
 }
 
 test "Pool: Release" {

@@ -35,6 +35,10 @@ pub const Conn = struct {
 
     _pool: ?*Pool = null,
 
+    // Set and used by the pool (Pool.Opts.max_lifetime and idle_timeout).
+    _opened_at: Io.Timestamp = .zero,
+    _idle_since: Io.Timestamp = .zero,
+
     // The current transation state, this is whatever the last ReadyForQuery
     // message told us
     _state: State,
