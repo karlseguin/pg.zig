@@ -5,6 +5,7 @@ const Buffer = @import("buffer").Buffer;
 const types = lib.types;
 const Conn = lib.Conn;
 const Result = lib.Result;
+const StatementCache = lib.StatementCache;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
@@ -67,7 +68,7 @@ pub const Stmt = struct {
         };
     }
 
-    pub fn fromDescribe(conn: *Conn, describe: *Describe, opts: Conn.QueryOpts) !Stmt {
+    pub fn fromDescribe(conn: *Conn, describe: *Describe, name: []const u8, opts: Conn.QueryOpts) !Stmt {
         const base_allocator = opts.allocator orelse conn._allocator;
         const arena = try base_allocator.create(ArenaAllocator);
         arena.* = ArenaAllocator.init(base_allocator);
@@ -82,7 +83,7 @@ pub const Stmt = struct {
             .param_oids = describe.param_oids,
             .column_count = @intCast(describe.result_state.oids.len),
             .result_state = describe.result_state,
-            .name = opts.cache_name.?,
+            .name = name,
         };
     }
 
@@ -117,12 +118,29 @@ pub const Stmt = struct {
 
         const name = self.name;
 
+        // Statements the connection's statement cache dropped, which we close
+        // ahead of our Parse, in the same round trip.
+        const pending_close = conn._statement_cache.pending_close.items;
+        var close_name_buf: [64]u8 = undefined;
+
         // This function will issue 3 commands: Parse, Describe, Sync
         // We need the response from describe to put together our Bind message.
         // Specifically, describe will tell us the type of the return columns, and
         // in Bind, we tell the server how we want it to encode each column (text
         // or binary) and to do that, we need to know what they are.
         {
+            // CLOSE (statement)
+            for (pending_close) |id| {
+                const close_name = StatementCache.writeName(&close_name_buf, id);
+                const close_payload_len = 6 + close_name.len;
+                try buf.ensureUnusedCapacity(1 + close_payload_len);
+                buf.writeByteAssumeCapacity('C');
+                try buf.writeIntBig(u32, @intCast(close_payload_len));
+                buf.writeByteAssumeCapacity('S');
+                buf.writeAssumeCapacity(close_name);
+                buf.writeByteAssumeCapacity(0);
+            }
+
             // Build the payload from our 3 commands
 
             // We can calculate exactly how many bytes our 3 messages are going to be
@@ -135,7 +153,7 @@ pub const Stmt = struct {
             // the +3 for the initial byte message for each of the 3 messages
             const total_length = 3 + bind_payload_len + describe_payload_len + sync_payload_len;
 
-            try buf.ensureTotalCapacity(total_length);
+            try buf.ensureUnusedCapacity(total_length);
             var view = buf.skip(total_length) catch unreachable;
 
             // PARSE
@@ -162,7 +180,21 @@ pub const Stmt = struct {
         // no longer idle, we're now in a query
         conn._state = .query;
 
-        // First message we expect back is a ParseComplete, which has no data.
+        // A CloseComplete for each Close. In a failed transaction, the first
+        // Close fails and the server skips to our Sync; the statements then
+        // stay pending, to be closed by a later Parse.
+        for (0..pending_close.len) |_| {
+            const msg = conn.read() catch |err| {
+                if (err == error.PG) try conn.recoverFromError();
+                return err;
+            };
+            if (msg.type != '3') {
+                return conn.unexpectedDBMessage();
+            }
+        }
+        conn._statement_cache.pending_close.clearRetainingCapacity();
+
+        // Next we expect a ParseComplete, which has no data.
         {
             // If Parse fails, then the server won't reply to our other messages
             // (i.e. Describe) and it'l immediately send a ReadyForQuery.
@@ -234,7 +266,9 @@ pub const Stmt = struct {
                         state = try Result.State.init(statement_arena, column_count);
                         self.result_state = state;
                     }
-                    const a: ?Allocator = if (opts.column_names) (describe_allocator orelse statement_arena) else null;
+                    // A cached statement keeps the column names, so that any later
+                    // execution can ask for them.
+                    const a: ?Allocator = describe_allocator orelse if (opts.column_names) statement_arena else null;
                     try state.from(column_count, data, a);
                     self.column_count = column_count;
                 },

@@ -12,6 +12,7 @@ pub const proto = @import("proto.zig");
 pub const auth = @import("auth.zig");
 pub const Conn = @import("conn.zig").Conn;
 pub const Stmt = @import("stmt.zig").Stmt;
+pub const StatementCache = @import("statement_cache.zig").StatementCache;
 pub const Pool = @import("pool.zig").Pool;
 pub const Stream = @import("stream.zig").Stream;
 pub const sendTerminate = @import("stream.zig").sendTerminate;

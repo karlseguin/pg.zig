@@ -6,6 +6,7 @@ const proto = lib.proto;
 const types = lib.types;
 const Pool = lib.Pool;
 const Stmt = lib.Stmt;
+const StatementCache = lib.StatementCache;
 const SSLCtx = lib.SSLCtx;
 const Reader = lib.Reader;
 const Result = lib.Result;
@@ -65,6 +66,9 @@ pub const Conn = struct {
     // cache_name => data necessary to re-execute previously prepared statement.
     _prepared_statements: std.hash_map.StringHashMapUnmanaged(Stmt.Describe),
 
+    // Statements prepared automatically, by SQL (Opts.statement_cache_size)
+    _statement_cache: StatementCache,
+
     const State = enum {
         idle,
 
@@ -85,6 +89,12 @@ pub const Conn = struct {
         read_buffer: ?u16 = null,
         result_state_size: u16 = 32,
         tls: TLS = .off,
+
+        // How many statements each connection prepares and keeps automatically,
+        // keyed by their SQL. Running a cached statement again takes one round
+        // trip instead of two. 0 disables the cache. See the readme before
+        // enabling it behind a connection pooler.
+        statement_cache_size: u16 = 0,
         _hostz: ?[:0]const u8 = null,
 
         // tcp keepalive settings (null timer = OS default)
@@ -123,6 +133,11 @@ pub const Conn = struct {
         // When not null, the prepared statement will be cached and re-used
         // by subsequent queries using the same name.
         cache_name: ?[]const u8 = null,
+
+        // Whether the query may use the connection's automatic statement
+        // cache (Opts.statement_cache_size). Set to false for one-off SQL so
+        // that it doesn't push out statements that are reused.
+        statement_cache: bool = true,
     };
 
     pub fn openAndAuthUri(io: Io, allocator: Allocator, uri: std.Uri) !Conn {
@@ -185,6 +200,7 @@ pub const Conn = struct {
             ._param_oids = param_oids,
             ._result_state = result_state,
             ._prepared_statements = .{},
+            ._statement_cache = .init(opts.statement_cache_size),
         };
     }
 
@@ -207,6 +223,7 @@ pub const Conn = struct {
             value_ptr.arena.deinit();
         }
         self._prepared_statements.deinit(self._allocator);
+        self._statement_cache.deinit(allocator);
     }
 
     pub fn release(self: *Conn) void {
@@ -271,10 +288,46 @@ pub const Conn = struct {
         var stmt: Stmt = undefined;
         const name = opts.cache_name;
 
+        // set when the statement comes from, or goes into, the automatic cache
+        var auto: ?*StatementCache.Entry = null;
+        const statement_cache = &self._statement_cache;
+
+        if (name == null and opts.statement_cache and statement_cache.enabled()) {
+            if (statement_cache.get(sql)) |entry| {
+                cached = true;
+                auto = entry;
+                stmt = try Stmt.fromDescribe(self, &entry.describe, entry.name(), opts);
+                errdefer stmt.deinit();
+
+                try self._reader.startFlow(stmt.arena.allocator(), opts.timeout);
+                stmt.buf.reset();
+                try stmt.prepareForBind(@intCast(entry.describe.param_oids.len));
+            } else {
+                const allocator = self._allocator;
+                const entry = try statement_cache.create(allocator, sql);
+                var added = false;
+                errdefer if (!added) statement_cache.discard(allocator, entry);
+
+                stmt = try Stmt.init(self, opts);
+                errdefer stmt.deinit();
+                stmt.name = entry.name();
+
+                // When prepare is called with the entry's arena, its param_oids
+                // and result_state are created there, so the entry can keep them.
+                try stmt.prepare(sql, entry.describe.arena.allocator());
+                entry.describe.param_oids = stmt.param_oids;
+                entry.describe.result_state = stmt.result_state;
+                statement_cache.add(allocator, entry);
+                added = true;
+                auto = entry;
+                cached = true;
+            }
+        }
+
         if (name) |n| {
             if (self._prepared_statements.getPtr(n)) |describe| {
                 cached = true;
-                stmt = try Stmt.fromDescribe(self, describe, opts);
+                stmt = try Stmt.fromDescribe(self, describe, n, opts);
                 errdefer stmt.deinit();
 
                 try self._reader.startFlow(stmt.arena.allocator(), opts.timeout);
@@ -320,8 +373,18 @@ pub const Conn = struct {
 
         return stmt.execute() catch |err| {
             stmt.deinit();
+            if (auto) |entry| {
+                if (err == error.PG and self.err != null and isStaleStatement(self.err.?.code)) {
+                    // The next run of this SQL prepares it again.
+                    statement_cache.invalidate(self._allocator, entry);
+                }
+            }
             return err;
         };
+    }
+
+    pub fn statementCacheStats(self: *const Conn) StatementCache.Stats {
+        return self._statement_cache.stats();
     }
 
     pub fn row(self: *Conn, sql: []const u8, values: anytype) !?QueryRow {
@@ -574,6 +637,14 @@ pub const Conn = struct {
         };
     }
 };
+
+// The errors a cached statement gets when the server can't run it as it was
+// prepared any more: 0A000, "cached plan must not change result type", after
+// a schema change, and 26000 if it was deallocated behind our back (e.g.
+// DISCARD ALL).
+fn isStaleStatement(code: []const u8) bool {
+    return std.mem.eql(u8, code, "0A000") or std.mem.eql(u8, code, "26000");
+}
 
 const t = lib.testing;
 test "Conn: auth trust (no pass)" {
@@ -2141,6 +2212,148 @@ test "Conn: query is cancelable" {
     try t.expectEqual(true, elapsed_ms < 1500); // prompt, not blocked until pg_sleep ends
     try t.expectEqual(Conn.State.fail, conn._state);
     try t.expectError(error.ConnectionBusy, conn.exec("select 1", .{}));
+}
+
+test "Conn: statement cache" {
+    var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .statement_cache_size = 8 });
+    defer c.deinit();
+    try c.auth(t.authOpts(.{}));
+
+    const sql = "select $1::int + 1 as n, $2::text as name";
+    for (0..5) |i| {
+        var row = (try c.row(sql, .{ @as(i32, @intCast(i)), "leto" })).?;
+        defer row.deinit() catch {};
+        try t.expectEqual(@as(i32, @intCast(i)) + 1, try row.get(i32, 0));
+        try t.expectString("leto", try row.get([]u8, 1));
+    }
+
+    {
+        const stats = c.statementCacheStats();
+        try t.expectEqual(1, stats.size);
+        try t.expectEqual(4, stats.hits);
+        try t.expectEqual(1, stats.misses);
+    }
+
+    // the server ran the one statement it prepared, 5 times
+    {
+        var row = (try c.rowOpts(
+            "select statement, generic_plans + custom_plans from pg_prepared_statements where name = 'pgz_auto_1'",
+            .{},
+            .{ .statement_cache = false },
+        )).?;
+        defer row.deinit() catch {};
+        try t.expectString(sql, try row.get([]u8, 0));
+        try t.expectEqual(5, try row.get(i64, 1));
+    }
+
+    // column names are kept, so a later execution can ask for them
+    {
+        var result = try c.queryOpts(sql, .{ 1, "paul" }, .{ .column_names = true });
+        defer result.deinit();
+        try t.expectStringSlice(&.{ "n", "name" }, result.column_names);
+        try result.drain();
+    }
+
+    // exec with values goes through the cache too
+    try t.expectEqual(1, try c.exec("select $1::int", .{1}));
+    try t.expectEqual(2, c.statementCacheStats().size);
+    try t.expectEqual(2, preparedCount(&c));
+}
+
+test "Conn: statement cache evicts the least recently used statement" {
+    var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .statement_cache_size = 2 });
+    defer c.deinit();
+    try c.auth(t.authOpts(.{}));
+
+    _ = try c.exec("select $1::int", .{1});
+    _ = try c.exec("select $1::int + 1", .{1});
+    _ = try c.exec("select $1::int", .{1}); // now the most recently used
+    _ = try c.exec("select $1::int + 2", .{1}); // evicts "+ 1"
+    try t.expectEqual(2, c.statementCacheStats().size);
+
+    // The evicted statement is closed by the next Parse, which here is the
+    // one isPrepared itself sends.
+    try t.expectEqual(false, try isPrepared(&c, "select $1::int + 1"));
+    try t.expectEqual(true, try isPrepared(&c, "select $1::int"));
+    try t.expectEqual(true, try isPrepared(&c, "select $1::int + 2"));
+    try t.expectEqual(2, preparedCount(&c));
+}
+
+test "Conn: statement cache recovers from a schema change" {
+    var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .statement_cache_size = 8 });
+    defer c.deinit();
+    try c.auth(t.authOpts(.{}));
+
+    _ = try c.exec("drop table if exists stmt_cache_change", .{});
+    _ = try c.exec("create table stmt_cache_change (a int)", .{});
+    _ = try c.exec("insert into stmt_cache_change values (1)", .{});
+
+    const sql = "select * from stmt_cache_change where a = $1";
+    {
+        var row = (try c.row(sql, .{1})).?;
+        defer row.deinit() catch {};
+        try t.expectEqual(1, row.result.number_of_columns);
+    }
+
+    _ = try c.exec("alter table stmt_cache_change add column b text", .{});
+
+    // the cached plan no longer matches, the server refuses it once
+    try t.expectError(error.PG, c.row(sql, .{1}));
+    try t.expectString("0A000", c.err.?.code);
+
+    {
+        var row = (try c.row(sql, .{1})).?;
+        defer row.deinit() catch {};
+        try t.expectEqual(2, row.result.number_of_columns);
+    }
+    try t.expectEqual(1, c.statementCacheStats().size);
+}
+
+test "Conn: statement cache in a failed transaction" {
+    var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .statement_cache_size = 1 });
+    defer c.deinit();
+    try c.auth(t.authOpts(.{}));
+
+    _ = try c.exec("select $1::int + 10", .{1});
+    _ = try c.exec("select $1::int + 11", .{1}); // the first is now waiting to be closed
+
+    try c.begin();
+    try t.expectError(error.PG, c.exec("select 1/0", .{}));
+    try t.expectError(error.ConnectionBusy, c.exec("select $1::int + 12", .{1}));
+    try c.rollback();
+
+    _ = try c.exec("select $1::int + 12", .{1});
+    try t.expectEqual(false, try isPrepared(&c, "select $1::int + 10"));
+    try t.expectEqual(false, try isPrepared(&c, "select $1::int + 11"));
+    try t.expectEqual(true, try isPrepared(&c, "select $1::int + 12"));
+}
+
+test "Conn: statement cache opt out" {
+    var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .statement_cache_size = 8 });
+    defer c.deinit();
+    try c.auth(t.authOpts(.{}));
+
+    _ = try c.execOpts("select $1::int", .{1}, .{ .statement_cache = false });
+    try t.expectEqual(0, c.statementCacheStats().size);
+    try t.expectEqual(0, preparedCount(&c));
+
+    // and it's off by default
+    var d = try t.connect(.{});
+    defer d.deinit();
+    _ = try d.exec("select $1::int", .{1});
+    try t.expectEqual(0, preparedCount(&d));
+}
+
+fn preparedCount(c: *Conn) i64 {
+    var row = (c.rowOpts("select count(*) from pg_prepared_statements", .{}, .{ .statement_cache = false }) catch unreachable).?;
+    defer row.deinit() catch {};
+    return row.get(i64, 0) catch unreachable;
+}
+
+fn isPrepared(c: *Conn, sql: []const u8) !bool {
+    var row = (try c.rowOpts("select count(*) from pg_prepared_statements where statement = $1", .{sql}, .{ .statement_cache = false })).?;
+    defer row.deinit() catch {};
+    return try row.get(i64, 0) == 1;
 }
 
 test "PG: cached query" {

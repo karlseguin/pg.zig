@@ -112,6 +112,7 @@ Opens a connection, or returns an error. Prefer creating connections through the
 * `write_buffer` - Size of the write buffer, used when sending messages to the server. Will temporarily allocate more space as needed. If you're writing large SQL or have large parameters (e.g. long text values), making this larger might improve performance a little. Defaults to `2048`, cannot be less than `128`.
 * `read_buffer` - Size of the read buffer, used when reading data from the server. Will temporarily allocate more space as needed. Given most apps are going to be reading rows of data, this can have large impact on performance. Defaults to `4096`.
 * `result_state_size` - Each `Result` (retrieved via a call to `query`) carries metadata about the data (e.g. the type of each column). For results with less than or equal to `result_state_size` columns, a static `state` container is used. Queries with more columns require a dynamic allocation. Defaults to `32`. 
+* `statement_cache_size` - How many statements the connection prepares and keeps automatically, keyed by their SQL. See [Caching Prepared Statements](#caching-prepared-statements). Defaults to `0` (disabled).
 * `keepalive` - Enables `SO_KEEPALIVE` on the socket. This is recommended (and on by default) so that idle pooled connections silently dropped by a NAT/conntrack/load-balancer are detected by the kernel rather than only surfacing on the next query. Ignored for unix-socket connections. Defaults to `true`.
 * `keepalive_idle` - Seconds a connection must be idle before the first keepalive probe is sent (`TCP_KEEPIDLE`/`TCP_KEEPALIVE`). Set to `null` to leave it at the OS default. Defaults to `30`.
 * `keepalive_interval` - Seconds between keepalive probes (`TCP_KEEPINTVL`). Set to `null` to leave it at the OS default. Defaults to `10`.
@@ -145,6 +146,7 @@ Same as `query` but takes options:
 - `timeout: ?u32` - This is not reliable and should probably not be used. Currently it simply puts a recv socket timeout. On timeout, the connection will likely no longer be valid (which the pool will detect and handle when the connection is released) and the underlying query will likely still execute. Defaults to `null`.
 - `column_names: bool` - Whether or not the `result.column_names` should be populated. When true, this requires memory allocation (duping the column names). Defaults to `false` unless the `column_names` build option was set to true.
 - `allocator` - The allocator to use for any allocations needed when executing the query and reading the results. When `null` this will default to the connection's allocator. If you were executing a query in a web-request and each web-request had its own arena tied to the lifetime of the request, it might make sense to use that arena. Defaults to `null`.
+- `statement_cache: bool` - Whether the query may use the connection's automatic statement cache (when `statement_cache_size > 0`). Set to `false` for one-off SQL so that it doesn't push out statements that are reused. Defaults to `true`.
 - `release_conn: bool` - Whether or not to call `conn.release()` when `result.deinit()` is called. Useful for writing a function that acquires a connection from a `Pool` and returns a `Result`. When `query` or `row` are called from a `Pool` this is forced to `true`. Otherwise, defaults to `false`. 
 
 ### row(sql: []const u8, args: anytype) !?QueryRow
@@ -375,7 +377,15 @@ If you plan on executing the same query(ies) repeatedly, it's possible to have P
 
 Secondly, note that the cache is per-connection. If you have a pool of 50 connections, and you execute the query against connections from the pool, then you should expect the full parse -> describe -> bind -> execute flow for those 50 connections (plus whatever new connections the pool might open).
 
-Caching is enabled by passing the `cache_name` option:
+### Automatic
+Set the connection option `statement_cache_size` (also available through the pool's `connect` options) to have each connection prepare and keep up to that many statements, keyed by their SQL text. Every query with parameters (`query`, `row`, `exec` with values, and their `Opts` variants) then looks its SQL up first: on a hit it only sends Bind/Execute/Sync, one round trip; on a miss it prepares a named statement (`pgz_auto_N`), as usual, and keeps it. When the cache is full, the least recently used statement is dropped, and closed on the server together with the next statement that gets prepared. A query can opt out with the `statement_cache = false` query option.
+
+If the server refuses a cached statement because the schema changed under it (`cached plan must not change result type`, SQLSTATE `0A000`) or because it no longer exists (`26000`, e.g. after `DISCARD ALL`), the query returns that error and the statement is dropped from the cache, so the next execution prepares it again.
+
+`conn.statementCacheStats()` returns the number of cached statements and the hit and miss counts.
+
+### Named
+Caching is also enabled by passing the `cache_name` option, which takes precedence over the automatic cache:
 
 ```zig
 const result = try conn.queryOpts(
@@ -395,7 +405,7 @@ const result = try conn.queryOpts(
 );
 ```
 
-And it **will** work. But you're playing with fire, and you should just include the same SQL and the same cache name for each execution. If you want to use the `.column_names = true` option, then it _must_ be included in the first query which generated the cache entry (again, in short, just _always_ use the same SQL and the same options).
+And it **will** work. But you're playing with fire, and you should just include the same SQL and the same cache name for each execution. (In short, just _always_ use the same SQL for the same name.)
 
 You can call `try conn.deallocate("super")` to remove a cache entry. But this is only done for the connection on which it is called. This would make sense, for example, if you get a connection from the pool, execute the same query multiple times, deallocate the cached entry, and return the connection back to the pool. Note that the name to deallocate, `super`, is not sanitized and is open to SQL injection - don't pass a user-supplied value to `deallocte`.
 
