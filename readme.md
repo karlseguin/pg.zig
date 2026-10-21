@@ -168,6 +168,14 @@ Calls `_ = try execOpts("commit", .{}, .{})`
 ### rollback() !void
 Calls `_ = try execOpts("rollback", .{}, .{})`
 
+### cancel() !void
+Asks the server to cancel the query the connection is running, by sending a [CancelRequest](https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-CANCELING-REQUESTS) on a new, short-lived connection (over TLS when the connection uses TLS). It only reads what `auth` stored, so it is safe to call from another task or thread while a query is in flight. When the server cancels the query, the query fails with `error.PG` and `conn.err.?.code` is `57014`, and the connection remains usable. Cancellation is best-effort: if the query had already finished, nothing happens.
+
+A query abandoned on the client, for example because its task was canceled, keeps running on the server. Calling `cancel()` after such an error stops it. Returns `error.NoBackendKeyData` when called before `auth`.
+
+### backendPid() u32
+The process ID of the server process handling this connection (`pg_backend_pid()`), as reported by the server during `auth`.
+
 ## Result
 The `conn.query` and `conn.queryOpts` methods return a `pg.Result` which is used to read rows and values.
 
