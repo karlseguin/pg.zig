@@ -65,6 +65,16 @@ pub const Conn = struct {
     // cache_name => data necessary to re-execute previously prepared statement.
     _prepared_statements: std.hash_map.StringHashMapUnmanaged(Stmt.Describe),
 
+    // What cancel() needs to reach the server: the options we connected with
+    // (with our own copies of their strings) and the TLS context.
+    _connect_opts: Opts,
+    _connect_ssl_ctx: ?*SSLCtx,
+
+    // From the server's BackendKeyData. _cancel_key_len == 0 until then.
+    _backend_pid: u32 = 0,
+    _cancel_key_len: u16 = 0,
+    _cancel_key: [proto.BackendKeyData.max_key_len]u8 = undefined,
+
     const State = enum {
         idle,
 
@@ -176,6 +186,9 @@ pub const Conn = struct {
     }
 
     pub fn openWithContext(io: Io, allocator: Allocator, opts: Opts, ssl_ctx: ?*SSLCtx) !Conn {
+        const connect_opts = try ownConnectOpts(allocator, opts);
+        errdefer freeConnectOpts(allocator, connect_opts);
+
         var stream = try Stream.connect(io, allocator, opts, ssl_ctx);
         errdefer stream.close();
 
@@ -204,6 +217,8 @@ pub const Conn = struct {
             ._param_oids = param_oids,
             ._result_state = result_state,
             ._prepared_statements = .{},
+            ._connect_opts = connect_opts,
+            ._connect_ssl_ctx = ssl_ctx,
         };
     }
 
@@ -226,6 +241,7 @@ pub const Conn = struct {
             value_ptr.arena.deinit();
         }
         self._prepared_statements.deinit(self._allocator);
+        freeConnectOpts(allocator, self._connect_opts);
     }
 
     pub fn release(self: *Conn) void {
@@ -253,10 +269,60 @@ pub const Conn = struct {
             const msg = try self.read();
             switch (msg.type) {
                 'Z' => return,
-                'K' => {}, // TODO: BackendKeyData
+                'K' => {
+                    const kd = try proto.BackendKeyData.parse(msg.data);
+                    self._backend_pid = kd.pid;
+                    @memcpy(self._cancel_key[0..kd.key.len], kd.key);
+                    self._cancel_key_len = @intCast(kd.key.len);
+                },
                 else => return self.unexpectedDBMessage(),
             }
         }
+    }
+
+    // Asks the server to cancel the query this connection is running. It
+    // opens a short-lived connection of its own (over TLS when this one uses
+    // TLS) and reads nothing this connection changes, so it's safe to call
+    // from another task or thread while a query is in flight. It can also be
+    // called after a query failed with error.Timeout or error.Canceled, to
+    // stop it running on the server.
+    //
+    // The server cancels on a best-effort basis. When it does, the query fails
+    // with an error.PG whose code is 57014 (query_canceled), and the
+    // connection stays usable.
+    pub fn cancel(self: *const Conn) !void {
+        const key_len = self._cancel_key_len;
+        if (key_len == 0) {
+            return error.NoBackendKeyData;
+        }
+
+        const allocator = self._allocator;
+        var stream = try Stream.connect(self._io, allocator, self._connect_opts, self._connect_ssl_ctx);
+        defer stream.close();
+
+        var buf = try Buffer.init(allocator, 12 + key_len);
+        defer buf.deinit();
+        const cancel_request = proto.CancelRequest{ .pid = self._backend_pid, .key = self._cancel_key[0..key_len] };
+        try cancel_request.write(&buf);
+        try stream.writeAll(buf.string());
+
+        // The server closes the connection once it has handled the request.
+        // Waiting for that (as libpq does) means that a query sent after
+        // cancel() returns can't be the one that gets canceled.
+        var discard: [16]u8 = undefined;
+        while (true) {
+            const n = stream.read(&discard) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return,
+            };
+            if (n == 0) return;
+        }
+    }
+
+    // The process ID of the server process handling this connection, from
+    // the server's BackendKeyData. 0 before auth.
+    pub fn backendPid(self: *const Conn) u32 {
+        return self._backend_pid;
     }
 
     pub fn prepare(self: *Conn, sql: []const u8) !Stmt {
@@ -593,6 +659,30 @@ pub const Conn = struct {
         };
     }
 };
+
+// cancel() connects again after the caller's opts are gone, so it keeps its
+// own copies of their strings.
+fn ownConnectOpts(allocator: Allocator, opts: Conn.Opts) !Conn.Opts {
+    var owned = opts;
+    owned._hostz = null;
+    owned.host = if (opts.host) |h| try allocator.dupe(u8, h) else null;
+    errdefer if (owned.host) |h| allocator.free(h);
+    switch (opts.tls) {
+        .verify_full => |path| if (path) |p| {
+            owned.tls = .{ .verify_full = try allocator.dupe(u8, p) };
+        },
+        else => {},
+    }
+    return owned;
+}
+
+fn freeConnectOpts(allocator: Allocator, opts: Conn.Opts) void {
+    if (opts.host) |h| allocator.free(h);
+    switch (opts.tls) {
+        .verify_full => |path| if (path) |p| allocator.free(p),
+        else => {},
+    }
+}
 
 const t = lib.testing;
 test "Conn: auth trust (no pass)" {
@@ -2344,6 +2434,89 @@ test "Conn: query is cancelable" {
     try t.expectEqual(true, elapsed_ms < 1500); // prompt, not blocked until pg_sleep ends
     try t.expectEqual(Conn.State.fail, conn._state);
     try t.expectError(error.ConnectionBusy, conn.exec("select 1", .{}));
+}
+
+test "Conn: BackendKeyData" {
+    var conn = try t.connect(.{});
+    defer conn.deinit();
+    try t.expectEqual(true, conn._cancel_key_len > 0);
+    try t.expectEqual(conn.backendPid(), @as(u32, @intCast(t.scalar(&conn, "select pg_backend_pid()"))));
+}
+
+test "Conn: cancel" {
+    try testCancel(.{});
+}
+
+test "Conn: cancel over TLS" {
+    try testCancel(.{ .tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+}
+
+fn testCancel(opts: anytype) !void {
+    const S = struct {
+        fn sleepQuery(c: *Conn) !void {
+            _ = try c.exec("select pg_sleep(5)", .{});
+        }
+    };
+
+    var conn = try t.connect(opts);
+    defer conn.deinit();
+
+    // nothing is running, so there's nothing to cancel, and that's fine
+    try conn.cancel();
+    try t.expectEqual(1, t.scalar(&conn, "select 1"));
+
+    var future = try t.io.concurrent(S.sleepQuery, .{&conn});
+    try t.io.sleep(.fromMilliseconds(100), .awake);
+
+    const start = std.Io.Clock.Timestamp.now(t.io, .awake);
+    try conn.cancel();
+    try t.expectError(error.PG, future.await(t.io));
+    try t.expectEqual(true, start.untilNow(t.io).raw.toMilliseconds() < 3000);
+    try t.expectString("57014", conn.err.?.code);
+
+    // the server ended the query cleanly, so the connection is still usable
+    try t.expectEqual(Conn.State.idle, conn._state);
+    try t.expectEqual(2, t.scalar(&conn, "select 2"));
+}
+
+test "Conn: cancel stops a query abandoned by a canceled task" {
+    const S = struct {
+        fn sleepQuery(c: *Conn) !void {
+            var result = try c.query("select pg_sleep(30)", .{});
+            result.deinit();
+        }
+    };
+
+    var conn = try t.connect(.{});
+    defer conn.deinit();
+    const pid = conn.backendPid();
+
+    var future = try t.io.concurrent(S.sleepQuery, .{&conn});
+    try t.io.sleep(.fromMilliseconds(100), .awake);
+    try t.expectError(error.Canceled, future.cancel(t.io));
+    try t.expectEqual(Conn.State.fail, conn._state);
+
+    var observer = try t.connect(.{});
+    defer observer.deinit();
+    try t.expectEqual(true, try isActive(&observer, pid));
+
+    try conn.cancel();
+    for (0..50) |_| {
+        if (try isActive(&observer, pid) == false) break;
+        try t.io.sleep(.fromMilliseconds(20), .awake);
+    } else return error.QueryStillRunning;
+}
+
+fn isActive(c: *Conn, pid: u32) !bool {
+    var row = (try c.row("select state = 'active' from pg_stat_activity where pid = $1", .{@as(i32, @intCast(pid))})) orelse return false;
+    defer row.deinit() catch {};
+    return row.get(bool, 0);
+}
+
+test "Conn: cancel before auth" {
+    var conn = try Conn.open(t.io, t.allocator, .{});
+    defer conn.deinit();
+    try t.expectError(error.NoBackendKeyData, conn.cancel());
 }
 
 test "PG: cached query" {
