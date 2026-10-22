@@ -158,12 +158,12 @@ fn ReaderT(comptime T: type) type {
         // an error, we return it. If it isn't an error, we put it back for the next
         // successful read.
         pub fn peekForError(self: *Self) !?[]const u8 {
-            const message = self.buffered(self.pos, true) orelse try self.read(true);
+            const message = (try self.buffered(self.pos, true)) orelse try self.read(true);
             return if (message.type == 'E') message.data else null;
         }
 
         pub fn next(self: *Self) !Message {
-            return self.buffered(self.pos, false) orelse self.read(false);
+            return (try self.buffered(self.pos, false)) orelse self.read(false);
         }
 
         fn read(self: *Self, error_peek: bool) !Message {
@@ -188,8 +188,7 @@ fn ReaderT(comptime T: type) type {
 
                     // we have enough data to figure the message length
                     if (current_length > 4) {
-                        // + 1 for the type byte
-                        message_length = std.mem.readInt(u32, buf[start + 1 .. start + 5][0..4], .big) + 1;
+                        message_length = try messageLength(buf[start + 1 .. start + 5][0..4]);
 
                         if (message_length > buf.len) {
                             var new_buf: []u8 = undefined;
@@ -233,14 +232,14 @@ fn ReaderT(comptime T: type) type {
                     return error.Closed;
                 }
                 pos += n;
-                if (self.buffered(pos, error_peek)) |msg| {
+                if (try self.buffered(pos, error_peek)) |msg| {
                     return msg;
                 }
             }
         }
 
         // checks and consume if we already have a message buffered
-        fn buffered(self: *Self, pos: usize, error_peek: bool) ?Message {
+        fn buffered(self: *Self, pos: usize, error_peek: bool) !?Message {
             const start = self.start;
             const available = pos - start;
 
@@ -251,15 +250,12 @@ fn ReaderT(comptime T: type) type {
             const buf = self.buf;
 
             const len_end = start + 5;
-            const len = std.mem.readInt(u32, buf[start + 1 .. len_end][0..4], .big);
-
-            // +1 because the first byte, the message type, isn't included in the length
-            if (available < len + 1) {
+            const message_length = try messageLength(buf[start + 1 .. len_end][0..4]);
+            if (available < message_length) {
                 return null;
             }
 
-            // -4 because the len includes the 4 byte length header itself
-            const end = len_end + len - 4;
+            const end = start + message_length;
 
             const message_type = buf[start];
 
@@ -291,6 +287,17 @@ pub const Message = struct {
     type: u8,
     data: []const u8,
 };
+
+// The full length of a message from its 4-byte length header, + 1 for the
+// type byte, which the header doesn't count. The header counts itself, so it
+// can't be less than 4.
+fn messageLength(header: *const [4]u8) !usize {
+    const len = std.mem.readInt(u32, header, .big);
+    if (len < 4) {
+        return error.InvalidMessageLength;
+    }
+    return @as(usize, len) + 1;
+}
 
 const t = lib.testing;
 test "Reader: next" {
@@ -425,6 +432,32 @@ test "Reader: next" {
         const msg2 = try reader.next();
         try t.expectEqual(200, msg2.type);
         try t.expectSlice(u8, &[_]u8{ 10, 12, 14 }, msg2.data);
+    }
+}
+
+test "Reader: invalid message length" {
+    const R = ReaderT(*t.Stream);
+    var s = t.Stream.init();
+    defer s.deinit();
+
+    for ([_]u8{ 0, 1, 3 }) |len| {
+        {
+            // the header arrives with the next message
+            s.reset();
+            s.add(&[_]u8{ 1, 0, 0, 0, len, 2, 0, 0, 0, 4 });
+            var reader = R.init(t.allocator, 20, s) catch unreachable;
+            defer reader.deinit();
+            try t.expectError(error.InvalidMessageLength, reader.next());
+        }
+
+        {
+            // the header arrives on its own
+            s.reset();
+            s.add(&[_]u8{ 1, 0, 0, 0, len });
+            var reader = R.init(t.allocator, 20, s) catch unreachable;
+            defer reader.deinit();
+            try t.expectError(error.InvalidMessageLength, reader.next());
+        }
     }
 }
 

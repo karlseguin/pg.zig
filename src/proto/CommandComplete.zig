@@ -21,20 +21,17 @@ pub fn parse(data: []const u8) !CommandComplete {
 // so this works for it too.
 pub fn rowsAffected(self: CommandComplete) ?i64 {
     const tag = self.tag;
-    const end = tag.len - 1;
-    var i: usize = end;
-    while (i >= 0) : (i -= 1) {
-        const b = tag[i];
-        if (b < '0' or b > '9') {
-            break;
-        }
+    var start = tag.len;
+    while (start > 0 and std.ascii.isDigit(tag[start - 1])) {
+        start -= 1;
     }
 
-    if (i == end) {
+    if (start == tag.len) {
         return null;
     }
 
-    return std.fmt.parseInt(i64, tag[(i + 1)..], 10) catch unreachable;
+    // only a server sending nonsense gets here with a number that doesn't fit
+    return std.fmt.parseInt(i64, tag[start..], 10) catch null;
 }
 
 const t = proto.testing;
@@ -74,4 +71,9 @@ test "CommandComplete: rowsAffected" {
         const c = CommandComplete{ .tag = "DELETE 9392" };
         try t.expectEqual(9392, c.rowsAffected());
     }
+
+    // tags only a broken or hostile server would send
+    try t.expectEqual(null, (CommandComplete{ .tag = "" }).rowsAffected());
+    try t.expectEqual(123, (CommandComplete{ .tag = "123" }).rowsAffected());
+    try t.expectEqual(null, (CommandComplete{ .tag = "SELECT 99999999999999999999" }).rowsAffected());
 }
