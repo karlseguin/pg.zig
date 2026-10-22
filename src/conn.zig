@@ -107,6 +107,25 @@ pub const Conn = struct {
         timeout: u32 = 10_000,
         application_name: ?[]const u8 = null,
         startup_parameters: ?std.hash_map.StringHashMap([]const u8) = null,
+
+        // The authentication methods we'll go along with. The server picks
+        // the method, so without TLS certificate verification (tls = .verify_full)
+        // a man-in-the-middle can ask for the password in cleartext.
+        auth_methods: AuthMethods = .{},
+
+        // A server can make us spend as long as it likes in PBKDF2 by asking
+        // for a huge number of SCRAM iterations. PostgreSQL defaults to 4096.
+        max_scram_iterations: u32 = 1_000_000,
+    };
+
+    pub const AuthMethods = struct {
+        // the server let us in without asking for a password (e.g. trust)
+        none: bool = true,
+        password: bool = true,
+        md5: bool = true,
+        scram_sha_256: bool = true,
+
+        pub const scram_only: AuthMethods = .{ .none = false, .password = false, .md5 = false };
     };
 
     pub const QueryOpts = struct {
@@ -640,6 +659,27 @@ test "Conn: auth scram-sha-256 password" {
         var conn = try Conn.open(t.io, t.allocator, .{});
         defer conn.deinit();
         try conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "pgz_user_scram_sha256_pw", .database = "postgres" });
+    }
+}
+
+test "Conn: auth scram_only" {
+    {
+        var conn = try Conn.open(t.io, t.allocator, .{});
+        defer conn.deinit();
+        try conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "pgz_user_scram_sha256_pw", .database = "postgres", .auth_methods = .scram_only });
+    }
+
+    {
+        var conn = try Conn.open(t.io, t.allocator, .{});
+        defer conn.deinit();
+        try t.expectError(error.AuthMethodNotAllowed, conn.auth(.{ .username = "pgz_user_clear", .password = "pgz_user_clear_pw", .database = "postgres", .auth_methods = .scram_only }));
+    }
+
+    {
+        // a server asking for more iterations than we allow
+        var conn = try Conn.open(t.io, t.allocator, .{});
+        defer conn.deinit();
+        try t.expectError(error.TooManySCRAMIterations, conn.auth(.{ .username = "pgz_user_scram_sha256", .password = "pgz_user_scram_sha256_pw", .database = "postgres", .max_scram_iterations = 100 }));
     }
 }
 
@@ -1606,35 +1646,106 @@ test "Conn: invalid DataRow from the server" {
     };
 
     for (bad_rows) |bad_row| {
-        var server = try FakeServer.start(bad_row);
-        defer server.stop();
+        var server = try FakeServer.start(&.{ &FakeServer.auth_ok, &FakeServer.ready_for_query, &FakeServer.describe_one_int, bad_row });
+        {
+            var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .port = server.port() });
+            defer c.deinit();
+            try c.auth(.{});
 
-        var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .port = server.port() });
-        defer c.deinit();
-        try c.auth(.{});
-
-        var result = try c.query("select a", .{});
-        defer result.deinit();
-        try t.expectError(error.InvalidDataRow, result.next());
-        try t.expectEqual(Conn.State.fail, c._state);
+            var result = try c.query("select a", .{});
+            defer result.deinit();
+            try t.expectError(error.InvalidDataRow, result.next());
+            try t.expectEqual(Conn.State.fail, c._state);
+        }
+        _ = try server.stop();
     }
 }
 
-// Accepts one connection and plays back a server that authenticates it,
-// describes a query returning one int4 column, and sends `row` as its first
-// row. It writes everything up front, without reading: the client reads the
-// replies in order.
+test "Conn: auth_methods" {
+    const cleartext = [_]u8{ 'R', 0, 0, 0, 8, 0, 0, 0, 3 };
+    const md5 = [_]u8{ 'R', 0, 0, 0, 12, 0, 0, 0, 5, 1, 2, 3, 4 };
+    const sasl = [_]u8{ 'R', 0, 0, 0, 23, 0, 0, 0, 10 } ++ "SCRAM-SHA-256".* ++ [_]u8{ 0, 0 };
+
+    const Case = struct {
+        request: []const u8,
+        methods: Conn.AuthMethods,
+        allowed: bool,
+    };
+    const cases = [_]Case{
+        .{ .request = &cleartext, .methods = .{}, .allowed = true },
+        .{ .request = &cleartext, .methods = .scram_only, .allowed = false },
+        .{ .request = &md5, .methods = .{}, .allowed = true },
+        .{ .request = &md5, .methods = .{ .md5 = false }, .allowed = false },
+        .{ .request = &FakeServer.auth_ok, .methods = .{}, .allowed = true },
+        .{ .request = &FakeServer.auth_ok, .methods = .scram_only, .allowed = false },
+        .{ .request = &sasl, .methods = .{ .scram_sha_256 = false }, .allowed = false },
+    };
+
+    for (cases) |case| {
+        // a server that doesn't ask for a password has already said ok
+        const asks = case.request.ptr != &FakeServer.auth_ok;
+        const messages: []const []const u8 = if (asks)
+            &.{ case.request, &FakeServer.auth_ok, &FakeServer.ready_for_query }
+        else
+            &.{ case.request, &FakeServer.ready_for_query };
+        var server = try FakeServer.start(messages);
+        {
+            var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .port = server.port() });
+            defer c.deinit();
+            const result = c.auth(.{ .password = "the-password", .auth_methods = case.methods });
+            if (case.allowed) {
+                try result;
+            } else {
+                try t.expectError(error.AuthMethodNotAllowed, result);
+            }
+        }
+
+        const received = try server.stop();
+        if (case.request.ptr == &cleartext) {
+            // proves we'd see the password if it had been sent
+            try t.expectEqual(case.allowed, received.contains("the-password"));
+        }
+        if (!case.allowed) {
+            // nothing after the startup message, except the Terminate from deinit
+            const startup_len = std.mem.readInt(u32, received.buf[0..4], .big);
+            try t.expectSlice(u8, &.{ 'X', 0, 0, 0, 4 }, received.buf[startup_len..received.len]);
+        }
+    }
+}
+
+// Accepts one connection and plays back `messages`, written up front without
+// reading anything: the client reads the replies in order. It records what
+// the client sent, which stop() returns.
 const FakeServer = struct {
     listener: Io.net.Server,
-    future: Io.Future(anyerror!void),
+    future: Io.Future(anyerror!Received),
 
-    fn start(row: []const u8) !FakeServer {
+    const Received = struct {
+        buf: [4096]u8 = undefined,
+        len: usize = 0,
+
+        fn contains(self: *const Received, needle: []const u8) bool {
+            return std.mem.find(u8, self.buf[0..self.len], needle) != null;
+        }
+    };
+
+    const auth_ok = [_]u8{ 'R', 0, 0, 0, 8, 0, 0, 0, 0 };
+    const ready_for_query = [_]u8{ 'Z', 0, 0, 0, 5, 'I' };
+
+    // describes a query with no parameters and one int4 column, "a", ready
+    // for its first DataRow
+    const describe_one_int = [_]u8{ '1', 0, 0, 0, 4 } // ParseComplete
+        ++ [_]u8{ 't', 0, 0, 0, 6, 0, 0 } // ParameterDescription
+        ++ [_]u8{ 'T', 0, 0, 0, 26, 0, 1, 'a', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 4, 0xff, 0xff, 0xff, 0xff, 0, 1 } // RowDescription
+        ++ ready_for_query ++ [_]u8{ '2', 0, 0, 0, 4 }; // BindComplete
+
+    fn start(messages: []const []const u8) !FakeServer {
         const addr: Io.net.IpAddress = .{ .ip4 = .loopback(0) };
         var listener = try addr.listen(t.io, .{});
         errdefer listener.deinit(t.io);
         return .{
             .listener = listener,
-            .future = try t.io.concurrent(serve, .{ listener, row }),
+            .future = try t.io.concurrent(serve, .{ listener, messages }),
         };
     }
 
@@ -1642,34 +1753,31 @@ const FakeServer = struct {
         return self.listener.socket.address.ip4.port;
     }
 
-    fn stop(self: *FakeServer) void {
-        self.future.await(t.io) catch {};
-        self.listener.deinit(t.io);
+    // call after the client has closed its connection
+    fn stop(self: *FakeServer) !Received {
+        defer self.listener.deinit(t.io);
+        return self.future.await(t.io);
     }
 
-    fn serve(listener_: Io.net.Server, row: []const u8) anyerror!void {
+    fn serve(listener_: Io.net.Server, messages: []const []const u8) anyerror!Received {
         var listener = listener_;
         const stream = try listener.accept(t.io);
         defer stream.close(t.io);
 
         var buf: [256]u8 = undefined;
         var writer = stream.writer(t.io, &buf);
-        const w = &writer.interface;
-        try w.writeAll(&.{ 'R', 0, 0, 0, 8, 0, 0, 0, 0 }); // AuthenticationOk
-        try w.writeAll(&.{ 'Z', 0, 0, 0, 5, 'I' }); // ReadyForQuery
-        try w.writeAll(&.{ '1', 0, 0, 0, 4 }); // ParseComplete
-        try w.writeAll(&.{ 't', 0, 0, 0, 6, 0, 0 }); // ParameterDescription, no params
-        // RowDescription: 1 column, "a", an int4 in binary
-        try w.writeAll(&.{ 'T', 0, 0, 0, 26, 0, 1, 'a', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 4, 0xff, 0xff, 0xff, 0xff, 0, 1 });
-        try w.writeAll(&.{ 'Z', 0, 0, 0, 5, 'I' }); // ReadyForQuery
-        try w.writeAll(&.{ '2', 0, 0, 0, 4 }); // BindComplete
-        try w.writeAll(row);
-        try w.flush();
+        for (messages) |m| {
+            try writer.interface.writeAll(m);
+        }
+        try writer.interface.flush();
 
-        // wait for the client to hang up
+        // everything until the client hangs up
+        var received: Received = .{};
         var read_buf: [256]u8 = undefined;
         var reader = stream.reader(t.io, &read_buf);
+        received.len = try reader.interface.readSliceShort(&received.buf);
         _ = reader.interface.discardRemaining() catch {};
+        return received;
     }
 };
 
