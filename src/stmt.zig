@@ -187,7 +187,13 @@ pub const Stmt = struct {
 
             var param_oids = self.param_oids;
             const data = msg.data;
+            if (data.len < 2) {
+                return conn.unexpectedDBMessage();
+            }
             param_count = std.mem.readInt(u16, data[0..2], .big);
+            if (data.len < 2 + @as(usize, param_count) * 4) {
+                return conn.unexpectedDBMessage();
+            }
             if (describe_allocator) |da| {
                 // If we plan on caching this prepared statement, then we need
                 // to allocate a new param_oids list which will outlive this
@@ -220,6 +226,9 @@ pub const Stmt = struct {
                 'T' => {
                     var state = self.result_state;
                     const data = msg.data;
+                    if (data.len < 2) {
+                        return conn.unexpectedDBMessage();
+                    }
                     const column_count = std.mem.readInt(u16, data[0..2], .big);
                     if (describe_allocator) |da| {
                         // If we plan on caching this prepared statement, then we need

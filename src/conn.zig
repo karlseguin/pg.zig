@@ -1591,6 +1591,101 @@ test "PG: char" {
     try t.expectSlice(u8, &.{ 'z', '@' }, try row.iterator(u8, 3).alloc(aa));
 }
 
+test "Conn: invalid DataRow from the server" {
+    const bad_rows = [_][]const u8{
+        // 2 columns, but RowDescription said 1
+        &.{ 'D', 0, 0, 0, 14, 0, 2, 0, 0, 0, 1, 7, 0, 0, 0, 1, 8 },
+        // a value longer than the message
+        &.{ 'D', 0, 0, 0, 11, 0, 1, 0, 0, 0, 100, 7 },
+        // a negative length that isn't -1 (null)
+        &.{ 'D', 0, 0, 0, 10, 0, 1, 0xff, 0xff, 0xff, 0xfb },
+        // no room for the value's length
+        &.{ 'D', 0, 0, 0, 8, 0, 1, 0, 0 },
+        // no column count
+        &.{ 'D', 0, 0, 0, 4 },
+    };
+
+    for (bad_rows) |bad_row| {
+        var server = try FakeServer.start(bad_row);
+        defer server.stop();
+
+        var c = try Conn.open(t.io, t.allocator, .{ .host = "127.0.0.1", .port = server.port() });
+        defer c.deinit();
+        try c.auth(.{});
+
+        var result = try c.query("select a", .{});
+        defer result.deinit();
+        try t.expectError(error.InvalidDataRow, result.next());
+        try t.expectEqual(Conn.State.fail, c._state);
+    }
+}
+
+// Accepts one connection and plays back a server that authenticates it,
+// describes a query returning one int4 column, and sends `row` as its first
+// row. It writes everything up front, without reading: the client reads the
+// replies in order.
+const FakeServer = struct {
+    listener: Io.net.Server,
+    future: Io.Future(anyerror!void),
+
+    fn start(row: []const u8) !FakeServer {
+        const addr: Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+        var listener = try addr.listen(t.io, .{});
+        errdefer listener.deinit(t.io);
+        return .{
+            .listener = listener,
+            .future = try t.io.concurrent(serve, .{ listener, row }),
+        };
+    }
+
+    fn port(self: *const FakeServer) u16 {
+        return self.listener.socket.address.ip4.port;
+    }
+
+    fn stop(self: *FakeServer) void {
+        self.future.await(t.io) catch {};
+        self.listener.deinit(t.io);
+    }
+
+    fn serve(listener_: Io.net.Server, row: []const u8) anyerror!void {
+        var listener = listener_;
+        const stream = try listener.accept(t.io);
+        defer stream.close(t.io);
+
+        var buf: [256]u8 = undefined;
+        var writer = stream.writer(t.io, &buf);
+        const w = &writer.interface;
+        try w.writeAll(&.{ 'R', 0, 0, 0, 8, 0, 0, 0, 0 }); // AuthenticationOk
+        try w.writeAll(&.{ 'Z', 0, 0, 0, 5, 'I' }); // ReadyForQuery
+        try w.writeAll(&.{ '1', 0, 0, 0, 4 }); // ParseComplete
+        try w.writeAll(&.{ 't', 0, 0, 0, 6, 0, 0 }); // ParameterDescription, no params
+        // RowDescription: 1 column, "a", an int4 in binary
+        try w.writeAll(&.{ 'T', 0, 0, 0, 26, 0, 1, 'a', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 4, 0xff, 0xff, 0xff, 0xff, 0, 1 });
+        try w.writeAll(&.{ 'Z', 0, 0, 0, 5, 'I' }); // ReadyForQuery
+        try w.writeAll(&.{ '2', 0, 0, 0, 4 }); // BindComplete
+        try w.writeAll(row);
+        try w.flush();
+
+        // wait for the client to hang up
+        var read_buf: [256]u8 = undefined;
+        var reader = stream.reader(t.io, &read_buf);
+        _ = reader.interface.discardRemaining() catch {};
+    }
+};
+
+test "PG: empty bpchar" {
+    defer t.reset();
+
+    var c = try t.connect(.{});
+    defer c.deinit();
+
+    var row = (try c.row("select ''::bpchar, '{\"\"}'::bpchar[]", .{})).?;
+    defer row.deinit() catch {};
+
+    try t.expectEqual(' ', try row.get(u8, 0));
+    try t.expectSlice(u8, &.{' '}, try (try row.iterator(u8, 1)).alloc(t.arena.allocator()));
+}
+
 test "PG: bind []const u8" {
     defer t.reset();
 

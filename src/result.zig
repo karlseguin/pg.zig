@@ -101,17 +101,32 @@ pub const Result = struct {
                 // cases, performs best. "Normal case" here assumes that the client app
                 // is going to fetch most/all columns.
 
+                const values = self._values;
+
+                // The row must have the columns RowDescription told us about, and
+                // each value must fit in the message. If not, we can't trust
+                // anything else on this connection.
+                errdefer self._conn._state = .fail;
+                if (data.len < 2 or std.mem.readInt(u16, data[0..2], .big) != values.len) {
+                    return error.InvalidDataRow;
+                }
+
                 // first column starts at position 2
                 var offset: usize = 2;
-                const values = self._values;
                 for (values) |*value| {
                     const data_start = offset + 4;
+                    if (data_start > data.len) {
+                        return error.InvalidDataRow;
+                    }
                     const length = std.mem.readInt(i32, data[offset..data_start][0..4], .big);
                     if (length == -1) {
                         value.is_null = true;
                         value.data = &[_]u8{};
                         offset = data_start;
                     } else {
+                        if (length < 0 or length > data.len - data_start) {
+                            return error.InvalidDataRow;
+                        }
                         const data_end = data_start + @as(usize, @intCast(length));
                         value.is_null = false;
                         value.data = data[data_start..data_end];

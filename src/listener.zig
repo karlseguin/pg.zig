@@ -114,12 +114,10 @@ pub const Listener = struct {
         const buf = &self._buf;
         buf.reset();
 
-        // "LISTEN " = 7
-        // "IDENTIFIER" = 128
-        // max identifier size is 63, but if we need to quote every character, that's
-        // 126. + 2 for the opening and closing quote
-        // + 1 for null terminator
-        try buf.ensureTotalCapacity(136);
+        // 'Q' (1) + length (4) + LISTEN " (8) + the channel, with every
+        // character possibly a quote that we double (2 * len) + the closing
+        // quote (1) + the null terminator (1)
+        try buf.ensureTotalCapacity(15 + 2 * channel.len);
         buf.writeByteAssumeCapacity('Q');
 
         var len_view = try buf.skip(4);
@@ -228,6 +226,16 @@ test "Listener" {
     defer l.deinit();
     try l.auth(t.authOpts(.{}));
     try testListener(&l);
+}
+
+test "Listener: channel longer than the write buffer" {
+    var l = try Listener.open(t.io, t.allocator, .{ .host = "127.0.0.1", .write_buffer = 128 });
+    defer l.deinit();
+    try l.auth(t.authOpts(.{}));
+
+    // every quote is doubled, so this needs twice its length
+    const name: [3000]u8 = @splat('"');
+    try l.listen(&name, .{});
 }
 
 test "Listener: from Pool" {

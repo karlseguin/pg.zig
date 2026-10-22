@@ -47,11 +47,13 @@ pub const Char = struct {
             if (comptime fail_mode == .unsafe) unreachable;
             return err;
         };
-        return data[0];
+        return decodeKnown(data);
     }
 
+    // A bpchar without a length, e.g. ''::bpchar, can be empty. bpchar ignores
+    // trailing spaces, so PostgreSQL treats '' and ' ' as equal.
     pub fn decodeKnown(data: []const u8) u8 {
-        return data[0];
+        return if (data.len == 0) ' ' else data[0];
     }
 };
 
