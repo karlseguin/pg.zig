@@ -2346,6 +2346,56 @@ test "Conn: query is cancelable" {
     try t.expectError(error.ConnectionBusy, conn.exec("select 1", .{}));
 }
 
+test "Conn: query timeout" {
+    var conn = try t.connect(.{});
+    defer conn.deinit();
+
+    // a timeout that isn't reached changes nothing
+    {
+        var result = try conn.queryOpts("select $1::int", .{1}, .{ .timeout = 5_000 });
+        defer result.deinit();
+        try t.expectEqual(1, (try result.next()).?.get(i32, 0));
+        try t.expectEqual(null, try result.next());
+    }
+
+    const start = std.Io.Clock.Timestamp.now(t.io, .awake);
+    try t.expectError(error.Timeout, conn.queryOpts("select pg_sleep(2)", .{}, .{ .timeout = 100 }));
+    const elapsed_ms = start.untilNow(t.io).raw.toMilliseconds();
+    try t.expectEqual(true, elapsed_ms < 1500);
+
+    // the connection is mid-query, so it can't be reused
+    try t.expectEqual(Conn.State.fail, conn._state);
+    try t.expectError(error.ConnectionBusy, conn.exec("select 1", .{}));
+}
+
+test "Conn: exec timeout" {
+    var conn = try t.connect(.{});
+    defer conn.deinit();
+
+    _ = try conn.execOpts("select pg_sleep(0)", .{}, .{ .timeout = 5_000 });
+
+    const start = std.Io.Clock.Timestamp.now(t.io, .awake);
+    try t.expectError(error.Timeout, conn.execOpts("select pg_sleep(2)", .{}, .{ .timeout = 100 }));
+    try t.expectEqual(true, start.untilNow(t.io).raw.toMilliseconds() < 1500);
+    try t.expectEqual(Conn.State.fail, conn._state);
+}
+
+test "Conn: query timeout over TLS" {
+    var conn = try t.connect(.{ .tls = Conn.Opts.TLS.require, .username = "pgz_user_ssl", .password = "pgz_user_ssl_pw" });
+    defer conn.deinit();
+
+    {
+        var row = (try conn.rowOpts("select $1::int", .{7}, .{ .timeout = 5_000 })).?;
+        defer row.deinit() catch {};
+        try t.expectEqual(7, row.get(i32, 0));
+    }
+
+    const start = std.Io.Clock.Timestamp.now(t.io, .awake);
+    try t.expectError(error.Timeout, conn.queryOpts("select pg_sleep(2)", .{}, .{ .timeout = 100 }));
+    try t.expectEqual(true, start.untilNow(t.io).raw.toMilliseconds() < 1500);
+    try t.expectEqual(Conn.State.fail, conn._state);
+}
+
 test "PG: cached query" {
     var c = try t.connect(.{});
     defer c.deinit();
