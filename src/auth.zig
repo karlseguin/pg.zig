@@ -45,13 +45,28 @@ pub fn auth(io: Io, stream: *Stream, buf: *Buffer, reader: *Reader, opts: Opts) 
             else => return error.UnexpectedDBMessage,
         }
 
+        // Checked before we send anything, so that a server we don't trust
+        // can't get the password by asking for a weaker method.
+        const methods = opts.auth_methods;
         switch (try proto.AuthenticationRequest.parse(msg.data)) {
-            .ok => return null,
-            .sasl => |sasl| if (try saslAuth(io, sasl, stream, buf, reader, opts)) |raw_pg_err| {
-                return raw_pg_err;
+            .ok => {
+                if (!methods.none) return error.AuthMethodNotAllowed;
+                return null;
             },
-            .md5 => |salt| try md5PasswordAuth(salt, stream, buf, opts),
-            .password => try passwordAuth(opts.password orelse "", stream, buf),
+            .sasl => |sasl| {
+                if (!methods.scram_sha_256) return error.AuthMethodNotAllowed;
+                if (try saslAuth(io, sasl, stream, buf, reader, opts)) |raw_pg_err| {
+                    return raw_pg_err;
+                }
+            },
+            .md5 => |salt| {
+                if (!methods.md5) return error.AuthMethodNotAllowed;
+                try md5PasswordAuth(salt, stream, buf, opts);
+            },
+            .password => {
+                if (!methods.password) return error.AuthMethodNotAllowed;
+                try passwordAuth(opts.password orelse "", stream, buf);
+            },
         }
     }
 
@@ -100,7 +115,7 @@ fn saslAuth(io: Io, req: proto.AuthenticationRequest.SASL, stream: *Stream, buf:
             else => return error.InvalidSASLFlow,
         }
         const c = try proto.AuthenticationSASLContinue.parse(msg.data);
-        try sasl.serverResponse(c.data);
+        try sasl.serverResponse(c.data, opts.max_scram_iterations);
     }
 
     {
@@ -186,7 +201,7 @@ const SASL = struct {
         };
     }
 
-    pub fn serverResponse(self: *SASL, data: []const u8) !void {
+    pub fn serverResponse(self: *SASL, data: []const u8, max_iterations: u32) !void {
         if (data.len < 8) {
             return error.InvalidLength;
         }
@@ -232,6 +247,15 @@ const SASL = struct {
             pos = value_start;
             const sep = std.mem.indexOfScalarPos(u8, owned, pos, ',') orelse owned.len;
             res.iterations = std.fmt.parseInt(u32, owned[pos..sep], 10) catch return error.InvalidIteration;
+            if (res.iterations > max_iterations) {
+                return error.TooManySCRAMIterations;
+            }
+        }
+
+        // The server's nonce is ours with its own part added (RFC 5802 5.1).
+        const client_nonce = self.client_first_message[8..];
+        if (res.nonce.len <= client_nonce.len or !std.mem.startsWith(u8, res.nonce, client_nonce)) {
+            return error.InvalidNonce;
         }
 
         self.server_response = res;
@@ -368,7 +392,7 @@ test "SASL: serverResponse invalid" {
     var sasl = try SASL.init(t.io, t.arena.allocator());
 
     for (test_cases) |tc| {
-        try t.expectError(tc.expected, sasl.serverResponse(tc.input));
+        try t.expectError(tc.expected, sasl.serverResponse(tc.input, 4096));
         try t.expectEqual(null, sasl.server_response);
     }
 }
@@ -377,8 +401,35 @@ test "SASL: serverResponse" {
     defer t.reset();
     var sasl = try SASL.init(t.io, t.arena.allocator());
 
-    try sasl.serverResponse("r=abc123,s=aaaaxa,i=4096");
-    try t.expectString("abc123", sasl.server_response.?.nonce);
+    const client_nonce = sasl.client_first_message[8..];
+    const nonce = try std.fmt.allocPrint(t.arena.allocator(), "{s}abc123", .{client_nonce});
+    try sasl.serverResponse(try std.fmt.allocPrint(t.arena.allocator(), "r={s},s=aaaaxa,i=4096", .{nonce}), 4096);
+    try t.expectString(nonce, sasl.server_response.?.nonce);
     try t.expectString("aaaaxa", sasl.server_response.?.base64_salt);
     try t.expectEqual(4096, sasl.server_response.?.iterations);
+}
+
+test "SASL: serverResponse nonce must extend ours" {
+    defer t.reset();
+    const aa = t.arena.allocator();
+    var sasl = try SASL.init(t.io, aa);
+    const client_nonce = sasl.client_first_message[8..];
+
+    // not ours
+    try t.expectError(error.InvalidNonce, sasl.serverResponse("r=abc123,s=aaaa,i=4096", 4096));
+    // ours, but nothing added
+    try t.expectError(error.InvalidNonce, sasl.serverResponse(try std.fmt.allocPrint(aa, "r={s},s=aaaa,i=4096", .{client_nonce}), 4096));
+    // ours, cut short
+    try t.expectError(error.InvalidNonce, sasl.serverResponse(try std.fmt.allocPrint(aa, "r={s},s=aaaa,i=4096", .{client_nonce[0..10]}), 4096));
+    try t.expectEqual(null, sasl.server_response);
+}
+
+test "SASL: serverResponse iteration limit" {
+    defer t.reset();
+    const aa = t.arena.allocator();
+    var sasl = try SASL.init(t.io, aa);
+    const data = try std.fmt.allocPrint(aa, "r={s}x,s=aaaa,i=4097", .{sasl.client_first_message[8..]});
+    try t.expectError(error.TooManySCRAMIterations, sasl.serverResponse(data, 4096));
+    try t.expectEqual(null, sasl.server_response);
+    try sasl.serverResponse(data, 4097);
 }
