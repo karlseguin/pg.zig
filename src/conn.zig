@@ -241,6 +241,147 @@ pub const Conn = struct {
         return stmt;
     }
 
+    pub const Column = struct {
+        name: []const u8,
+
+        // The OID of the type of this column
+        oid: i32,
+
+        // The OID of the table this column comes from. 0 when the column is not a reference to a table column
+        table_oid: i32,
+
+        // The 1-based attribute number of this column within table_oid. 0 when table_oid is 0.
+        column_number: i16,
+    };
+
+    pub const Describe = struct {
+        allocator: ?Allocator = null,
+
+        param_oids: []i32,
+
+        // Empty when the statement does not return any rows
+        columns: []Column,
+
+        pub fn deinit(self: *Describe) void {
+            const allocator = self.allocator.?;
+            for (self.columns) |col| {
+                allocator.free(col.name);
+            }
+            allocator.free(self.columns);
+            allocator.free(self.param_oids);
+            self.allocator = null;
+        }
+    };
+
+    pub fn describe(self: *Conn, allocator: Allocator, sql: []const u8) !Describe {
+        if (self.canQuery() == false) {
+            return error.ConnectionBusy;
+        }
+
+        try self._reader.startFlow(null, null);
+        defer {
+            self._reader.endFlow() catch {
+                // this can only fail in extreme conditions (OOM) and it will only impact
+                // the next query (and if the app is using the pool, the pool will try to
+                // recover from this anyways)
+                self._state = .fail;
+            };
+        }
+
+        var param_oids: []i32 = &.{};
+        var columns: []Column = &.{};
+        errdefer {
+            for (columns) |col| allocator.free(col.name);
+            allocator.free(columns);
+            allocator.free(param_oids);
+        }
+
+        {
+            const total_length = 21 + sql.len;
+            var buf = &self._buf;
+            buf.reset();
+            try buf.ensureTotalCapacity(total_length);
+
+            var view = buf.skip(total_length) catch unreachable;
+
+            // PARSE
+            view.writeByte('P');
+            view.writeIntBig(u32, @intCast(8 + sql.len));
+            view.writeByte(0);
+            view.write(sql);
+            view.write(&.{ 0, 0, 0 });
+
+            // DESCRIBE
+            view.write(&.{ 'D', 0, 0, 0, 6, 'S', 0 });
+
+            // SYNC
+            view.write(&.{ 'S', 0, 0, 0, 4 });
+
+            self._state = .query;
+            try self.write(buf.string());
+        }
+
+        {
+            const msg = self.read() catch |err| {
+                self.readyForQuery() catch {};
+                return err;
+            };
+            if (msg.type != '1') {
+                return self.unexpectedDBMessage();
+            }
+        }
+
+        {
+            const msg = try self.read();
+            if (msg.type != 't') {
+                return self.unexpectedDBMessage();
+            }
+            const data = msg.data;
+            const param_count = std.mem.readInt(u16, data[0..2], .big);
+
+            param_oids = try allocator.alloc(i32, param_count);
+            for (0..param_count) |i| {
+                param_oids[i] = std.mem.readInt(i32, data[2 + i * 4 ..][0..4], .big);
+            }
+        }
+
+        {
+            const msg = try self.read();
+            switch (msg.type) {
+                // n means the statement does not return any rows
+                'n' => {},
+                'T' => {
+                    const data = msg.data;
+                    const column_count = std.mem.readInt(u16, data[0..2], .big);
+                    columns = try allocator.alloc(Column, column_count);
+                    var pos: usize = 2;
+                    for (0..column_count) |i| {
+                        const end_pos = std.mem.indexOfScalarPos(u8, data, pos, 0) orelse return error.InvalidDataRow;
+                        if (data.len < (end_pos + 19)) {
+                            return error.InvalidDataRow;
+                        }
+                        columns[i] = .{
+                            .name = try allocator.dupe(u8, data[pos..end_pos]),
+                            .table_oid = std.mem.readInt(i32, data[end_pos + 1 ..][0..4], .big),
+                            .column_number = std.mem.readInt(i16, data[end_pos + 5 ..][0..2], .big),
+                            .oid = std.mem.readInt(i32, data[end_pos + 7 ..][0..4], .big),
+                        };
+                        pos = end_pos + 19;
+                    }
+                },
+                else => return self.unexpectedDBMessage(),
+            }
+        }
+
+        try self.readyForQuery();
+
+        return .{
+            .allocator = allocator,
+            .param_oids = param_oids,
+            .columns = columns,
+        };
+    }
+
     pub fn query(self: *Conn, sql: []const u8, values: anytype) !*Result {
         return self.queryOpts(sql, values, .{});
     }
@@ -256,16 +397,16 @@ pub const Conn = struct {
         const name = opts.cache_name;
 
         if (name) |n| {
-            if (self._prepared_statements.getPtr(n)) |describe| {
+            if (self._prepared_statements.getPtr(n)) |cached_desc| {
                 cached = true;
-                stmt = try Stmt.fromDescribe(self, describe, opts);
+                stmt = try Stmt.fromDescribe(self, cached_desc, opts);
                 errdefer stmt.deinit();
 
                 try self._reader.startFlow(stmt.arena.allocator(), opts.timeout);
                 // Send a "SYNC" command
                 try self.write(&.{ 'S', 0, 0, 0, 4 });
                 stmt.buf.reset();
-                try stmt.prepareForBind(@intCast(describe.param_oids.len));
+                try stmt.prepareForBind(@intCast(cached_desc.param_oids.len));
             }
         }
 
@@ -674,6 +815,80 @@ test "Conn: parse error" {
     try t.expectString("syntax error at or near \"selct\"", err.message);
 
     // connection is still usable
+    try t.expectEqual(2, t.scalar(&c, "select 2"));
+}
+
+test "Conn: describe" {
+    var c = t.connect(.{});
+    defer c.deinit();
+
+    const table_oid = t.scalar(&c, "select 'all_types'::regclass::int4");
+    const col_text_att = t.scalar(&c,
+        \\select attnum::int4 from pg_attribute
+        \\where attrelid = 'all_types'::regclass and attname = 'col_text'
+    );
+
+    {
+        var d = try c.describe(t.allocator, "select id, col_text, 'n/a' as not_a_column from all_types where id = $1 and col_int2 = $2");
+        defer d.deinit();
+
+        try t.expectEqual(1, d.param_oids.len);
+        try t.expectEqual(23, d.param_oids[0]);
+
+        try t.expectEqual(3, d.columns.len);
+
+        try t.expectString("id", d.columns[0].name);
+        try t.expectEqual(23, d.columns[0].oid);
+        try t.expectEqual(table_oid, d.columns[0].table_oid);
+        try t.expectEqual(1, d.columns[0].column_number);
+
+        try t.expectString("col_text", d.columns[1].name);
+        try t.expectEqual(25, d.columns[1].oid);
+        try t.expectEqual(table_oid, d.columns[1].table_oid);
+        try t.expectEqual(col_text_att, @as(i32, d.columns[1].column_number));
+
+        // expressions don't belong to any table
+        try t.expectString("not_a_column", d.columns[2].name);
+        try t.expectEqual(25, d.columns[2].oid);
+        try t.expectEqual(0, d.columns[2].table_oid);
+        try t.expectEqual(0, d.columns[2].column_number);
+    }
+
+    {
+        // untyped parameters come back with an oid of 0
+        var d = try c.describe(t.allocator, "select $1::int2, $2 from simple_table");
+        defer d.deinit();
+
+        try t.expectEqual(2, d.param_oids.len);
+        try t.expectEqual(21, d.param_oids[0]); // int2
+        try t.expectEqual(0, d.param_oids[1]);
+
+        try t.expectEqual(2, d.columns.len);
+        try t.expectString("int2", d.columns[0].name);
+    }
+
+    {
+        var d = try c.describe(t.allocator, "insert into simple_table (value) values ('test describe')");
+        defer d.deinit();
+
+        try t.expectEqual(0, d.param_oids.len);
+        try t.expectEqual(0, d.columns.len);
+    }
+
+    // the connection is unaffected
+    try t.expectEqual(1, t.scalar(&c, "select 1"));
+}
+
+test "Conn: describe error" {
+    var c = t.connect(.{});
+    defer c.deinit();
+    try t.expectError(error.PG, c.describe(t.allocator, "selct 1 as a, b as from"));
+
+    const err = c.err.?;
+    try t.expectString("42601", err.code);
+    try std.testing.expect(std.mem.indexOf(u8, err.message, "syntax error") != null);
+
+    // we want the error drained and conn usable
     try t.expectEqual(2, t.scalar(&c, "select 2"));
 }
 
