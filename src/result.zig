@@ -225,7 +225,6 @@ pub const Result = struct {
                     self.names[i] = try a.dupe(u8, data[pos..end_pos]);
                 }
 
-                // skip the name null terminator (1)
                 // skip the table object_id this table belongs to (4)
                 // skip the attribute number of this table column (2)
                 pos = end_pos + 7;
