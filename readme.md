@@ -156,7 +156,7 @@ Creates a [Stmt](#stmt). It is generally better to use `query`, `row` or `exec`.
 ### prepareOpts(sql: []const u8, opts: Conn.QueryOpts) !Stmt
 Same as `prepare` but takes the same options as `queryOpts`.
 
-### describe(allocator: Allocator, sql: []const u8) !Describe
+### describe(allocator: Allocator, sql: []const u8) !QueryDescription
 Sends `Parse` + `Describe` + `Sync` and returns the parameter types and result columns of the statement, without executing it.
 
 ### begin() !void

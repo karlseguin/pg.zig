@@ -254,26 +254,20 @@ pub const Conn = struct {
         column_number: i16,
     };
 
-    pub const Describe = struct {
-        allocator: ?Allocator = null,
+    pub const QueryDescription = struct {
+        arena: ArenaAllocator,
 
         param_oids: []i32,
 
         // Empty when the statement does not return any rows
         columns: []Column,
 
-        pub fn deinit(self: *Describe) void {
-            const allocator = self.allocator.?;
-            for (self.columns) |col| {
-                allocator.free(col.name);
-            }
-            allocator.free(self.columns);
-            allocator.free(self.param_oids);
-            self.allocator = null;
+        pub fn deinit(self: *QueryDescription) void {
+            self.arena.deinit();
         }
     };
 
-    pub fn describe(self: *Conn, allocator: Allocator, sql: []const u8) !Describe {
+    pub fn describe(self: *Conn, allocator: Allocator, sql: []const u8) !QueryDescription {
         if (self.canQuery() == false) {
             return error.ConnectionBusy;
         }
@@ -287,14 +281,12 @@ pub const Conn = struct {
                 self._state = .fail;
             };
         }
+        var arena_state: std.heap.ArenaAllocator = .init(allocator);
+        errdefer arena_state.deinit();
+        const arena = arena_state.allocator();
 
         var param_oids: []i32 = &.{};
         var columns: []Column = &.{};
-        errdefer {
-            for (columns) |col| allocator.free(col.name);
-            allocator.free(columns);
-            allocator.free(param_oids);
-        }
 
         {
             const total_length = 21 + sql.len;
@@ -339,7 +331,7 @@ pub const Conn = struct {
             const data = msg.data;
             const param_count = std.mem.readInt(u16, data[0..2], .big);
 
-            param_oids = try allocator.alloc(i32, param_count);
+            param_oids = try arena.alloc(i32, param_count);
             for (0..param_count) |i| {
                 param_oids[i] = std.mem.readInt(i32, data[2 + i * 4 ..][0..4], .big);
             }
@@ -353,7 +345,7 @@ pub const Conn = struct {
                 'T' => {
                     const data = msg.data;
                     const column_count = std.mem.readInt(u16, data[0..2], .big);
-                    columns = try allocator.alloc(Column, column_count);
+                    columns = try arena.alloc(Column, column_count);
                     var pos: usize = 2;
                     for (0..column_count) |i| {
                         const end_pos = std.mem.indexOfScalarPos(u8, data, pos, 0) orelse return error.InvalidDataRow;
@@ -361,7 +353,7 @@ pub const Conn = struct {
                             return error.InvalidDataRow;
                         }
                         columns[i] = .{
-                            .name = try allocator.dupe(u8, data[pos..end_pos]),
+                            .name = try arena.dupe(u8, data[pos..end_pos]),
                             .table_oid = std.mem.readInt(i32, data[end_pos + 1 ..][0..4], .big),
                             .column_number = std.mem.readInt(i16, data[end_pos + 5 ..][0..2], .big),
                             .oid = std.mem.readInt(i32, data[end_pos + 7 ..][0..4], .big),
@@ -376,7 +368,7 @@ pub const Conn = struct {
         try self.readyForQuery();
 
         return .{
-            .allocator = allocator,
+            .arena = arena_state,
             .param_oids = param_oids,
             .columns = columns,
         };
@@ -832,8 +824,9 @@ test "Conn: describe" {
         var d = try c.describe(t.allocator, "select id, col_text, 'n/a' as not_a_column from all_types where id = $1 and col_int2 = $2");
         defer d.deinit();
 
-        try t.expectEqual(1, d.param_oids.len);
+        try t.expectEqual(2, d.param_oids.len);
         try t.expectEqual(23, d.param_oids[0]);
+        try t.expectEqual(21, d.param_oids[1]);
 
         try t.expectEqual(3, d.columns.len);
 
@@ -855,13 +848,12 @@ test "Conn: describe" {
     }
 
     {
-        // untyped parameters come back with an oid of 0
         var d = try c.describe(t.allocator, "select $1::int2, $2 from simple_table");
         defer d.deinit();
 
         try t.expectEqual(2, d.param_oids.len);
         try t.expectEqual(21, d.param_oids[0]); // int2
-        try t.expectEqual(0, d.param_oids[1]);
+        try t.expectEqual(25, d.param_oids[1]);
 
         try t.expectEqual(2, d.columns.len);
         try t.expectString("int2", d.columns[0].name);

@@ -187,12 +187,6 @@ pub const Result = struct {
         // The OID for each returned column
         oids: []i32,
 
-        // The OID of the table each returned column comes from. 0 when the column is not a plain reference to a table column
-        table_oids: []i32,
-
-        // The attribute number of each returned column within table_oids[i]
-        column_numbers: []i16,
-
         pub const Value = struct {
             is_null: bool,
             data: []const u8,
@@ -208,18 +202,10 @@ pub const Result = struct {
             const oids = try allocator.alloc(i32, size);
             errdefer allocator.free(oids);
 
-            const table_oids = try allocator.alloc(i32, size);
-            errdefer allocator.free(table_oids);
-
-            const column_numbers = try allocator.alloc(i16, size);
-            errdefer allocator.free(column_numbers);
-
             return .{
                 .names = names,
                 .values = values,
                 .oids = oids,
-                .table_oids = table_oids,
-                .column_numbers = column_numbers,
             };
         }
 
@@ -239,19 +225,15 @@ pub const Result = struct {
                     self.names[i] = try a.dupe(u8, data[pos..end_pos]);
                 }
 
-                // skip the name null terminator (1)
-                pos = end_pos + 1;
+                // skip the table object_id this table belongs to (4)
+                // skip the attribute number of this table column (2)
+                pos = end_pos + 7;
 
-                // the table object_id this column belongs to (4), 0 for expressions
-                self.table_oids[i] = std.mem.readInt(i32, data[pos..][0..4], .big);
-                pos += 4;
-
-                // the attribute number of this column within that table (2)
-                self.column_numbers[i] = std.mem.readInt(i16, data[pos..][0..2], .big);
-                pos += 2;
-
-                self.oids[i] = std.mem.readInt(i32, data[pos..][0..4], .big);
-                pos += 4;
+                {
+                    const end = pos + 4;
+                    self.oids[i] = std.mem.readInt(i32, data[pos..end][0..4], .big);
+                    pos = end;
+                }
 
                 // skip date type size (2), type modifier (4) format code (2)
                 pos += 8;
@@ -262,8 +244,6 @@ pub const Result = struct {
             allocator.free(self.names);
             allocator.free(self.values);
             allocator.free(self.oids);
-            allocator.free(self.table_oids);
-            allocator.free(self.column_numbers);
         }
     };
 };
@@ -820,69 +800,6 @@ pub fn RecordT(comptime fail_mode: lib.FailMode) type {
 }
 
 const t = lib.testing;
-
-test "Result: column origins" {
-    var raw: [53]u8 = undefined;
-    var pos: usize = 0;
-
-    std.mem.writeInt(u16, raw[pos..][0..2], 2, .big);
-    pos += 2;
-
-    @memcpy(raw[pos..][0..5], "title");
-    pos += 5;
-    raw[pos] = 0;
-    pos += 1;
-    std.mem.writeInt(i32, raw[pos..][0..4], 16384, .big);
-    pos += 4;
-    std.mem.writeInt(i16, raw[pos..][0..2], 3, .big);
-    pos += 2;
-    std.mem.writeInt(i32, raw[pos..][0..4], 25, .big);
-    pos += 4;
-    std.mem.writeInt(i16, raw[pos..][0..2], -1, .big);
-    pos += 2;
-    std.mem.writeInt(i32, raw[pos..][0..4], -1, .big);
-    pos += 4;
-    std.mem.writeInt(i16, raw[pos..][0..2], 0, .big);
-    pos += 2;
-
-    // count(*) belongs to no table
-    @memcpy(raw[pos..][0..8], "count(*)");
-    pos += 8;
-    raw[pos] = 0;
-    pos += 1;
-    std.mem.writeInt(i32, raw[pos..][0..4], 0, .big);
-    pos += 4;
-    std.mem.writeInt(i16, raw[pos..][0..2], 0, .big);
-    pos += 2;
-    std.mem.writeInt(i32, raw[pos..][0..4], 20, .big);
-    pos += 4;
-    std.mem.writeInt(i16, raw[pos..][0..2], 8, .big);
-    pos += 2;
-    std.mem.writeInt(i32, raw[pos..][0..4], -1, .big);
-    pos += 4;
-    std.mem.writeInt(i16, raw[pos..][0..2], 0, .big);
-    pos += 2;
-
-    try t.expectEqual(53, pos);
-
-    var names_arena = std.heap.ArenaAllocator.init(t.allocator);
-    defer names_arena.deinit();
-
-    var state = try Result.State.init(t.allocator, 2);
-    defer state.deinit(t.allocator);
-
-    try state.from(2, raw[0..pos], names_arena.allocator());
-
-    try t.expectString("title", state.names[0]);
-    try t.expectEqual(25, state.oids[0]);
-    try t.expectEqual(16384, state.table_oids[0]);
-    try t.expectEqual(3, state.column_numbers[0]);
-
-    try t.expectString("count(*)", state.names[1]);
-    try t.expectEqual(20, state.oids[1]);
-    try t.expectEqual(0, state.table_oids[1]);
-    try t.expectEqual(0, state.column_numbers[1]);
-}
 
 test "Result: ints" {
     var c = t.connect(.{});

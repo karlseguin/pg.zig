@@ -3,7 +3,6 @@ const lib = @import("lib.zig");
 
 pub const Row = lib.Row;
 pub const Conn = lib.Conn;
-pub const Describe = lib.Conn.Describe;
 pub const Pool = lib.Pool;
 pub const Stmt = lib.Stmt;
 pub const Result = lib.Result;
@@ -11,6 +10,7 @@ pub const Iterator = lib.Iterator;
 pub const QueryRow = lib.QueryRow;
 pub const Mapper = lib.Mapper;
 pub const Binary = lib.Binary;
+pub const QueryDescription = lib.Conn.QueryDescription;
 
 pub const Listener = @import("listener.zig").Listener;
 
