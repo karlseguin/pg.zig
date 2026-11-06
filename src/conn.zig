@@ -874,7 +874,7 @@ test "Conn: parse error" {
 }
 
 test "Conn: describe" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
 
     const table_oid = t.scalar(&c, "select 'all_types'::regclass::int4");
@@ -935,7 +935,7 @@ test "Conn: describe" {
 }
 
 test "Conn: describe error" {
-    var c = t.connect(.{});
+    var c = try t.connect(.{});
     defer c.deinit();
     try t.expectError(error.PG, c.describe(t.allocator, "selct 1 as a, b as from"));
 
