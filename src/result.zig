@@ -582,7 +582,7 @@ pub fn QueryRowT(comptime fail_mode: lib.FailMode) type {
             return self.row.to(T, opts);
         }
 
-        pub fn deinit(self: *Self) !void {
+        pub fn deinit(self: *const Self) !void {
             // this is unfortunate
             try self.result.drain();
             self.result.deinit();
