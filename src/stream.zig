@@ -19,6 +19,7 @@ const TLSStream = struct {
     ssl: ?*openssl.SSL,
     stream: Io.net.Stream,
     io: Io,
+    read_timeout: Io.Timeout = .none,
 
     pub fn connect(io: Io, allocator: Allocator, opts: Conn.Opts, ctx_: ?*openssl.SSL_CTX) !Stream {
         const plain = try PlainStream.connect(io, allocator, opts, null);
@@ -31,7 +32,7 @@ const TLSStream = struct {
             // PostgreSQL TLS starts off as a plain connection which we upgrade
             try writeStream(stream, io, &.{ 0, 0, 0, 8, 4, 210, 22, 47 });
             var buf = [1]u8{0};
-            _ = try readStream(stream, io, &buf);
+            _ = try readStream(stream, io, &buf, .none);
             if (buf[0] != 'S') {
                 return error.SSLNotSupportedByServer;
             }
@@ -107,6 +108,20 @@ const TLSStream = struct {
         return self.stream.shutdown(self.io, how);
     }
 
+    // OpenSSL reads the socket itself, so its reads are bounded with
+    // SO_RCVTIMEO rather than through Io.
+    pub fn setReadTimeout(self: *Stream, timeout_ms: ?u32) !void {
+        self.read_timeout = toTimeout(timeout_ms);
+        if (self.ssl != null) {
+            const ms = timeout_ms orelse 0;
+            const timeval = posix.timeval{
+                .sec = @intCast(@divTrunc(ms, 1000)),
+                .usec = @intCast(@mod(ms, 1000) * 1000),
+            };
+            try setsockopt(self.stream.socket.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.asBytes(&timeval));
+        }
+    }
+
     pub fn writeAll(self: *Stream, data: []const u8) !void {
         if (self.ssl) |ssl| {
             const result = openssl.SSL_write(ssl, data.ptr, @intCast(data.len));
@@ -125,18 +140,23 @@ const TLSStream = struct {
             const result = openssl.SSL_read_ex(ssl, buf.ptr, @intCast(buf.len), &read_len);
             if (result <= 0) {
                 self.valid = false;
+                if (self.read_timeout != .none and openssl.SSL_get_error(ssl, result) == openssl.SSL_ERROR_WANT_READ) {
+                    // SO_RCVTIMEO expired
+                    return error.Timeout;
+                }
                 return error.SSLReadFailed;
             }
             return read_len;
         }
 
-        return readStream(self.stream, self.io, buf);
+        return readStream(self.stream, self.io, buf, self.read_timeout);
     }
 };
 
 const PlainStream = struct {
     io: Io,
     stream: Io.net.Stream,
+    read_timeout: Io.Timeout = .none,
 
     pub fn connect(io: Io, _: Allocator, opts: Conn.Opts, _: anytype) !PlainStream {
         const host = opts.host orelse DEFAULT_HOST;
@@ -174,12 +194,16 @@ const PlainStream = struct {
         return self.stream.shutdown(self.io, how);
     }
 
+    pub fn setReadTimeout(self: *PlainStream, timeout_ms: ?u32) !void {
+        self.read_timeout = toTimeout(timeout_ms);
+    }
+
     pub fn writeAll(self: *const PlainStream, data: []const u8) !void {
         return writeStream(self.stream, self.io, data);
     }
 
     pub fn read(self: *const PlainStream, buf: []u8) !usize {
-        return readStream(self.stream, self.io, buf);
+        return readStream(self.stream, self.io, buf, self.read_timeout);
     }
 };
 
@@ -288,8 +312,22 @@ fn setsockopt(fd: posix.socket_t, level: i32, optname: u32, opt: []const u8) !vo
     }
 }
 
-fn readStream(stream: Io.net.Stream, io: Io, buf: []u8) !usize {
+fn toTimeout(timeout_ms: ?u32) Io.Timeout {
+    const ms = timeout_ms orelse return .none;
+    if (ms == 0) return .none;
+    return .{ .duration = .{ .raw = .fromMilliseconds(ms), .clock = .awake } };
+}
+
+fn readStream(stream: Io.net.Stream, io: Io, buf: []u8, timeout: Io.Timeout) !usize {
     var vecs: [1][]u8 = .{buf};
+    if (timeout != .none) {
+        // A read that waits longer than the timeout fails with error.Timeout.
+        const result = (try io.operateTimeout(.{ .net_read = .{
+            .socket_handle = stream.socket.handle,
+            .data = &vecs,
+        } }, timeout)).net_read;
+        return (try result).data_len;
+    }
     var reader = stream.reader(io, &.{});
     const r = &reader.interface;
     return r.readVec(&vecs) catch |err| switch (err) {
