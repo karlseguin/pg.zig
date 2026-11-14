@@ -1,6 +1,8 @@
 pub const AuthenticationRequest = @import("proto/authentication_request.zig").AuthenticationRequest;
 pub const AuthenticationSASLContinue = @import("proto/AuthenticationSASLContinue.zig");
 pub const AuthenticationSASLFinal = @import("proto/AuthenticationSASLFinal.zig");
+pub const BackendKeyData = @import("proto/BackendKeyData.zig");
+pub const CancelRequest = @import("proto/CancelRequest.zig");
 pub const CommandComplete = @import("proto/CommandComplete.zig");
 pub const Describe = @import("proto/Describe.zig");
 pub const Error = @import("proto/Error.zig");
