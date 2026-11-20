@@ -52,9 +52,19 @@ pub const Pool = struct {
         // everything it needs into the pool's own arena, so this temporary arena
         // can be freed as soon as init returns.
         defer po.deinit();
-        po.opts.size = opts.size;
-        po.opts.timeout = opts.timeout;
-        return init(io, allocator, po.opts);
+
+        // The URI says where to connect and as whom. Everything else, such as
+        // connect_on_init_count or the connection's buffer sizes, comes from
+        // opts.
+        var merged = opts;
+        merged.auth.username = po.opts.auth.username;
+        merged.auth.password = po.opts.auth.password;
+        merged.auth.database = po.opts.auth.database;
+        merged.auth.timeout = po.opts.auth.timeout;
+        merged.connect.host = po.opts.connect.host;
+        merged.connect.port = po.opts.connect.port;
+        merged.connect.tls = po.opts.connect.tls;
+        return init(io, allocator, merged);
     }
 
     pub fn init(io: Io, allocator: Allocator, opts: Opts) !*Pool {
@@ -747,6 +757,32 @@ test "Pool: initUri owns its connection strings" {
     t.allocator.free(uri_str);
 
     try forceReconnect(pool);
+}
+
+test "Pool: initUri keeps the options the URI doesn't set" {
+    const uri = try std.Uri.parse("postgresql://postgres:postgres@127.0.0.1:5432/postgres");
+
+    var pool = try Pool.initUri(t.io, t.allocator, uri, .{
+        .size = 2,
+        .connect_on_init_count = 0,
+        .connect = .{ .read_buffer = 1000, .keepalive = false },
+        .auth = .{ .application_name = "pg.zig initUri" },
+    });
+    defer pool.deinit();
+
+    // nothing was opened in init
+    try expectStats(pool, .{ .size = 2, .available = 0, .missing = 2, .in_use = 0 });
+
+    try t.expectEqual(@as(?u16, 1000), pool._opts.connect.read_buffer);
+    try t.expectEqual(false, pool._opts.connect.keepalive);
+    try t.expectString("127.0.0.1", pool._opts.connect.host.?);
+    try t.expectEqual(@as(?u16, 5432), pool._opts.connect.port);
+
+    const c = try pool.acquire();
+    defer pool.release(c);
+    var row = (try c.rowUnsafe("select current_setting('application_name')", .{})) orelse unreachable;
+    defer row.deinit() catch {};
+    try t.expectString("pg.zig initUri", row.get([]const u8, 0));
 }
 
 fn testPool(p: *Pool) void {
