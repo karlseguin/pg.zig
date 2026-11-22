@@ -69,11 +69,11 @@ Initializes a connection pool. Pool options are:
 * `connect_on_init_count`:  - The # of connections in the pool to eagerly connect during `init`. Defaults to `null` which will initiliaze all connections (`size`). The remaining (`size - connect_on_init_count`) connections are opened on demand by `acquire()`. This can be set to `0`, to prevent `init` from failing except in extreme cases (i.e. OOM), but that will hide any configuration/connection issue until the first query is executed.
 
 ### initUri(io: std.Io, allocator: std.mem.Allocator, uri: std.Uri, opts: Opts) !\*Pool
-Initializes a connection pool using a std.Uri. When using this function, the `auth` and `connect` fields of `opts` should **not** be set, as these will automatically set based on the provided `uri`.
+Initializes a connection pool using a std.Uri. The URI sets the username, password, database and `auth.timeout` (from `tcp_user_timeout`), and the host, port and `tls` (from `sslmode`); whatever `opts` has for those is ignored. The rest of `opts`, such as `connect_on_init_count`, `connect.read_buffer` or `auth.application_name`, is used as given.
 
 ```zig
 const uri = try std.Uri.parse("postgresql://username:password@localhost:5432/database_name");
-const pool = try pg.Pool.initUri(allocator, uri, 5, 10_000);
+const pool = try pg.Pool.initUri(io, allocator, uri, .{ .size = 5, .timeout = 10_000 });
 defer pool.deinit();
 ```
 
