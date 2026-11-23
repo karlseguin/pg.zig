@@ -195,6 +195,8 @@ pub const Stream = struct {
     pub fn close(self: *Stream) void {
         self.closed = true;
     }
+
+    pub fn setReadTimeout(_: *Stream, _: ?u32) !void {}
 };
 
 pub fn connect(opts: anytype) !Conn {

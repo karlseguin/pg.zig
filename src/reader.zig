@@ -2,14 +2,11 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const builtin = @import("builtin");
 
-const posix = std.posix;
 const Conn = lib.Conn;
 const Allocator = std.mem.Allocator;
 
 // to everyone else, this is our reader
 pub const Reader = ReaderT(lib.Stream);
-
-const zero_timeval = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 0 });
 
 // generic just for testing within this file
 fn ReaderT(comptime T: type) type {
@@ -70,17 +67,13 @@ fn ReaderT(comptime T: type) type {
         // requires more than static.len other rows within the same result might
         // as well.
         pub fn startFlow(self: *Self, allocator: ?Allocator, timeout_ms: ?u32) !void {
-            // FIX: set timeout
+            // The timeout bounds each read of the flow, not the flow as a whole:
+            // a read that waits longer than this fails with error.Timeout.
             if (timeout_ms) |ms| {
-                _ = ms; // autofix
-                // const timeval = std.mem.toBytes(posix.timeval{
-                //     .sec = @intCast(@divTrunc(ms, 1000)),
-                //     .usec = @intCast(@mod(ms, 1000) * 1000),
-                // });
-                // try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeval);
+                try self.stream.setReadTimeout(ms);
                 self.has_timeout = true;
             } else if (self.has_timeout) {
-                // try posix.setsockopt(self.stream.socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &zero_timeval);
+                try self.stream.setReadTimeout(null);
                 self.has_timeout = false;
             }
 

@@ -251,6 +251,18 @@ test "Listener: from Pool" {
     try testListener(&l);
 }
 
+test "Listener: timeout" {
+    var l = try Listener.open(t.io, t.allocator, .{ .host = "127.0.0.1" });
+    defer l.deinit();
+    try l.auth(t.authOpts(.{}));
+    try l.listen("chan_timeout", .{ .timeout = 100 });
+
+    const start = std.Io.Clock.Timestamp.now(t.io, .awake);
+    try t.expectEqual(null, l.next());
+    try t.expectEqual(true, start.untilNow(t.io).raw.toMilliseconds() < 1500);
+    try t.expectEqual(error.Timeout, l.err.?.err);
+}
+
 fn testListener(l: *Listener) !void {
     const io = t.io;
     var reset: std.Io.Event = .unset;
